@@ -1,0 +1,1386 @@
+"""Execution runtime for compiled journey plans."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, is_dataclass
+from pathlib import Path
+from typing import Any, ParamSpec, TypeVar, cast
+
+from .errors import (
+    AmbiguousStepSelectionError,
+    CallableExecutionError,
+    ExecutionStateMismatchError,
+    InvalidBranchUsageError,
+    StepNotFoundError,
+)
+from .models import (
+    BranchCase,
+    BranchMarkerNode,
+    BranchSelector,
+    CaseExecutionReport,
+    CasePlan,
+    CheckpointNode,
+    CheckpointRef,
+    ExecutionReport,
+    JourneyPlan,
+    NodeExecutionRecord,
+    PlannedValue,
+    StepNode,
+    StepRetryDelay,
+    StepRetryFrom,
+)
+from .planner import compile_journey
+from .session import use_session
+from .state import (
+    STATE_FORMAT_VERSION,
+    ActiveCaseState,
+    ExecutionStateEnvelope,
+    RuntimeSnapshotState,
+    SelectedCaseState,
+    StepBindingState,
+    clone_rehydratable_value,
+    delete_execution_state,
+    load_execution_state,
+    save_execution_state,
+)
+from .utils import callable_ref
+
+
+@dataclass
+class _StopCase(Exception):
+    pass
+
+
+@dataclass
+class _RetryRequested(Exception):
+    sleep_for: float
+
+
+@dataclass(frozen=True)
+class _SelectedCase:
+    case_plan: CasePlan
+    stop_after_index: int | None
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+class _ExecutionObserver:
+    def on_journey_start(
+        self,
+        *,
+        plan: JourneyPlan,
+        selected_cases: list[_SelectedCase],
+    ) -> None:
+        return
+
+    def on_case_start(
+        self,
+        *,
+        case_plan: CasePlan,
+        stop_after_index: int | None,
+        replay_anchor: str | None,
+    ) -> None:
+        return
+
+    def on_case_resume(
+        self,
+        *,
+        case_plan: CasePlan,
+        stop_after_index: int | None,
+        replay_anchor: str | None,
+        replay_from_index: int,
+    ) -> None:
+        return
+
+    def on_step_start(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+    ) -> None:
+        return
+
+    def on_branch(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: BranchMarkerNode,
+        node_index: int,
+    ) -> None:
+        return
+
+    def on_retry(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+        delay_seconds: float,
+        remaining_retries: int,
+        error: Exception,
+    ) -> None:
+        return
+
+    def on_step_success(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+    ) -> None:
+        return
+
+    def on_step_failure(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+        error: Exception,
+    ) -> None:
+        return
+
+    def on_step_interrupted(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+        error: BaseException,
+    ) -> None:
+        return
+
+    def on_case_complete(
+        self,
+        *,
+        case_plan: CasePlan,
+        report: CaseExecutionReport,
+        duration_seconds: float,
+    ) -> None:
+        return
+
+    def on_journey_complete(self, *, report: ExecutionReport) -> None:
+        return
+
+
+def _copy_binding(binding: StepBindingState) -> StepBindingState:
+    return StepBindingState(
+        args=tuple(binding.args),
+        kwargs=dict(binding.kwargs),
+        has_result=binding.has_result,
+        result=binding.result,
+    )
+
+
+def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotState:
+    return RuntimeSnapshotState(
+        record_indices=list(snapshot.record_indices),
+        records=list(snapshot.records),
+        step_bindings={
+            key: _copy_binding(binding)
+            for key, binding in snapshot.step_bindings.items()
+        },
+        retry_remaining=dict(snapshot.retry_remaining),
+        step_attempts=dict(snapshot.step_attempts),
+    )
+
+
+def _rehydration_key(*, kind: str, identifier: str, lineage: tuple[str, ...]) -> str:
+    if not lineage:
+        return f"{kind}:{identifier}"
+    return f"{kind}:{identifier}|{'|'.join(lineage)}"
+
+
+def _case_rehydration_maps(
+    case_plan: CasePlan,
+) -> tuple[dict[str, str], dict[str, str], str | None]:
+    step_keys: dict[str, str] = {}
+    checkpoint_keys: dict[str, str] = {}
+    lineage: tuple[str, ...] = ()
+    start_checkpoint_key: str | None = None
+
+    for node in case_plan.nodes:
+        if isinstance(node, StepNode):
+            step_keys[node.node_id] = _rehydration_key(
+                kind="step",
+                identifier=node.node_id,
+                lineage=lineage,
+            )
+            continue
+        if isinstance(node, CheckpointNode):
+            checkpoint_keys[node.name] = _rehydration_key(
+                kind="checkpoint",
+                identifier=node.name,
+                lineage=lineage,
+            )
+            continue
+        if isinstance(node, BranchMarkerNode):
+            if start_checkpoint_key is None and node.start_from is not None:
+                start_checkpoint_key = checkpoint_keys.get(node.start_from)
+            lineage = lineage + (f"{node.group_id}={node.active_key}",)
+
+    return step_keys, checkpoint_keys, start_checkpoint_key
+
+
+class _StateController:
+    def __init__(
+        self,
+        path: Path | None,
+        *,
+        journey_plan: JourneyPlan,
+        step: str | None,
+        selected_cases: list[_SelectedCase],
+    ) -> None:
+        self.path = path
+        self.journey_plan = journey_plan
+        self.step = step
+        self.selected_cases = list(selected_cases)
+        self.plan_signature = _plan_signature(journey_plan, self.selected_cases, step)
+
+        loaded: ExecutionStateEnvelope | None = None
+        if path is not None:
+            loaded = load_execution_state(path)
+
+        if loaded is None:
+            loaded = ExecutionStateEnvelope(
+                version=STATE_FORMAT_VERSION,
+                journey_id=journey_plan.journey_id,
+                function_ref=journey_plan.function_ref,
+                step=step,
+                plan_signature=self.plan_signature,
+                selected_cases=_selected_case_refs(self.selected_cases),
+                current_case_index=0,
+                completed_case_reports=[],
+                active_case=None,
+            )
+        else:
+            self._validate_loaded_state(loaded)
+
+        self._state = loaded
+
+    @property
+    def completed_case_reports(self) -> list[CaseExecutionReport]:
+        return list(self._state.completed_case_reports)
+
+    @property
+    def current_case_index(self) -> int:
+        return self._state.current_case_index
+
+    def active_case_for(
+        self,
+        *,
+        case_index: int,
+        case_id: str,
+    ) -> ActiveCaseState | None:
+        active_case = self._state.active_case
+        if active_case is None:
+            return None
+        if self._state.current_case_index != case_index:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' points at a different case than this run expects."
+            )
+        if active_case.case_id != case_id:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' points at case '{active_case.case_id}', "
+                f"but this run expects case '{case_id}'."
+            )
+        return active_case
+
+    def successful_step_bindings(self) -> dict[str, StepBindingState]:
+        return {
+            key: _copy_binding(binding)
+            for key, binding in self._state.successful_step_bindings.items()
+        }
+
+    def checkpoint_snapshot_for(self, checkpoint_key: str) -> RuntimeSnapshotState | None:
+        snapshot = self._state.checkpoint_snapshots.get(checkpoint_key)
+        if snapshot is None:
+            return None
+        return _copy_runtime_snapshot(snapshot)
+
+    def begin_case(
+        self,
+        *,
+        case_index: int,
+        snapshot: ActiveCaseState,
+    ) -> None:
+        self._state.current_case_index = case_index
+        self._state.active_case = snapshot
+        self._write_state()
+
+    def update_active_case(self, snapshot: ActiveCaseState) -> None:
+        if self._state.current_case_index >= len(self.selected_cases):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' is already marked as complete."
+            )
+        self._state.active_case = snapshot
+        self._write_state()
+
+    def promote_successful_binding(
+        self,
+        key: str,
+        binding: StepBindingState,
+    ) -> None:
+        self._state.successful_step_bindings[key] = _copy_binding(binding)
+        self._write_state()
+
+    def store_checkpoint_snapshot(
+        self,
+        checkpoint_key: str,
+        snapshot: RuntimeSnapshotState,
+    ) -> None:
+        self._state.checkpoint_snapshots[checkpoint_key] = _copy_runtime_snapshot(snapshot)
+        self._write_state()
+
+    def complete_case(self, report: CaseExecutionReport) -> None:
+        expected_case = self.selected_cases[self._state.current_case_index].case_plan
+        if report.case_id != expected_case.case_id:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' tried to complete case '{report.case_id}', "
+                f"but this run expected '{expected_case.case_id}'."
+            )
+        self._state.completed_case_reports.append(report)
+        self._state.current_case_index += 1
+        self._state.active_case = None
+        self._write_state()
+
+    def clear(self) -> None:
+        if self.path is None:
+            return
+        delete_execution_state(self.path)
+
+    def _write_state(self) -> None:
+        if self.path is None:
+            return
+        save_execution_state(self.path, self._state)
+
+    def _validate_loaded_state(self, state: ExecutionStateEnvelope) -> None:
+        expected_cases = _selected_case_refs(self.selected_cases)
+        if state.version != STATE_FORMAT_VERSION:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' uses format version {state.version}, which this version of journey does not understand."
+            )
+        if state.journey_id != self.journey_plan.journey_id:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' belongs to journey '{state.journey_id}', "
+                f"not '{self.journey_plan.journey_id}'."
+            )
+        if state.function_ref != self.journey_plan.function_ref:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' belongs to '{state.function_ref}', "
+                f"not '{self.journey_plan.function_ref}'."
+            )
+        if state.step != self.step:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' was created for step {state.step!r}, "
+                f"not {self.step!r}."
+            )
+        if state.plan_signature != self.plan_signature:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' no longer matches the current journey plan."
+            )
+        if state.selected_cases != expected_cases:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' no longer matches the selected case order."
+            )
+        if not 0 <= state.current_case_index <= len(self.selected_cases):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has invalid case index {state.current_case_index}."
+            )
+        if len(state.completed_case_reports) > len(self.selected_cases):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' contains more completed cases than this run has."
+            )
+        if len(state.completed_case_reports) > state.current_case_index:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has inconsistent completed-case progress."
+            )
+
+        self._validate_step_bindings(
+            state.successful_step_bindings,
+            label="run-wide step bindings",
+        )
+        for checkpoint_key, snapshot in state.checkpoint_snapshots.items():
+            if not isinstance(checkpoint_key, str):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid checkpoint snapshot data."
+                )
+            self._validate_runtime_snapshot(
+                snapshot,
+                label=f"checkpoint snapshot '{checkpoint_key}'",
+            )
+
+        for index, report in enumerate(state.completed_case_reports):
+            expected_case = self.selected_cases[index].case_plan
+            if report.case_id != expected_case.case_id:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' contains completed case "
+                    f"'{report.case_id}', but this run expected '{expected_case.case_id}'."
+                )
+
+        active_case = state.active_case
+        if active_case is None:
+            if state.current_case_index != len(state.completed_case_reports):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' is missing the active case snapshot."
+                )
+            return
+
+        if state.current_case_index >= len(self.selected_cases):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' still has an active case even though all cases are complete."
+            )
+        if state.current_case_index != len(state.completed_case_reports):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has inconsistent active-case progress."
+            )
+
+        expected_case = self.selected_cases[state.current_case_index].case_plan
+        if active_case.case_id != expected_case.case_id:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' points at case '{active_case.case_id}', "
+                f"but this run expected '{expected_case.case_id}'."
+            )
+
+        self._validate_runtime_snapshot(
+            active_case.snapshot,
+            label=f"active case '{active_case.case_id}'",
+        )
+        node_ids = {
+            node.node_id
+            for node in expected_case.nodes
+            if isinstance(node, StepNode)
+        }
+        if active_case.dirty_node_id is not None and active_case.dirty_node_id not in node_ids:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' points at missing step "
+                f"'{active_case.dirty_node_id}'."
+            )
+        for node_id, remaining in active_case.snapshot.retry_remaining.items():
+            if node_id not in node_ids:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' points at missing retry state "
+                    f"for step '{node_id}'."
+                )
+            if isinstance(remaining, bool) or not isinstance(remaining, int) or remaining < 0:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid retry state for step '{node_id}'."
+                )
+        for node_id, attempts in active_case.snapshot.step_attempts.items():
+            if node_id not in node_ids:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' points at missing attempt state "
+                    f"for step '{node_id}'."
+                )
+            if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid attempt state for step '{node_id}'."
+                )
+
+    def _validate_runtime_snapshot(
+        self,
+        snapshot: RuntimeSnapshotState,
+        *,
+        label: str,
+    ) -> None:
+        if not isinstance(snapshot, RuntimeSnapshotState):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has invalid {label}."
+            )
+        if len(snapshot.record_indices) != len(snapshot.records):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has inconsistent {label} records."
+            )
+        for remaining in snapshot.retry_remaining.values():
+            if isinstance(remaining, bool) or not isinstance(remaining, int) or remaining < 0:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid retry data in {label}."
+                )
+        for attempts in snapshot.step_attempts.values():
+            if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 0:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid attempt data in {label}."
+                )
+        self._validate_step_bindings(snapshot.step_bindings, label=f"{label} step bindings")
+
+    def _validate_step_bindings(
+        self,
+        bindings: dict[str, StepBindingState],
+        *,
+        label: str,
+    ) -> None:
+        if not isinstance(bindings, dict):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has invalid {label}."
+            )
+        for key, binding in bindings.items():
+            if not isinstance(key, str) or not isinstance(binding, StepBindingState):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid {label}."
+                )
+
+
+class _RunSession:
+    mode = "run"
+
+    def __init__(
+        self,
+        journey_plan: JourneyPlan,
+        case_plan: CasePlan,
+        *,
+        stop_after_index: int | None,
+        rehydration_enabled: bool,
+        state_controller: _StateController | None = None,
+        restored_state: ActiveCaseState | None = None,
+        checkpoint_seed: RuntimeSnapshotState | None = None,
+        successful_bindings: dict[str, StepBindingState] | None = None,
+        observer: _ExecutionObserver | None = None,
+    ) -> None:
+        self.journey_plan = journey_plan
+        self.case_plan = case_plan
+        self.stop_after_index = stop_after_index
+        self._rehydration_enabled = rehydration_enabled
+        self.cursor = 0
+        self.records: list[NodeExecutionRecord] = []
+        self._record_indices: list[int] = []
+        self._step_bindings: dict[str, StepBindingState] = {}
+        self._retry_remaining: dict[str, int] = {}
+        self._step_attempts: dict[str, int] = {}
+        self.replay_from_index = 0
+        self._dirty_node_id: str | None = None
+        self._state_controller = state_controller
+        self._observer = observer or _ExecutionObserver()
+        (
+            self._step_key_by_id,
+            self._checkpoint_key_by_name,
+            _,
+        ) = _case_rehydration_maps(case_plan)
+        self._step_index_by_id = {
+            node.node_id: index
+            for index, node in enumerate(case_plan.nodes)
+            if isinstance(node, StepNode)
+        }
+        self._checkpoint_index_by_name = {
+            node.name: index
+            for index, node in enumerate(case_plan.nodes)
+            if isinstance(node, CheckpointNode)
+        }
+
+        if successful_bindings is not None:
+            self._step_bindings = {
+                key: _copy_binding(binding)
+                for key, binding in successful_bindings.items()
+            }
+        if checkpoint_seed is not None:
+            self._restore_checkpoint_seed(checkpoint_seed)
+        if restored_state is not None:
+            self._restore_state(restored_state)
+
+    def _runtime_snapshot(self) -> RuntimeSnapshotState:
+        return RuntimeSnapshotState(
+            record_indices=list(self._record_indices),
+            records=list(self.records),
+            step_bindings={
+                key: _copy_binding(binding)
+                for key, binding in self._step_bindings.items()
+            },
+            retry_remaining=dict(self._retry_remaining),
+            step_attempts=dict(self._step_attempts),
+        )
+
+    def snapshot_state(self) -> ActiveCaseState:
+        return ActiveCaseState(
+            case_id=self.case_plan.case_id,
+            snapshot=self._runtime_snapshot(),
+            replay_from_index=self.replay_from_index,
+            dirty_node_id=self._dirty_node_id,
+        )
+
+    def _persist_state(self) -> None:
+        if self._state_controller is None:
+            return
+        self._state_controller.update_active_case(self.snapshot_state())
+
+    def _restore_checkpoint_seed(self, snapshot: RuntimeSnapshotState) -> None:
+        restored = _copy_runtime_snapshot(snapshot)
+        self._record_indices = restored.record_indices
+        self.records = restored.records
+        self._step_bindings.update(restored.step_bindings)
+        self._retry_remaining = restored.retry_remaining
+        self._step_attempts = restored.step_attempts
+        self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
+
+    def _restore_state(self, restored_state: ActiveCaseState) -> None:
+        if restored_state.case_id != self.case_plan.case_id:
+            raise ExecutionStateMismatchError(
+                f"The journey state points at case '{restored_state.case_id}', "
+                f"not '{self.case_plan.case_id}'."
+            )
+
+        restored = _copy_runtime_snapshot(restored_state.snapshot)
+        self._record_indices = restored.record_indices
+        self.records = restored.records
+        self._step_bindings = restored.step_bindings
+        self._retry_remaining = restored.retry_remaining
+        self.replay_from_index = restored_state.replay_from_index
+        self._dirty_node_id = restored_state.dirty_node_id
+        self._step_attempts = restored.step_attempts
+
+    def _resume_dirty_step(self) -> None:
+        if self._dirty_node_id is None:
+            return
+
+        node_index = self._step_index_by_id.get(self._dirty_node_id)
+        if node_index is None:
+            raise ExecutionStateMismatchError(
+                f"The journey state points at missing step '{self._dirty_node_id}'."
+            )
+
+        node = self.case_plan.nodes[node_index]
+        if not isinstance(node, StepNode):
+            raise ExecutionStateMismatchError(
+                f"The journey state points at '{self._dirty_node_id}', which is not a step."
+            )
+
+        anchor_index = node_index
+        preserve_retry_for: str | None = None
+        if node.retry is not None:
+            anchor_index = self._retry_anchor_index(node, node_index)
+            preserve_retry_for = node.node_id
+
+        self._trim_from(anchor_index, preserve_retry_for=preserve_retry_for)
+        self.replay_from_index = anchor_index
+        self._dirty_node_id = None
+        self._persist_state()
+
+    def _consume(self, expected_type: type[Any]) -> Any:
+        if self.cursor >= len(self.case_plan.nodes):
+            raise InvalidBranchUsageError(
+                "The journey executed more steps than the compiled plan expected.",
+                hint="Check for conditional logic or helper calls that add extra step() or checkpoint() calls at runtime.",
+            )
+        node = self.case_plan.nodes[self.cursor]
+        if not isinstance(node, expected_type):
+            expected = expected_type.__name__
+            actual = type(node).__name__
+            raise InvalidBranchUsageError(
+                f"The journey took a different path than the compiled plan at position {self.cursor + 1}: expected {expected}, got {actual}.",
+                hint="Make sure the journey calls step() and checkpoint() in the same structure each time it runs.",
+            )
+        self.cursor += 1
+        return node
+
+    def begin_attempt(self) -> None:
+        self._journey_webhook_epoch = getattr(self, "_journey_webhook_epoch", 0) + 1
+        self.cursor = 0
+        self._resume_dirty_step()
+
+    def _has_record_for(self, node_index: int) -> bool:
+        return node_index in self._record_indices
+
+    def _record(
+        self,
+        node_index: int,
+        node: Any,
+        ok: bool,
+        result: Any = None,
+        error: str | None = None,
+    ) -> bool:
+        label = getattr(node, "label", None)
+        self._record_indices.append(node_index)
+        self.records.append(
+            NodeExecutionRecord(
+                node_id=node.node_id,
+                node_type=type(node).__name__,
+                label=label,
+                ok=ok,
+                result=result,
+                error=error,
+            )
+        )
+        self._persist_state()
+        return self.stop_after_index is not None and node_index == self.stop_after_index
+
+    def _trim_from(self, start_index: int, *, preserve_retry_for: str | None) -> None:
+        kept_records: list[NodeExecutionRecord] = []
+        kept_indices: list[int] = []
+        for node_index, record in zip(self._record_indices, self.records):
+            if node_index < start_index:
+                kept_indices.append(node_index)
+                kept_records.append(record)
+        self._record_indices = kept_indices
+        self.records = kept_records
+
+        for index in range(start_index, len(self.case_plan.nodes)):
+            node = self.case_plan.nodes[index]
+            if not isinstance(node, StepNode):
+                continue
+            binding_key = self._step_key_by_id[node.node_id]
+            binding = self._step_bindings.get(binding_key)
+            if binding is not None:
+                binding.has_result = False
+                binding.result = None
+            if node.node_id != preserve_retry_for:
+                self._retry_remaining.pop(node.node_id, None)
+
+    def _retry_anchor_index(self, node: StepNode, node_index: int) -> int:
+        if node.retry is None:
+            raise InvalidBranchUsageError(
+                "A retryable step was resumed without retry settings.",
+                hint="Check the step(..., retry=..., retry_delay=..., retry_from=...) settings for that step.",
+            )
+
+        anchor_index: int | None = None
+        if node.retry.from_node_id is not None:
+            anchor_index = self._step_index_by_id.get(node.retry.from_node_id)
+        elif node.retry.from_checkpoint is not None:
+            anchor_index = self._checkpoint_index_by_name.get(node.retry.from_checkpoint)
+
+        if anchor_index is None:
+            raise InvalidBranchUsageError(
+                f"Retry anchor for step '{node.label or node.node_id}' is missing from the compiled journey path.",
+                hint="Make sure retry_from=... points to an earlier step() result or checkpoint() in the same journey path.",
+            )
+        if anchor_index > node_index:
+            raise InvalidBranchUsageError(
+                f"Retry anchor for step '{node.label or node.node_id}' appears after the step itself.",
+                hint="Point retry_from=... to an earlier step() result or checkpoint().",
+            )
+        return anchor_index
+
+    def _schedule_retry(self, node: StepNode, node_index: int) -> float | None:
+        if node.retry is None:
+            return None
+
+        remaining = self._retry_remaining.get(node.node_id, node.retry.retries)
+        if remaining <= 0:
+            self._retry_remaining.pop(node.node_id, None)
+            return None
+
+        self._retry_remaining[node.node_id] = remaining - 1
+        anchor_index = self._retry_anchor_index(node, node_index)
+        self._trim_from(anchor_index, preserve_retry_for=node.node_id)
+        self.replay_from_index = anchor_index
+        return node.retry.delay_seconds
+
+    def _capture_value(self, value: Any, *, description: str) -> Any:
+        if not self._rehydration_enabled:
+            return value
+        return clone_rehydratable_value(value, description=description)
+
+    def _store_step_inputs(
+        self,
+        node: StepNode,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> StepBindingState:
+        binding_key = self._step_key_by_id[node.node_id]
+        stored_args = self._capture_value(
+            tuple(args),
+            description=f"step inputs for '{node.label or node.node_id}'",
+        )
+        stored_kwargs = self._capture_value(
+            dict(kwargs),
+            description=f"step inputs for '{node.label or node.node_id}'",
+        )
+        binding = StepBindingState(
+            args=tuple(stored_args),
+            kwargs=dict(stored_kwargs),
+            has_result=False,
+        )
+        self._step_bindings[binding_key] = binding
+        return binding
+
+    def _set_step_result(self, node: StepNode, output: Any) -> StepBindingState:
+        binding_key = self._step_key_by_id[node.node_id]
+        binding = self._step_bindings.get(binding_key)
+        if binding is None:
+            binding = self._store_step_inputs(node, (), {})
+        binding.has_result = True
+        binding.result = self._capture_value(
+            output,
+            description=f"step result for '{node.label or node.node_id}'",
+        )
+        if self._state_controller is not None:
+            self._state_controller.promote_successful_binding(binding_key, binding)
+        return binding
+
+    def _resolve_binding_value(self, template: Any, stored_value: Any) -> Any:
+        if isinstance(template, PlannedValue) and template.kind == "step":
+            binding_key = self._step_key_by_id.get(template.node_id)
+            binding = self._step_bindings.get(binding_key) if binding_key is not None else None
+            if binding is None or not binding.has_result:
+                raise InvalidBranchUsageError(
+                    f"Replay is missing the saved result for step reference '{template.node_id}'.",
+                    hint="This usually means the journey changed after the run started. Start over or use a new state file.",
+                )
+            resolved = binding.result
+            for attribute in template.access_path:
+                if not hasattr(resolved, attribute):
+                    raise InvalidBranchUsageError(
+                        f"Replay is missing attribute '{attribute}' on the saved result for step '{template.node_id}'.",
+                        hint="This usually means the step result type changed after the run started.",
+                    )
+                resolved = getattr(resolved, attribute)
+            return resolved
+        if isinstance(template, tuple) and isinstance(stored_value, tuple) and len(template) == len(stored_value):
+            return tuple(
+                self._resolve_binding_value(item_template, item_value)
+                for item_template, item_value in zip(template, stored_value)
+            )
+        if isinstance(template, list) and isinstance(stored_value, list) and len(template) == len(stored_value):
+            return [
+                self._resolve_binding_value(item_template, item_value)
+                for item_template, item_value in zip(template, stored_value)
+            ]
+        if isinstance(template, dict) and isinstance(stored_value, dict):
+            return {
+                key: self._resolve_binding_value(template[key], stored_value[key])
+                if key in template
+                else stored_value[key]
+                for key in stored_value
+            }
+        return stored_value
+
+    def _resolve_step_inputs(self, node: StepNode, binding: StepBindingState) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        resolved_args = tuple(
+            self._resolve_binding_value(template, stored_value)
+            for template, stored_value in zip(node.args, binding.args)
+        )
+        resolved_kwargs = {
+            key: self._resolve_binding_value(node.kwargs.get(key), binding.kwargs[key])
+            for key in binding.kwargs
+        }
+        return resolved_args, resolved_kwargs
+
+    def step(
+        self,
+        fn: Callable[P, R],
+        *args: P.args,
+        retry: int = 0,
+        retry_delay: StepRetryDelay = 5,
+        retry_from: StepRetryFrom = None,
+        **kwargs: P.kwargs,
+    ) -> R:
+        del retry, retry_delay, retry_from
+        node_index = self.cursor
+        node = self._consume(StepNode)
+        if callable_ref(fn) != node.fn_ref:
+            raise InvalidBranchUsageError(
+                f"step() was called with '{callable_ref(fn)}', but the compiled plan expected '{node.fn_ref}'.",
+                hint="Make sure the journey calls the same step functions during execution that it used during planning.",
+            )
+
+        binding_key = self._step_key_by_id[node.node_id]
+        binding = self._step_bindings.get(binding_key)
+        if node_index < self.replay_from_index:
+            if binding is None or not binding.has_result:
+                raise InvalidBranchUsageError(
+                    f"Retry replay is missing the saved result for step '{node.label or node.node_id}'.",
+                    hint="This usually means the journey changed after the run started. Start over or use a new state file.",
+                )
+            return cast(R, binding.result)
+
+        if binding is not None and binding.has_result and not self._has_record_for(node_index):
+            should_stop = self._record(node_index, node, ok=True, result=binding.result)
+            if should_stop:
+                raise _StopCase()
+            return cast(R, binding.result)
+
+        bound_args: tuple[Any, ...]
+        bound_kwargs: dict[str, Any]
+        if binding is not None and not binding.has_result:
+            bound_args, bound_kwargs = self._resolve_step_inputs(node, binding)
+        else:
+            binding = self._store_step_inputs(node, tuple(args), dict(kwargs))
+            bound_args, bound_kwargs = self._resolve_step_inputs(node, binding)
+
+        self._dirty_node_id = node.node_id
+        attempt = self._step_attempts.get(node.node_id, 0) + 1
+        self._step_attempts[node.node_id] = attempt
+        self._persist_state()
+        self._observer.on_step_start(
+            case_plan=self.case_plan,
+            node=node,
+            node_index=node_index,
+            attempt=attempt,
+        )
+        started_at = time.perf_counter()
+
+        try:
+            output = fn(*bound_args, **bound_kwargs)
+        except KeyboardInterrupt as exc:
+            self._observer.on_step_interrupted(
+                case_plan=self.case_plan,
+                node=node,
+                node_index=node_index,
+                attempt=attempt,
+                duration_seconds=time.perf_counter() - started_at,
+                error=exc,
+            )
+            raise
+        except Exception as exc:  # pragma: no cover - surfaced to caller
+            duration_seconds = time.perf_counter() - started_at
+            sleep_for = self._schedule_retry(node, node_index)
+            if sleep_for is not None:
+                self._dirty_node_id = None
+                self._persist_state()
+                self._observer.on_retry(
+                    case_plan=self.case_plan,
+                    node=node,
+                    node_index=node_index,
+                    attempt=attempt,
+                    duration_seconds=duration_seconds,
+                    delay_seconds=sleep_for,
+                    remaining_retries=self._retry_remaining[node.node_id],
+                    error=exc,
+                )
+                raise _RetryRequested(sleep_for=sleep_for)
+            self._retry_remaining.pop(node.node_id, None)
+            self._dirty_node_id = None
+            self._record(node_index, node, ok=False, error=str(exc))
+            self._observer.on_step_failure(
+                case_plan=self.case_plan,
+                node=node,
+                node_index=node_index,
+                attempt=attempt,
+                duration_seconds=duration_seconds,
+                error=exc,
+            )
+            message = (
+                f"Step '{node.label or node.node_id}' failed while it was running: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            hint = "Inspect the step implementation or rerun after fixing the underlying failure."
+            if node.retry is not None:
+                message = (
+                    f"Step '{node.label or node.node_id}' failed while it was running "
+                    f"and its retry attempts were exhausted: {type(exc).__name__}: {exc}"
+                )
+                hint = (
+                    "Inspect the step implementation, or increase step(..., retry=...) if "
+                    "the failure is expected to clear on its own."
+                )
+            raise CallableExecutionError(
+                message,
+                hint=hint,
+            ) from exc
+
+        binding = self._set_step_result(node, output)
+        self._retry_remaining.pop(node.node_id, None)
+        self._dirty_node_id = None
+        should_stop = self._record(node_index, node, ok=True, result=binding.result)
+        self._observer.on_step_success(
+            case_plan=self.case_plan,
+            node=node,
+            node_index=node_index,
+            attempt=attempt,
+            duration_seconds=time.perf_counter() - started_at,
+        )
+        if should_stop:
+            raise _StopCase()
+        return cast(R, binding.result)
+
+    def checkpoint(
+        self,
+        *,
+        branches: list[BranchCase] | None = None,
+    ) -> CheckpointRef | BranchSelector:
+        checkpoint_index = self.cursor
+        checkpoint_node = self._consume(CheckpointNode)
+        if checkpoint_index >= self.replay_from_index:
+            should_stop = self._record(
+                checkpoint_index,
+                checkpoint_node,
+                ok=True,
+                result=checkpoint_node.name,
+            )
+            if should_stop:
+                raise _StopCase()
+            checkpoint_key = self._checkpoint_key_by_name[checkpoint_node.name]
+            if self._state_controller is not None:
+                self._state_controller.store_checkpoint_snapshot(
+                    checkpoint_key,
+                    self._runtime_snapshot(),
+                )
+
+        if branches is None:
+            return CheckpointRef(name=checkpoint_node.name)
+
+        marker_index = self.cursor
+        node = self._consume(BranchMarkerNode)
+        normalized, case_id_to_key = _normalize_cases(branches)
+        keys = {case.key for case in normalized}
+        if node.active_key not in keys:
+            raise InvalidBranchUsageError(
+                "checkpoint(branches=[...]) received branch options that do not match the compiled plan.",
+                hint="Use the same branch() values in the same order each time this journey runs.",
+            )
+        selected = next(case for case in normalized if case.key == node.active_key)
+
+        if selected.start_from != node.start_from:
+            raise InvalidBranchUsageError(
+                "checkpoint(branches=[...]) used branch start points that do not match the compiled plan.",
+                hint="Make sure each branch(start_from=...) points to the same checkpoint it used during planning.",
+            )
+
+        selector = BranchSelector(
+            group_id=node.group_id,
+            active_key=node.active_key,
+            case_id_to_key=case_id_to_key,
+        )
+        if marker_index >= self.replay_from_index:
+            should_stop = self._record(marker_index, node, ok=True, result=node.active_key)
+            self._observer.on_branch(
+                case_plan=self.case_plan,
+                node=node,
+                node_index=marker_index,
+            )
+            if should_stop:
+                raise _StopCase()
+        return selector
+
+
+def _normalize_cases(
+    cases: list[BranchCase],
+) -> tuple[list[BranchCase], dict[int, str]]:
+    normalized: list[BranchCase] = []
+    case_id_to_key: dict[int, str] = {}
+    for index, item in enumerate(cases, start=1):
+        if isinstance(item, BranchCase):
+            key = item.key or f"branch_{index}"
+            normalized_case = BranchCase(key=key, start_from=item.start_from)
+            normalized.append(normalized_case)
+            case_id_to_key[id(item)] = key
+            continue
+        raise TypeError(
+            "checkpoint(branches=[...]) accepts only values returned by branch()."
+        )
+    return normalized, case_id_to_key
+
+
+def _node_label(node: Any) -> str | None:
+    return getattr(node, "label", None)
+
+
+def _locate_step_matches(plan: JourneyPlan, step: str) -> list[tuple[CasePlan, int]]:
+    matches: list[tuple[CasePlan, int]] = []
+    for case in plan.case_plans:
+        for index, node in enumerate(case.nodes):
+            label = _node_label(node)
+            if label == step:
+                matches.append((case, index))
+    return matches
+
+
+def _select_cases(plan: JourneyPlan, step: str | None) -> list[_SelectedCase]:
+    if step is None:
+        return [_SelectedCase(case_plan=case, stop_after_index=None) for case in plan.case_plans]
+
+    matches = _locate_step_matches(plan, step)
+    if not matches:
+        raise StepNotFoundError(step)
+
+    matching_case_ids = sorted({case.case_id for case, _ in matches})
+    if len(matching_case_ids) != 1:
+        raise AmbiguousStepSelectionError(step, matching_case_ids)
+
+    chosen_case, stop_after_index = min(matches, key=lambda item: item[1])
+    return [_SelectedCase(case_plan=chosen_case, stop_after_index=stop_after_index)]
+
+
+def _replay_anchor_for(case_plan: CasePlan, stop_after_index: int | None) -> str | None:
+    if stop_after_index is None:
+        return None
+    upto = min(stop_after_index, len(case_plan.nodes) - 1)
+    for index in range(upto, -1, -1):
+        node = case_plan.nodes[index]
+        if isinstance(node, BranchMarkerNode) and node.start_from is not None:
+            return node.start_from
+    return None
+
+
+def _selected_case_refs(selected_cases: list[_SelectedCase]) -> list[SelectedCaseState]:
+    return [
+        SelectedCaseState(
+            case_id=item.case_plan.case_id,
+            stop_after_index=item.stop_after_index,
+        )
+        for item in selected_cases
+    ]
+
+
+def _needs_rehydration(
+    selected_cases: list[_SelectedCase],
+    *,
+    step: str | None,
+    state: str | Path | None,
+) -> bool:
+    if state is not None:
+        return True
+    if step is None:
+        for selected_case in selected_cases:
+            for node in selected_case.case_plan.nodes:
+                if isinstance(node, StepNode) and node.retry is not None:
+                    return True
+                if isinstance(node, BranchMarkerNode) and node.start_from is not None:
+                    return True
+        return False
+
+    for selected_case in selected_cases:
+        for node in selected_case.case_plan.nodes:
+            if isinstance(node, StepNode) and node.retry is not None:
+                return True
+    return False
+
+
+def _stable_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if is_dataclass(value):
+        return _stable_value(asdict(value))
+    if isinstance(value, tuple):
+        return [_stable_value(item) for item in value]
+    if isinstance(value, list):
+        return [_stable_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _stable_value(value[key])
+            for key in sorted(value, key=lambda item: str(item))
+        }
+    if isinstance(value, set):
+        return sorted(repr(_stable_value(item)) for item in value)
+    return repr(value)
+
+
+def _stable_arg_template(value: Any) -> Any:
+    if isinstance(value, PlannedValue):
+        payload = {
+            "kind": value.kind,
+            "node_id": value.node_id,
+        }
+        if value.access_path:
+            payload["access_path"] = list(value.access_path)
+        return payload
+    if isinstance(value, tuple):
+        return [_stable_arg_template(item) for item in value]
+    if isinstance(value, list):
+        return [_stable_arg_template(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _stable_arg_template(value[key])
+            for key in sorted(value, key=lambda item: str(item))
+        }
+    return {"literal_type": type(value).__name__}
+
+
+def _stable_node_payload(node: Any) -> Any:
+    if isinstance(node, StepNode):
+        return {
+            "node_id": node.node_id,
+            "label": node.label,
+            "fn_ref": node.fn_ref,
+            "args": _stable_arg_template(node.args),
+            "kwargs": _stable_arg_template(node.kwargs),
+            "retry": _stable_value(asdict(node.retry)) if node.retry is not None else None,
+        }
+    return _stable_value(asdict(node))
+
+
+def _plan_signature(
+    journey_plan: JourneyPlan,
+    selected_cases: list[_SelectedCase],
+    step: str | None,
+) -> str:
+    payload = {
+        "journey_id": journey_plan.journey_id,
+        "function_ref": journey_plan.function_ref,
+        "step": step,
+        "cases": [
+            {
+                "case_id": item.case_plan.case_id,
+                "stop_after_index": item.stop_after_index,
+                "branch_env": _stable_value(item.case_plan.branch_env),
+                "nodes": [_stable_node_payload(node) for node in item.case_plan.nodes],
+            }
+            for item in selected_cases
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _execute_plan(
+    journey_fn: Callable[..., Any],
+    *,
+    plan: JourneyPlan,
+    step: str | None = None,
+    state: str | Path | None = None,
+    observer: _ExecutionObserver | None = None,
+) -> ExecutionReport:
+    selected_cases = _select_cases(plan, step)
+    execution_observer = observer or _ExecutionObserver()
+    execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
+    rehydration_enabled = _needs_rehydration(
+        selected_cases,
+        step=step,
+        state=state,
+    )
+    state_controller = _StateController(
+        Path(state) if state is not None else None,
+        journey_plan=plan,
+        step=step,
+        selected_cases=selected_cases,
+    )
+
+    case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
+
+    try:
+        start_index = state_controller.current_case_index
+
+        for case_index in range(start_index, len(selected_cases)):
+            selected_case = selected_cases[case_index]
+            replay_anchor = _replay_anchor_for(
+                selected_case.case_plan,
+                selected_case.stop_after_index,
+            )
+            restored_state = state_controller.active_case_for(
+                case_index=case_index,
+                case_id=selected_case.case_plan.case_id,
+            )
+            _, _, start_checkpoint_key = _case_rehydration_maps(selected_case.case_plan)
+            checkpoint_seed = (
+                state_controller.checkpoint_snapshot_for(start_checkpoint_key)
+                if rehydration_enabled
+                and restored_state is None
+                and selected_case.stop_after_index is None
+                and start_checkpoint_key is not None
+                else None
+            )
+            successful_bindings = (
+                state_controller.successful_step_bindings()
+                if checkpoint_seed is not None
+                else None
+            )
+            run_session = _RunSession(
+                journey_plan=plan,
+                case_plan=selected_case.case_plan,
+                stop_after_index=selected_case.stop_after_index,
+                rehydration_enabled=rehydration_enabled,
+                state_controller=state_controller,
+                restored_state=restored_state,
+                checkpoint_seed=checkpoint_seed,
+                successful_bindings=successful_bindings,
+                observer=execution_observer,
+            )
+            if restored_state is None:
+                state_controller.begin_case(
+                    case_index=case_index,
+                    snapshot=run_session.snapshot_state(),
+                )
+
+            if restored_state is None:
+                execution_observer.on_case_start(
+                    case_plan=selected_case.case_plan,
+                    stop_after_index=selected_case.stop_after_index,
+                    replay_anchor=replay_anchor,
+                )
+            else:
+                execution_observer.on_case_resume(
+                    case_plan=selected_case.case_plan,
+                    stop_after_index=selected_case.stop_after_index,
+                    replay_anchor=replay_anchor,
+                    replay_from_index=restored_state.replay_from_index,
+                )
+
+            case_started_at = time.perf_counter()
+            stopped_label: str | None = None
+
+            while True:
+                run_session.begin_attempt()
+                try:
+                    with use_session(run_session):
+                        journey_fn()
+                except _RetryRequested as retry_request:
+                    if retry_request.sleep_for > 0:
+                        time.sleep(retry_request.sleep_for)
+                    continue
+                except _StopCase:
+                    stopped_label = step
+                if (
+                    run_session.cursor < len(selected_case.case_plan.nodes)
+                    and selected_case.stop_after_index is None
+                ):
+                    raise InvalidBranchUsageError(
+                        "The journey finished before it reached every step in the compiled plan.",
+                        hint="Check for conditional logic that exits early or skips step() calls during execution.",
+                    )
+                if (
+                    selected_case.stop_after_index is not None
+                    and run_session.cursor <= selected_case.stop_after_index
+                ):
+                    raise InvalidBranchUsageError(
+                        "The journey finished before it reached the targeted step label.",
+                        hint="Run `journey plan` to confirm the step label exists on the path you selected.",
+                    )
+                break
+
+            report = CaseExecutionReport(
+                case_id=selected_case.case_plan.case_id,
+                branch_env=dict(selected_case.case_plan.branch_env),
+                records=list(run_session.records),
+                completed=True,
+                stopped_at_label=stopped_label,
+                replay_anchor=replay_anchor,
+            )
+            case_reports.append(report)
+            state_controller.complete_case(report)
+            execution_observer.on_case_complete(
+                case_plan=selected_case.case_plan,
+                report=report,
+                duration_seconds=time.perf_counter() - case_started_at,
+            )
+
+        result = ExecutionReport(
+            journey_id=plan.journey_id,
+            function_ref=plan.function_ref,
+            case_reports=case_reports,
+        )
+        execution_observer.on_journey_complete(report=result)
+    except KeyboardInterrupt:
+        raise
+    except Exception:
+        state_controller.clear()
+        raise
+
+    return result
+
+
+def execute(
+    journey_fn: Callable[..., Any],
+    *,
+    step: str | None = None,
+    state: str | Path | None = None,
+) -> ExecutionReport:
+    """Compile a journey and execute full cases or one targeted step flow."""
+
+    plan = compile_journey(journey_fn)
+    return _execute_plan(journey_fn, plan=plan, step=step, state=state)

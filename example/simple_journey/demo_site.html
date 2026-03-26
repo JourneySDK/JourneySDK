@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>journey demo</title>
+    <style>
+      body { font-family: Georgia, serif; margin: 2rem; }
+      h1 { margin-bottom: 0.5rem; }
+      .actions { display: flex; gap: 1rem; margin-top: 1.5rem; }
+      button { padding: 0.9rem 1.2rem; font-size: 1rem; cursor: pointer; }
+      #status { margin-top: 1rem; min-height: 1.5rem; color: #0f5132; }
+    </style>
+  </head>
+  <body>
+    <h1>journey demo</h1>
+    <p>Use the buttons below to trigger async work.</p>
+    <div class="actions">
+      <button id="trigger-endpoint-a">Trigger endpoint A</button>
+      <button id="store-local-file">Store a local file</button>
+    </div>
+    <p id="status">Ready</p>
+    <script>
+      const webhookUrl = "http://localhost:8765/endpoint-a";
+      const storedFileName = "stored-message.txt";
+      const storedFileContent = "Stored by the journey demo page.\n";
+      const status = document.getElementById("status");
+
+      function setDelayedStatus(message, action) {
+        status.textContent = "Working...";
+        window.setTimeout(async () => {
+          try {
+            await action();
+            status.textContent = message;
+          } catch (error) {
+            status.textContent = String(error);
+          }
+        }, 1000);
+      }
+
+      document.getElementById("trigger-endpoint-a").addEventListener("click", () => {
+        setDelayedStatus("Endpoint A sent", async () => {
+          await fetch(
+            webhookUrl + "?event=endpoint_a&source=journey_demo",
+            { mode: "no-cors" }
+          );
+        });
+      });
+
+      document.getElementById("store-local-file").addEventListener("click", () => {
+        setDelayedStatus("Local file saved", async () => {
+          const blob = new Blob([storedFileContent], {
+            type: "text/plain;charset=utf-8",
+          });
+          const blobUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          link.download = storedFileName;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        });
+      });
+    </script>
+  </body>
+</html>
