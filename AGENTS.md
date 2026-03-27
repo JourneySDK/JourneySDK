@@ -20,6 +20,7 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 ## Preferred commands
 
 - `uv run pytest`
+- `cd ../private && uv run --with ../public --extra dev pytest`
 - `uv run journey plan`
 - `uv run journey plan --file example/first_journey/first_journey.py`
 - `uv run journey execute`
@@ -43,6 +44,8 @@ flow that reaches a target step label.
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `example/`), plus tests, aligned with behavior changes.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
+- When changes affect cloud webhook compatibility or shared service contracts in the combined workspace, also run
+  `cd ../private && uv run --with ../public --extra dev pytest`.
 - Keep docstrings in `journey/api.py` up to date (it is the public API).
 - Prefer adding or updating tests before changing planner, executor, or validator semantics.
 - When changing step-label behavior, check both full execution and targeted `--step` execution.

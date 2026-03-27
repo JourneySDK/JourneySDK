@@ -182,6 +182,22 @@ export JOURNEY_CLOUD_API_KEY=journey-demo-key
 export JOURNEY_CLOUD_BASE_URL=https://journey-cloud.example.test
 ```
 
+## Testing
+
+Run the full framework suite from this root:
+
+```bash
+uv run pytest
+```
+
+If you are working in the combined workspace and changed shared cloud webhook behavior, also run the sibling service
+suite with this framework package injected:
+
+```bash
+cd ../private
+uv run --with ../public --extra dev pytest
+```
+
 See [`example/README.md`](example/README.md) for the staged runnable tutorial. It starts with a minimal linear
 journey, then walks through selection, branching, retries, resume, cloud-hosted webhooks, browser automation,
 resumable Playwright sessions, replay, and fail-fast execution.
