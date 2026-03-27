@@ -1,6 +1,6 @@
 # journey Tutorial
 
-This directory is a step-by-step tutorial for learning `journey`.
+This directory is a step-by-step tutorial for learning Journey SDK.
 
 Every stage is runnable from the repository root. The stages start with plain Python, then add CLI filtering, branch
 selection, retries, resume support, cloud-hosted webhooks, browser automation, local webhook handling, replay

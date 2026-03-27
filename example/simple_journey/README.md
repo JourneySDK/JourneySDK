@@ -1,6 +1,6 @@
 # Simple Journey: Browser and Webhook Flow
 
-This stage turns the core `journey` ideas into a realistic cross-system example.
+This stage turns the core Journey SDK ideas into a realistic cross-system example.
 
 The journey opens a local demo page with Playwright, branches into two flows, waits for a webhook in one branch, and
 checks a downloaded file in the other branch.
@@ -66,7 +66,7 @@ What to expect:
 
 ## Why this matters
 
-This example shows the real strength of `journey`: the framework does not care whether a step talks to a browser, a
+This example shows the real strength of Journey SDK: the framework does not care whether a step talks to a browser, a
 local file, or a webhook endpoint. If it is plain Python, it can be part of the same journey.
 
 ## Next step

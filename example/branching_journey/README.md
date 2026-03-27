@@ -58,10 +58,10 @@ What to expect:
 
 ## Why this matters
 
-Branching is where `journey` starts saving real time. You author the shared setup once, keep the branch logic in one
+Branching is where Journey SDK starts saving real time. You author the shared setup once, keep the branch logic in one
 place, and let the planner turn that into separate linear cases.
 
 ## Next step
 
-Continue with [`retry_journey/README.md`](../retry_journey/README.md) to learn how `journey` handles async or delayed
+Continue with [`retry_journey/README.md`](../retry_journey/README.md) to learn how Journey SDK handles async or delayed
 effects.

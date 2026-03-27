@@ -27,7 +27,7 @@ export JOURNEY_CLOUD_BASE_URL=https://journey-cloud.example.test
 What to expect:
 
 - the same API key works for endpoint creation and request polling
-- the service itself is hosted separately from the public `journey` framework checkout
+- the service itself is hosted separately from the public Journey SDK framework checkout
 
 ## Run it
 

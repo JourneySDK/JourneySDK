@@ -62,7 +62,7 @@ What to expect from the second run:
 
 ## Why this matters
 
-Real browser flows often depend on cookies and client-side storage. This example shows how `journey` can persist a
+Real browser flows often depend on cookies and client-side storage. This example shows how Journey SDK can persist a
 lightweight browser session value, restart the interrupted step from its boundary, and reopen the same authenticated
 page on the resumed run.
 

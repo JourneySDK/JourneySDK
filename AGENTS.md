@@ -2,8 +2,8 @@
 
 ## Project
 
-`journey` is a workflow-as-code QA toolkit for long, branching, async, cross-system user journeys. Authors write one
-journey in sequential Python with primitives like `step`, `checkpoint`, and `retry`, and `journey` compiles or
+Journey SDK is a workflow-as-code QA toolkit for long, branching, async, cross-system user journeys. Authors write one
+journey in sequential Python with primitives like `step`, `checkpoint`, and `retry`, and Journey SDK compiles or
 executes the resulting linear cases.
 
 See `README.md` for the deeper product description, use cases, and tutorial context.

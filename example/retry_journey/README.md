@@ -1,6 +1,6 @@
 # Retry Journey
 
-This stage shows the three retry patterns in `journey`:
+This stage shows the three retry patterns in Journey SDK:
 
 - retry the current step
 - retry from an earlier step result
@@ -69,10 +69,10 @@ What to expect:
 
 ## Why this matters
 
-Async systems often need polling or replay. `journey` keeps that logic explicit. You decide whether a retry should
+Async systems often need polling or replay. Journey SDK keeps that logic explicit. You decide whether a retry should
 rerun only the failing step, restart from an earlier step, or replay everything after a checkpoint.
 
-The example keeps every replayed value to plain dictionaries and strings. That is intentional. If `journey` may need
+The example keeps every replayed value to plain dictionaries and strings. That is intentional. If Journey SDK may need
 to save and restore a value for retries, resume, or branch replay, that value must be pickle-serializable.
 
 ## Next step

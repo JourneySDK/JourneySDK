@@ -1,10 +1,10 @@
-# journey
+# Journey SDK
 
-`journey` is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys.
+Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys.
 
 ## Overview
 
-`journey` is built around a simple idea: write one journey in sequential Python, then let `journey` compile it into
+Journey SDK is built around a simple idea: write one journey in sequential Python, then let Journey SDK compile it into
 linear executable flows. It is designed for workflows where a single journey can touch browsers, edge devices,
 background jobs, third-party services, voice or AI systems, and delayed side effects.
 
@@ -14,7 +14,7 @@ Official tools live under `journey.tools`; today that includes the `webhook` too
 endpoint or acquiring a cloud-hosted one, plus the `playwright` tool for resumable page state. Retryable steps can
 poll for async effects or replay from an earlier step or checkpoint.
 
-That makes `journey` useful for flows such as:
+That makes Journey SDK useful for flows such as:
 
 - verifying a Stripe payment or a HubSpot ticket as part of a user journey
 - polling until background work becomes visible in a third-party system
@@ -48,7 +48,7 @@ import journey
 
 Write one journey in sequential Python with `step`, `checkpoint`, and optional step retries via
 `step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate module-level journey entrypoints with
-`@journey.journey`. `journey` compiles that authoring flow into linear executable cases so teams can cover branching
+`@journey.journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching
 workflows without duplicating test code. Step functions are plain callables: pass every required input as explicit
 arguments, and return any value that later steps or resumed runs must reuse.
 
@@ -140,7 +140,7 @@ flow that reaches a target step label.
 
 ## Core principles
 
-- **Workflow as code**: author one test journey in Python and let `journey` compile it into linear flows
+- **Workflow as code**: author one test journey in Python and let Journey SDK compile it into linear flows
 - **Simplicity over flexibility**: keep the framework footprint small so the testing logic stays easy to follow
 - **Tool-friendly**: integrate external systems and domain-specific tools without forcing them into a custom DSL
 - **Journey-centric**: optimize around the full business process rather than isolated pages or API calls

@@ -56,7 +56,7 @@ What to expect:
 
 ## Why this matters
 
-Large journeys often have expensive shared setup. Checkpoint rehydration is how `journey` avoids repeating that setup
+Large journeys often have expensive shared setup. Checkpoint rehydration is how Journey SDK avoids repeating that setup
 for every later branch when the data can be restored safely from saved step values.
 
 ## Next step

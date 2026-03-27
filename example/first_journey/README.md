@@ -1,6 +1,6 @@
 # First Journey
 
-Start here if `journey` is new to you.
+Start here if Journey SDK is new to you.
 
 This stage shows the smallest useful journey: one decorated function, three steps, and one value passed from step to
 step.
@@ -44,7 +44,7 @@ What to expect:
 
 ## Why this matters
 
-This is the core `journey` authoring model. You write plain Python functions, call them through `journey.step(...)`,
+This is the core Journey SDK authoring model. You write plain Python functions, call them through `journey.step(...)`,
 and pass explicit values from one step to the next. The CLI then plans or executes that flow for you.
 
 ## Next step
