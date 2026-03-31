@@ -182,6 +182,11 @@ export JOURNEY_CLOUD_API_KEY=journey-demo-key
 export JOURNEY_CLOUD_BASE_URL=https://journey-cloud.example.test
 ```
 
+Journey Cloud authenticates SDK control-plane calls with `Authorization: Bearer $JOURNEY_CLOUD_API_KEY`. The same
+pattern should apply to all Journey cloud tools: the first API key that reserves a cloud resource becomes its owner.
+That means a webhook path, mail inbox, or similar cloud-managed identifier belongs to the API key that claimed it
+first, and other API keys should not be able to reserve or manage that same resource afterward.
+
 ## Testing
 
 Run the full framework suite from this root:
