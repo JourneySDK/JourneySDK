@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import importlib
+import urllib.request
+
+import journey
+import pytest
+from journey.models import StepNode
+
+from journey.tools._email_cloud import (
+    JOURNEY_CLOUD_API_KEY_ENV,
+    JOURNEY_CLOUD_BASE_URL_ENV,
+)
+from tests._cloud_stub import serve_in_background
+
+cloud_email_example = importlib.import_module(
+    "example.cloud_email_journey.cloud_email_journey"
+)
+
+
+def _case_labels(plan: journey.JourneyPlan) -> list[list[str]]:
+    return [
+        [
+            node.label
+            for node in case_plan.nodes
+            if isinstance(node, StepNode) and node.label is not None
+        ]
+        for case_plan in plan.case_plans
+    ]
+
+
+def test_cloud_email_example_compiles_without_touching_the_network(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("compile_journey() should not call the cloud service.")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.delenv(JOURNEY_CLOUD_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(JOURNEY_CLOUD_BASE_URL_ENV, raising=False)
+
+    first_plan = journey.compile_journey(cloud_email_example.cloud_email_journey)
+    second_plan = journey.compile_journey(cloud_email_example.cloud_email_journey)
+
+    expected_labels = [
+        [
+            "get_email_inbox",
+            "send_email",
+            "receive_email",
+            "assert_welcome_email",
+        ]
+    ]
+    assert _case_labels(first_plan) == expected_labels
+    assert _case_labels(second_plan) == expected_labels
+
+
+def test_cloud_email_example_executes_against_local_journey_cloud(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with serve_in_background() as cloud:
+        monkeypatch.setenv(JOURNEY_CLOUD_API_KEY_ENV, cloud.api_key)
+        monkeypatch.setenv(JOURNEY_CLOUD_BASE_URL_ENV, cloud.base_url)
+        cloud_email_example.reset_demo_state()
+
+        report = journey.execute(cloud_email_example.cloud_email_journey)
+
+    assert [case.case_id for case in report.case_reports] == ["case_1"]
+    assert cloud_email_example.EVENTS == ["assert_welcome_email"]

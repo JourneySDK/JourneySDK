@@ -11,6 +11,7 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 ## Key files
 
 - `journey/api.py`: public API that QA can use to write journeys
+- `journey/tools/email.py`: official email tool entrypoint
 - `journey/tools/webhook.py`: official webhook tool entrypoint
 - `journey/planner.py`: journey compilation (aka planning)
 - `journey/executor.py`: execution of a compiled journey
@@ -57,7 +58,7 @@ flow that reaches a target step label.
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `example/`), plus tests, aligned with behavior changes.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
-- When changes affect cloud webhook compatibility or shared service contracts in the combined workspace, also run
+- When changes affect cloud email/webhook compatibility or shared service contracts in the combined workspace, also run
   `cd ../private && uv run --with ../public --extra dev pytest`.
 - Keep the shared cloud auth and reservation pattern documented anywhere an official cloud tool is introduced.
 - Keep docstrings in `journey/api.py` up to date (it is the public API).

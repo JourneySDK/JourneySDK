@@ -7,6 +7,7 @@ import time
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterator
@@ -17,6 +18,9 @@ from journey.tools._webhook_shared import build_request_payload, normalize_path
 _CONTROL_CREATE_PATH = "/v1/webhook-endpoints"
 _CONTROL_NEXT_SUFFIX = "/requests/next"
 _PUBLIC_WEBHOOK_PREFIX = "/webhooks/"
+_EMAIL_INBOX_DEFAULT_PATH = "/v1/email-inboxes/default"
+_EMAIL_SEND_PATH = "/v1/email-inboxes/default/messages/send"
+_EMAIL_NEXT_PATH = "/v1/email-inboxes/default/messages/next"
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,7 @@ class RunningCloudStub:
     api_key: str
     base_url: str
     public_base_url: str
+    default_email_address: str
 
 
 @dataclass(frozen=True)
@@ -38,11 +43,26 @@ class _StoredEndpoint:
     requests: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _StubInbox:
+    address: str
+    mailbox: str
+
+
+@dataclass
+class _StoredEmailMessage:
+    payload: dict[str, Any]
+    unread: bool = True
+    consumed: bool = False
+
+
 class _StubStore:
-    def __init__(self) -> None:
+    def __init__(self, *, default_inbox: _StubInbox) -> None:
         self._lock = threading.Lock()
         self._counter = 0
         self._endpoints: dict[str, _StoredEndpoint] = {}
+        self._default_inbox = default_inbox
+        self._messages: list[_StoredEmailMessage] = []
 
     def create_endpoint(self, *, path: str) -> _StubEndpoint:
         with self._lock:
@@ -71,6 +91,76 @@ class _StubStore:
                 return None
             return stored.requests.pop(0)
 
+    def default_inbox(self) -> _StubInbox:
+        return self._default_inbox
+
+    def send_email(
+        self,
+        *,
+        to: list[str] | None,
+        subject: str,
+        text_body: str | None,
+        html_body: str | None,
+        from_address: str | None,
+        message_id: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            sender = from_address or self._default_inbox.address
+            recipients = to or [self._default_inbox.address]
+            payload = {
+                "message_id": message_id,
+                "subject": subject,
+                "from_address": sender,
+                "to": recipients,
+                "cc": [],
+                "reply_to": None,
+                "text_body": text_body,
+                "html_body": html_body,
+                "headers": {
+                    "message-id": message_id,
+                    "subject": subject,
+                    "from": sender,
+                    "to": ", ".join(recipients),
+                },
+                "received_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._messages.append(_StoredEmailMessage(payload=payload))
+            return {
+                "message_id": message_id,
+                "from_address": sender,
+                "to": recipients,
+                "subject": subject,
+                "transport": "cloud",
+            }
+
+    def next_email(
+        self,
+        *,
+        subject_contains: str | None,
+        from_address: str | None,
+        to_address: str | None,
+        unread_only: bool,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            for stored in self._messages:
+                if stored.consumed:
+                    continue
+                if unread_only and not stored.unread:
+                    continue
+                payload = stored.payload
+                if subject_contains is not None and subject_contains not in str(
+                    payload.get("subject", "")
+                ):
+                    continue
+                if from_address is not None and payload.get("from_address") != from_address:
+                    continue
+                if to_address is not None and to_address not in list(payload.get("to", [])):
+                    continue
+                stored.unread = False
+                stored.consumed = True
+                return payload
+            return None
+
 
 class _CloudStub:
     def __init__(self, *, host: str, port: int, api_key: str, public_base_url: str | None) -> None:
@@ -78,7 +168,11 @@ class _CloudStub:
         self.port = port
         self.api_key = api_key
         self.public_base_url = public_base_url
-        self.store = _StubStore()
+        self.default_inbox = _StubInbox(
+            address=_default_email_address(api_key),
+            mailbox="INBOX",
+        )
+        self.store = _StubStore(default_inbox=self.default_inbox)
         self._server = _CloudStubHTTPServer((host, port), self)
         self._thread: threading.Thread | None = None
 
@@ -143,6 +237,15 @@ class _CloudStubHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == _CONTROL_CREATE_PATH:
             self._handle_create_endpoint()
+            return
+        if parsed.path == _EMAIL_INBOX_DEFAULT_PATH:
+            self._handle_get_default_email_inbox()
+            return
+        if parsed.path == _EMAIL_SEND_PATH:
+            self._handle_send_email()
+            return
+        if parsed.path == _EMAIL_NEXT_PATH:
+            self._handle_next_email()
             return
 
         endpoint_id = self._match_next_request_route(parsed.path)
@@ -229,6 +332,148 @@ class _CloudStubHandler(BaseHTTPRequestHandler):
         )
         self.server.app.store.enqueue_request(endpoint_id=endpoint_id, payload=payload)
         self._send_json({"queued": True}, status=HTTPStatus.ACCEPTED)
+
+    def _handle_get_default_email_inbox(self) -> None:
+        if self.command != "POST":
+            self._send_json_error(
+                HTTPStatus.METHOD_NOT_ALLOWED,
+                "Use POST to fetch the default email inbox.",
+            )
+            return
+        if not self._is_authorized():
+            return
+
+        self._read_request_body()
+        inbox = self.server.app.store.default_inbox()
+        self._send_json(
+            {
+                "address": inbox.address,
+                "mailbox": inbox.mailbox,
+                "transport": "cloud",
+            }
+        )
+
+    def _handle_send_email(self) -> None:
+        if self.command != "POST":
+            self._send_json_error(
+                HTTPStatus.METHOD_NOT_ALLOWED,
+                "Use POST to send email.",
+            )
+            return
+        if not self._is_authorized():
+            return
+
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        subject = payload.get("subject")
+        message_id = payload.get("message_id")
+        if not isinstance(subject, str) or not subject.strip():
+            self._send_json_error(HTTPStatus.BAD_REQUEST, "Email subject must be a non-blank string.")
+            return
+        if not isinstance(message_id, str) or not message_id.strip():
+            self._send_json_error(HTTPStatus.BAD_REQUEST, "Email message_id must be a non-blank string.")
+            return
+
+        to_value = payload.get("to")
+        if to_value is None:
+            to = None
+        elif isinstance(to_value, list) and all(isinstance(item, str) and item for item in to_value):
+            to = list(to_value)
+        else:
+            self._send_json_error(
+                HTTPStatus.BAD_REQUEST,
+                "Email recipients must be a list of non-blank strings.",
+            )
+            return
+
+        text_body = payload.get("text_body")
+        html_body = payload.get("html_body")
+        if text_body is not None and not isinstance(text_body, str):
+            self._send_json_error(HTTPStatus.BAD_REQUEST, "text_body must be a string or null.")
+            return
+        if html_body is not None and not isinstance(html_body, str):
+            self._send_json_error(HTTPStatus.BAD_REQUEST, "html_body must be a string or null.")
+            return
+        if text_body is None and html_body is None:
+            self._send_json_error(HTTPStatus.BAD_REQUEST, "Provide text_body or html_body.")
+            return
+
+        from_address = payload.get("from_address")
+        if from_address is not None and (
+            not isinstance(from_address, str) or not from_address.strip()
+        ):
+            self._send_json_error(
+                HTTPStatus.BAD_REQUEST,
+                "from_address must be a non-blank string or null.",
+            )
+            return
+
+        receipt = self.server.app.store.send_email(
+            to=to,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            from_address=from_address,
+            message_id=message_id,
+        )
+        self._send_json(receipt)
+
+    def _handle_next_email(self) -> None:
+        if self.command != "POST":
+            self._send_json_error(
+                HTTPStatus.METHOD_NOT_ALLOWED,
+                "Use POST to fetch queued email.",
+            )
+            return
+        if not self._is_authorized():
+            return
+
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        subject_contains = payload.get("subject_contains")
+        if subject_contains is not None and not isinstance(subject_contains, str):
+            self._send_json_error(
+                HTTPStatus.BAD_REQUEST,
+                "subject_contains must be a string or null.",
+            )
+            return
+        from_address = payload.get("from_address")
+        if from_address is not None and not isinstance(from_address, str):
+            self._send_json_error(
+                HTTPStatus.BAD_REQUEST,
+                "from_address must be a string or null.",
+            )
+            return
+        to_address = payload.get("to_address")
+        if to_address is not None and not isinstance(to_address, str):
+            self._send_json_error(
+                HTTPStatus.BAD_REQUEST,
+                "to_address must be a string or null.",
+            )
+            return
+        unread_only = payload.get("unread_only", True)
+        if not isinstance(unread_only, bool):
+            self._send_json_error(
+                HTTPStatus.BAD_REQUEST,
+                "unread_only must be a boolean.",
+            )
+            return
+
+        next_message = self.server.app.store.next_email(
+            subject_contains=subject_contains,
+            from_address=from_address,
+            to_address=to_address,
+            unread_only=unread_only,
+        )
+        if next_message is None:
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.end_headers()
+            return
+        self._send_json(next_message)
 
     def _is_authorized(self) -> bool:
         header = self.headers.get("Authorization", "")
@@ -318,6 +563,7 @@ def serve_in_background(
             api_key=api_key,
             base_url=stub.base_url,
             public_base_url=stub.visible_public_base_url,
+            default_email_address=stub.default_inbox.address,
         )
     finally:
         stub.shutdown()
@@ -341,3 +587,11 @@ def _wait_until_ready(url: str) -> None:
         if time.monotonic() >= deadline:
             raise RuntimeError(f"Timed out waiting for the public cloud stub at {url}.")
         time.sleep(0.01)
+
+
+def _default_email_address(api_key: str) -> str:
+    local = "".join(
+        char if char.isalnum() else "_"
+        for char in api_key.strip()
+    ).strip("_")
+    return f"{local or 'journey'}@journey-cloud.test"

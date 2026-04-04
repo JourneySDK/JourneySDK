@@ -1,3 +1,3 @@
 """Official journey tools."""
 
-__all__ = ["playwright", "webhook"]
+__all__ = ["email", "playwright", "webhook"]

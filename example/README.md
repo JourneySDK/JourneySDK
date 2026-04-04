@@ -3,8 +3,8 @@
 This directory is a step-by-step tutorial for learning Journey SDK.
 
 Every stage is runnable from the repository root. The stages start with plain Python, then add CLI filtering, branch
-selection, retries, resume support, cloud-hosted webhooks, browser automation, local webhook handling, replay
-behavior, and fail-fast execution.
+selection, retries, resume support, cloud-hosted webhooks, cloud-hosted email, browser automation, local webhook
+handling, replay behavior, and fail-fast execution.
 
 ## Before you start
 
@@ -31,13 +31,15 @@ uv run --with playwright python -m playwright install chromium
 5. [`resume_journey/README.md`](resume_journey/README.md): Resume an interrupted run with `--state`.
 6. [`cloud_webhook_journey/README.md`](cloud_webhook_journey/README.md): Point the official cloud webhook helpers at a
    hosted journey cloud service from a pure-Python journey.
-7. [`simple_journey/README.md`](simple_journey/README.md): Run a realistic browser and local webhook flow with
+7. [`cloud_email_journey/README.md`](cloud_email_journey/README.md): Use the official cloud email helpers with the
+   hosted default inbox for your API key.
+8. [`simple_journey/README.md`](simple_journey/README.md): Run a realistic browser and local webhook flow with
    Playwright and the official local webhook tool.
-8. [`playwright_resume_journey/README.md`](playwright_resume_journey/README.md): Capture a browser session as
+9. [`playwright_resume_journey/README.md`](playwright_resume_journey/README.md): Capture a browser session as
    `PlaywrightPageState`, interrupt the run, and resume from the same authenticated page.
-9. [`rehydration_journey/README.md`](rehydration_journey/README.md): Understand checkpoint replay and why later cases
+10. [`rehydration_journey/README.md`](rehydration_journey/README.md): Understand checkpoint replay and why later cases
    can reuse earlier work.
-10. [`fail_fast_journeys/README.md`](fail_fast_journeys/README.md): Learn what `--fail-fast` changes when one journey
+11. [`fail_fast_journeys/README.md`](fail_fast_journeys/README.md): Learn what `--fail-fast` changes when one journey
    fails.
 
 ## How to use this tutorial

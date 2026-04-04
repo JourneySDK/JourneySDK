@@ -11,8 +11,9 @@ background jobs, third-party services, voice or AI systems, and delayed side eff
 Each step is just plain Python, so teams can use existing testing tools and scripts without adapting them to a special
 framework. A `step` can run browser automation, mobile checks, API assertions, or service-specific validation logic.
 Official tools live under `journey.tools`; today that includes the `webhook` tool for hosting a local webhook
-endpoint or acquiring a cloud-hosted one, plus the `playwright` tool for resumable page state. Retryable steps can
-poll for async effects or replay from an earlier step or checkpoint.
+endpoint or acquiring a cloud-hosted one, the `email` tool for direct or cloud-hosted inbox access, and the
+`playwright` tool for resumable page state. Retryable steps can poll for async effects or replay from an earlier step
+or checkpoint.
 
 That makes Journey SDK useful for flows such as:
 
@@ -85,6 +86,20 @@ request_payload = journey.step(
     endpoint,
     retry=3,
     retry_delay=1,
+)
+```
+
+The official email tool follows the same step-oriented model. It can use direct SMTP + IMAP credentials or fall back
+to Journey Cloud:
+
+```python
+from journey.tools.email import get_email_inbox, send_email, wait_for_email
+
+inbox = journey.step(get_email_inbox())
+journey.step(send_email(subject="Welcome", text_body="Hello from Journey"))
+message = journey.step(
+    wait_for_email(subject_contains="Welcome", timeout=1, poll_interval=0.1),
+    inbox,
 )
 ```
 
@@ -182,6 +197,28 @@ export JOURNEY_CLOUD_API_KEY=journey-demo-key
 export JOURNEY_CLOUD_BASE_URL=https://journey-cloud.example.test
 ```
 
+If you want the email tool to use a direct mail server instead of Journey Cloud, configure these execution-time
+variables:
+
+```bash
+export JOURNEY_EMAIL_ADDRESS=qa@example.test
+export JOURNEY_EMAIL_FROM_ADDRESS=journey@example.test
+export JOURNEY_EMAIL_SMTP_HOST=smtp.example.test
+export JOURNEY_EMAIL_SMTP_PORT=587
+export JOURNEY_EMAIL_SMTP_USERNAME=journey-user
+export JOURNEY_EMAIL_SMTP_PASSWORD=journey-pass
+export JOURNEY_EMAIL_SMTP_STARTTLS=true
+export JOURNEY_EMAIL_IMAP_HOST=imap.example.test
+export JOURNEY_EMAIL_IMAP_PORT=993
+export JOURNEY_EMAIL_IMAP_USERNAME=journey-user
+export JOURNEY_EMAIL_IMAP_PASSWORD=journey-pass
+export JOURNEY_EMAIL_IMAP_SSL=true
+export JOURNEY_EMAIL_IMAP_MAILBOX=INBOX
+```
+
+When those direct email settings are absent or incomplete, the official email tool falls back to Journey Cloud and
+uses the default hosted inbox assigned to the active `JOURNEY_CLOUD_API_KEY`.
+
 Journey Cloud authenticates SDK control-plane calls with `Authorization: Bearer $JOURNEY_CLOUD_API_KEY`. The same
 pattern should apply to all Journey cloud tools: the first API key that reserves a cloud resource becomes its owner.
 That means a webhook path, mail inbox, or similar cloud-managed identifier belongs to the API key that claimed it
@@ -195,8 +232,8 @@ Run the full framework suite from this root:
 uv run pytest
 ```
 
-If you are working in the combined workspace and changed shared cloud webhook behavior, also run the sibling service
-suite with this framework package injected:
+If you are working in the combined workspace and changed shared cloud email or webhook behavior, also run the sibling
+service suite with this framework package injected:
 
 ```bash
 cd ../private
@@ -204,5 +241,5 @@ uv run --with ../public --extra dev pytest
 ```
 
 See [`example/README.md`](example/README.md) for the staged runnable tutorial. It starts with a minimal linear
-journey, then walks through selection, branching, retries, resume, cloud-hosted webhooks, browser automation,
-resumable Playwright sessions, replay, and fail-fast execution.
+journey, then walks through selection, branching, retries, resume, cloud-hosted webhooks, cloud-hosted email,
+browser automation, resumable Playwright sessions, replay, and fail-fast execution.
