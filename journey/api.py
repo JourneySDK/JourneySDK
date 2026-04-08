@@ -16,7 +16,6 @@ from .models import (
 from .session import get_session
 
 _JOURNEY_MARKER_ATTR = "__journey_marker__"
-_CHECKPOINT_BRANCHES_UNSET = object()
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -210,15 +209,8 @@ def step(
     )
 
 
-def checkpoint(
-    *,
-    branches: object = _CHECKPOINT_BRANCHES_UNSET,
-) -> CheckpointRef:
+def checkpoint() -> CheckpointRef:
     """Mark a checkpoint that later steps or branches can refer to.
-
-    Args:
-        branches: Unsupported. Use inline ``if journey.branch(...):`` /
-            ``elif journey.branch(...):`` conditions instead.
 
     Returns:
         A ``CheckpointRef`` anchor that later steps or branches can reuse.
@@ -235,16 +227,6 @@ def checkpoint(
             journey.step(finish_manual)
         ```
     """
-    if branches is not _CHECKPOINT_BRANCHES_UNSET:
-        raise InvalidBranchUsageError(
-            "checkpoint(branches=[...]) is no longer supported.",
-            hint=(
-                "Create a plain checkpoint first, then use "
-                "`if journey.branch(start_from=checkpoint):` / "
-                "`elif journey.branch(start_from=checkpoint):`."
-            ),
-        )
-
     session = get_session()
     if session is None:
         raise InvalidBranchUsageError(

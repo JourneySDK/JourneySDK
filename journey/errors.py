@@ -131,18 +131,6 @@ class UnsupportedLoopError(UnsupportedControlFlowError):
         super().__init__(message, hint=hint)
 
 
-class DuplicateBranchKeyError(CompilationError):
-    """Raised when a branch group contains duplicate keys."""
-
-    def __init__(
-        self,
-        message: str = "A checkpoint(branches=[...]) call defines the same branch key more than once.",
-        *,
-        hint: str | None = None,
-    ) -> None:
-        super().__init__(message, hint=hint)
-
-
 class UnknownCheckpointError(CompilationError):
     """Raised when a branch references a missing checkpoint."""
 

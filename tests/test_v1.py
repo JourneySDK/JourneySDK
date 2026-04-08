@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import pickle
 
 import journey.errors as journey_errors
@@ -189,6 +190,8 @@ def test_legacy_result_objects_and_errors_are_not_public():
         "from journey import RunResult",
         "from journey import RetryPolicy",
         "from journey import retry",
+        "from journey.errors import DuplicateBranchKeyError",
+        "from journey import DuplicateBranchKeyError",
         "from journey.errors import EvaluationFailedError",
         "from journey.errors import WaitFailedError",
         "from journey import EvaluationFailedError",
@@ -202,6 +205,8 @@ def test_legacy_result_objects_and_errors_are_not_public():
         assert not hasattr(journey_sdk, name)
 
     assert not hasattr(journey_sdk, "retry")
+    assert not hasattr(journey_errors, "DuplicateBranchKeyError")
+    assert not hasattr(journey_sdk, "DuplicateBranchKeyError")
 
     for name in ("EvaluationFailedError", "WaitFailedError"):
         assert not hasattr(journey_errors, name)
@@ -533,6 +538,10 @@ def test_checkpoint_branches_keyword_is_rejected_with_migration_hint():
 
     assert "no longer supported" in str(exc_info.value)
     assert exc_info.value.hint is not None
+
+
+def test_checkpoint_signature_has_no_branches_keyword():
+    assert list(inspect.signature(journey_sdk.checkpoint).parameters) == []
 
 
 def test_branch_selector_is_rejected_with_migration_hint():
