@@ -231,20 +231,14 @@ def test_single_branch_group_compiles_to_one_case_per_branch():
         signup = journey_sdk.step(signup_user)
         journey_sdk.step(assert_ok, signup)
         after_signup = journey_sdk.checkpoint()
-        buy_branch = journey_sdk.branch(start_from=after_signup)
-        subscribe_branch = journey_sdk.branch(start_from=after_signup)
-        sign_out_branch = journey_sdk.branch()
-
-        branch = journey_sdk.checkpoint(branches=[buy_branch, subscribe_branch, sign_out_branch])
-
-        if branch.is_(buy_branch):
+        if journey_sdk.branch(start_from=after_signup):
             order = journey_sdk.step(user_buys_something)
             journey_sdk.step(assert_ok, order)
-        elif branch.is_(subscribe_branch):
+        elif journey_sdk.branch(start_from=after_signup):
             sub = journey_sdk.step(user_subscribes)
             journey_sdk.step(temporal_fast_forward, "30d")
             journey_sdk.step(assert_ok, sub)
-        elif branch.is_(sign_out_branch):
+        elif journey_sdk.branch():
             out = journey_sdk.step(user_signs_out)
             journey_sdk.step(assert_ok, out)
 
@@ -269,18 +263,12 @@ def test_single_branch_group_compiles_to_one_case_per_branch():
 
 def test_nested_branch_groups_expand_recursively_only_when_reachable():
     def journey():
-        outer_a = journey_sdk.branch()
-        outer_b = journey_sdk.branch()
-        outer = journey_sdk.checkpoint(branches=[outer_a, outer_b])
-        if outer.is_(outer_a):
-            inner_c = journey_sdk.branch()
-            inner_d = journey_sdk.branch()
-            inner = journey_sdk.checkpoint(branches=[inner_c, inner_d])
-            if inner.is_(inner_c):
+        if journey_sdk.branch():
+            if journey_sdk.branch():
                 journey_sdk.step(c)
-            elif inner.is_(inner_d):
+            elif journey_sdk.branch():
                 journey_sdk.step(d)
-        elif outer.is_(outer_b):
+        elif journey_sdk.branch():
             journey_sdk.step(b)
 
     def a():
@@ -308,12 +296,9 @@ def test_unknown_checkpoint_is_rejected():
         return True
 
     def journey():
-        path_a_branch = journey_sdk.branch(start_from="missing_checkpoint")
-        path_b_branch = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[path_a_branch, path_b_branch])
-        if selector.is_(path_a_branch):
+        if journey_sdk.branch(start_from="missing_checkpoint"):
             journey_sdk.step(path_a)
-        elif selector.is_(path_b_branch):
+        elif journey_sdk.branch():
             journey_sdk.step(path_b)
 
     with pytest.raises(UnknownCheckpointError):
@@ -363,21 +348,15 @@ def test_execute_step_runs_single_matching_flow_and_stops_after_target():
         signup = journey_sdk.step(signup_user)
         journey_sdk.step(assert_ok, signup)
         after_signup = journey_sdk.checkpoint()
-        buy_branch = journey_sdk.branch(start_from=after_signup)
-        subscribe_branch = journey_sdk.branch(start_from=after_signup)
-        sign_out_branch = journey_sdk.branch()
-
-        branch = journey_sdk.checkpoint(branches=[buy_branch, subscribe_branch, sign_out_branch])
-
-        if branch.is_(buy_branch):
+        if journey_sdk.branch(start_from=after_signup):
             order = journey_sdk.step(user_buys_something)
             journey_sdk.step(assert_ok, order)
-        elif branch.is_(subscribe_branch):
+        elif journey_sdk.branch(start_from=after_signup):
             sub = journey_sdk.step(user_subscribes)
             journey_sdk.step(temporal_fast_forward, "30d")
             journey_sdk.step(stripe_invoice_paid, sub)
             journey_sdk.step(after_invoice)
-        elif branch.is_(sign_out_branch):
+        elif journey_sdk.branch():
             out = journey_sdk.step(user_signs_out)
             journey_sdk.step(assert_ok, out)
 
@@ -406,12 +385,9 @@ def test_execute_step_raises_ambiguity_when_label_matches_multiple_cases():
         return True
 
     def journey():
-        branch_a_case = journey_sdk.branch()
-        branch_b_case = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[branch_a_case, branch_b_case])
-        if selector.is_(branch_a_case):
+        if journey_sdk.branch():
             journey_sdk.step(step)
-        elif selector.is_(branch_b_case):
+        elif journey_sdk.branch():
             journey_sdk.step(step)
 
     with pytest.raises(AmbiguousStepSelectionError):
@@ -454,7 +430,7 @@ def test_validator_rejects_while_loops():
         journey_sdk.compile_journey(journey)
 
 
-def test_validator_rejects_mixed_boolean_with_branch_is():
+def test_validator_rejects_mixed_boolean_with_inline_branch():
     flag = True
 
     def a():
@@ -467,12 +443,9 @@ def test_validator_rejects_mixed_boolean_with_branch_is():
         return True
 
     def journey():
-        branch_a = journey_sdk.branch()
-        branch_b = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if flag and selector.is_(branch_a):
+        if flag and journey_sdk.branch():
             journey_sdk.step(step)
-        elif selector.is_(branch_b):
+        elif journey_sdk.branch():
             journey_sdk.step(step)
 
     with pytest.raises(InvalidBranchUsageError):
@@ -527,12 +500,9 @@ def test_plan_includes_branch_marker_nodes_with_start_from_metadata():
 
     def journey():
         cp1 = journey_sdk.checkpoint()
-        branch_a = journey_sdk.branch(start_from=cp1)
-        branch_b = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if selector.is_(branch_a):
+        if journey_sdk.branch(start_from=cp1):
             journey_sdk.step(step_a)
-        elif selector.is_(branch_b):
+        elif journey_sdk.branch():
             journey_sdk.step(step_b)
 
     plan = journey_sdk.compile_journey(journey)
@@ -548,7 +518,7 @@ def test_plan_includes_branch_marker_nodes_with_start_from_metadata():
             assert markers[0].start_from is None
 
 
-def test_checkpoint_rejects_plain_callable_entries_in_branches():
+def test_checkpoint_branches_keyword_is_rejected_with_migration_hint():
     def a():
         return True
 
@@ -556,23 +526,45 @@ def test_checkpoint_rejects_plain_callable_entries_in_branches():
         return True
 
     def journey():
-        branch_a = journey_sdk.branch()
-        branch_b = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[a, b])
-        if selector.is_(branch_a):
-            journey_sdk.step(a)
-        elif selector.is_(branch_b):
-            journey_sdk.step(b)
+        journey_sdk.checkpoint(branches=[a, b])
 
-    with pytest.raises(TypeError):
+    with pytest.raises(InvalidBranchUsageError) as exc_info:
         journey_sdk.compile_journey(journey)
 
+    assert "no longer supported" in str(exc_info.value)
+    assert exc_info.value.hint is not None
 
-def test_branch_selector_requires_branch_case():
-    selector = journey_sdk.BranchSelector(group_id="bg_1", active_key="branch_1")
 
-    with pytest.raises(TypeError):
-        selector.is_("branch_1")
+def test_branch_selector_is_rejected_with_migration_hint():
+    def a():
+        return True
+
+    def b():
+        return True
+
+    def journey():
+        selected = journey_sdk.checkpoint()
+        if selected.is_(a):
+            journey_sdk.step(a)
+        elif selected.is_(b):
+            journey_sdk.step(b)
+
+    with pytest.raises(InvalidBranchUsageError) as exc_info:
+        journey_sdk.compile_journey(journey)
+
+    assert "no longer supported" in str(exc_info.value)
+    assert exc_info.value.hint is not None
+
+
+def test_branch_call_outside_inline_if_chain_is_rejected():
+    def journey():
+        journey_sdk.branch()
+
+    with pytest.raises(InvalidBranchUsageError) as exc_info:
+        journey_sdk.compile_journey(journey)
+
+    assert "direct if/elif condition" in str(exc_info.value)
+    assert exc_info.value.hint is not None
 
 
 def test_labels_default_to_function_names_when_missing():
@@ -604,12 +596,9 @@ def test_branches_accept_branch_variables_without_callables():
 
     def journey():
         anchor = journey_sdk.checkpoint()
-        branch_a = journey_sdk.branch(start_from=anchor)
-        branch_b = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if selector.is_(branch_a):
+        if journey_sdk.branch(start_from=anchor):
             journey_sdk.step(branch_a_step)
-        elif selector.is_(branch_b):
+        elif journey_sdk.branch():
             journey_sdk.step(branch_b_step)
 
     plan = journey_sdk.compile_journey(journey)
@@ -1047,12 +1036,9 @@ def test_execute_observer_reports_success_and_branch_events():
 
     def journey():
         journey_sdk.step(prepare)
-        fast_branch = journey_sdk.branch()
-        manual_branch = journey_sdk.branch()
-        selected = journey_sdk.checkpoint(branches=[fast_branch, manual_branch])
-        if selected.is_(fast_branch):
+        if journey_sdk.branch():
             journey_sdk.step(finish_fast)
-        elif selected.is_(manual_branch):
+        elif journey_sdk.branch():
             journey_sdk.step(finish_manual)
 
     _execute_with_observer(journey, observer)
@@ -1740,12 +1726,9 @@ def test_execute_resumes_multi_case_run_without_rerunning_completed_cases(tmp_pa
 
     def journey():
         journey_sdk.step(shared)
-        branch_a = journey_sdk.branch()
-        branch_b = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if selector.is_(branch_a):
+        if journey_sdk.branch():
             journey_sdk.step(branch_a_step)
-        elif selector.is_(branch_b):
+        elif journey_sdk.branch():
             journey_sdk.step(branch_b_step)
 
     with pytest.raises(KeyboardInterrupt):
@@ -1793,12 +1776,9 @@ def test_execute_rehydrates_checkpoint_started_branch_cases_without_rerunning_co
         token = journey_sdk.step(prepare, payload)
         after_setup = journey_sdk.checkpoint()
         shared = journey_sdk.step(shared_after_checkpoint, token)
-        branch_a = journey_sdk.branch(start_from=after_setup)
-        branch_b = journey_sdk.branch(start_from=after_setup)
-        selected = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if selected.is_(branch_a):
+        if journey_sdk.branch(start_from=after_setup):
             journey_sdk.step(finish_branch_a, shared)
-        elif selected.is_(branch_b):
+        elif journey_sdk.branch(start_from=after_setup):
             journey_sdk.step(finish_branch_b, shared)
 
     report = journey_sdk.execute(journey)
@@ -1847,13 +1827,10 @@ def test_execute_checkpoint_started_branches_keep_retry_counters_independent():
     def journey():
         journey_sdk.step(prepare)
         anchor = journey_sdk.checkpoint()
-        branch_a = journey_sdk.branch(start_from=anchor)
-        branch_b = journey_sdk.branch(start_from=anchor)
-        selected = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if selected.is_(branch_a):
+        if journey_sdk.branch(start_from=anchor):
             branch_name = journey_sdk.step(poll, "branch_a", retry=1, retry_delay=0)
             journey_sdk.step(finish, branch_name)
-        elif selected.is_(branch_b):
+        elif journey_sdk.branch(start_from=anchor):
             branch_name = journey_sdk.step(poll, "branch_b", retry=1, retry_delay=0)
             journey_sdk.step(finish, branch_name)
 
@@ -1964,12 +1941,9 @@ def test_execute_rehydration_rejects_unserializable_step_result_for_checkpoint_r
     def journey():
         payload = journey_sdk.step(produce)
         anchor = journey_sdk.checkpoint()
-        branch_a = journey_sdk.branch(start_from=anchor)
-        branch_b = journey_sdk.branch(start_from=anchor)
-        selected = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if selected.is_(branch_a):
+        if journey_sdk.branch(start_from=anchor):
             journey_sdk.step(branch_a_step, payload)
-        elif selected.is_(branch_b):
+        elif journey_sdk.branch(start_from=anchor):
             journey_sdk.step(branch_b_step, payload)
 
     with pytest.raises(ExecutionStateSerializationError):
@@ -2043,12 +2017,9 @@ def test_execute_missing_step_exposes_user_friendly_hint():
 
 def test_unknown_checkpoint_error_includes_next_step_hint():
     def journey():
-        branch_a = journey_sdk.branch(start_from="missing_checkpoint")
-        branch_b = journey_sdk.branch()
-        selector = journey_sdk.checkpoint(branches=[branch_a, branch_b])
-        if selector.is_(branch_a):
+        if journey_sdk.branch(start_from="missing_checkpoint"):
             journey_sdk.step(lambda: True)
-        elif selector.is_(branch_b):
+        elif journey_sdk.branch():
             journey_sdk.step(lambda: True)
 
     with pytest.raises(UnknownCheckpointError) as exc_info:

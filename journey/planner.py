@@ -5,17 +5,16 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import FrameType
 from typing import Any, ParamSpec, TypeVar
 
 from .errors import (
-    DuplicateBranchKeyError,
     InvalidBranchUsageError,
     UnknownCheckpointError,
 )
 from .models import (
     BranchCase,
     BranchMarkerNode,
-    BranchSelector,
     CasePlan,
     CheckpointNode,
     CheckpointRef,
@@ -29,7 +28,7 @@ from .models import (
 )
 from .session import use_session
 from .utils import callable_ref
-from .validator import validate_journey
+from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
 BranchEnv = dict[str, str]
 P = ParamSpec("P")
@@ -42,15 +41,23 @@ class _SuspendPlanning(Exception):
     cases: list[BranchCase]
 
 
+@dataclass
+class _ActiveBranchChain:
+    group_id: str
+    cases: list[BranchCase]
+
+
 class _PlanSession:
     mode = "plan"
 
-    def __init__(self, branch_env: BranchEnv) -> None:
+    def __init__(self, branch_env: BranchEnv, *, validation: JourneyValidation) -> None:
         self.branch_env = dict(branch_env)
+        self.validation = validation
         self.nodes: list[Any] = []
         self._node_counter = 0
         self._group_counter = 0
         self._checkpoint_counter = 0
+        self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
         self._checkpoints_seen: set[str] = set()
         self._steps_seen: set[str] = set()
         self._journey_webhook_epoch = 0
@@ -103,9 +110,7 @@ class _PlanSession:
 
     def checkpoint(
         self,
-        *,
-        branches: list[BranchCase] | None = None,
-    ) -> CheckpointRef | BranchSelector:
+    ) -> CheckpointRef:
         name = self._next_checkpoint_name()
         if name in self._checkpoints_seen:
             raise InvalidBranchUsageError(
@@ -116,68 +121,69 @@ class _PlanSession:
 
         node = CheckpointNode(node_id=self._next_node_id(), name=name)
         self.nodes.append(node)
-        ref = CheckpointRef(name=name)
-        if branches is None:
-            return ref
+        return CheckpointRef(name=name)
 
-        normalized_cases, case_id_to_key = _normalize_cases(branches)
-        keys = [case.key for case in normalized_cases]
-        if len(set(keys)) != len(keys):
-            raise DuplicateBranchKeyError(
-                "Each branch inside checkpoint(branches=[...]) must have a unique key.",
-                hint="Create a new branch() value for each option instead of reusing the same one.",
-            )
-
-        group_id = self._next_group_id()
-        if group_id not in self.branch_env:
-            raise _SuspendPlanning(group_id=group_id, cases=normalized_cases)
-
-        active_key = self.branch_env[group_id]
-        by_key = {case.key: case for case in normalized_cases}
-        if active_key not in by_key:
+    def branch(self, *, start_from: str | None, frame: FrameType) -> bool:
+        site = resolve_branch_call_site(frame)
+        spec = self.validation.branch_conditions.get(site)
+        if spec is None:
             raise InvalidBranchUsageError(
-                f"The planner selected branch key '{active_key}', but that option does not exist in branch group '{group_id}'.",
-                hint="Re-run planning from scratch if the branch options changed.",
+                "journey.branch(...) is only valid as a direct if/elif condition.",
+                hint="Use journey.branch(...) directly as `if journey.branch(...):` or `elif journey.branch(...):`.",
             )
 
-        selected_case = by_key[active_key]
-        if selected_case.start_from is not None and selected_case.start_from not in self._checkpoints_seen:
+        if start_from is not None and start_from not in self._checkpoints_seen:
             raise UnknownCheckpointError(
-                f"Branch '{selected_case.key}' starts from checkpoint '{selected_case.start_from}', but that checkpoint was never created earlier in the journey.",
+                f"Branch '{spec.branch_key}' starts from checkpoint '{start_from}', but that checkpoint was never created earlier in the journey.",
                 hint="Create the checkpoint with checkpoint() before using it in branch(start_from=...).",
             )
 
+        state = self._active_branch_chains.get(spec.template_key)
+        if spec.condition_index == 1:
+            if state is not None:
+                raise InvalidBranchUsageError(
+                    "journey.branch(...) re-entered the same if/elif chain before the prior branch selection finished.",
+                    hint="Keep journey.branch(...) in one direct if/elif chain without reusing it in helper callbacks.",
+                )
+            state = _ActiveBranchChain(
+                group_id=self._next_group_id(),
+                cases=[],
+            )
+            self._active_branch_chains[spec.template_key] = state
+        elif state is None:
+            raise InvalidBranchUsageError(
+                "journey.branch(...) did not follow the expected if/elif chain.",
+                hint="Use journey.branch(...) only in one direct if/elif chain.",
+            )
+
+        selected_case = BranchCase(key=spec.branch_key, start_from=start_from)
+        state.cases.append(selected_case)
+
+        active_key = self.branch_env.get(state.group_id)
+        if active_key is None:
+            if spec.condition_index == spec.total_conditions:
+                self._active_branch_chains.pop(spec.template_key, None)
+                raise _SuspendPlanning(group_id=state.group_id, cases=list(state.cases))
+            return False
+
+        if active_key != spec.branch_key:
+            if spec.condition_index == spec.total_conditions:
+                self._active_branch_chains.pop(spec.template_key, None)
+                raise InvalidBranchUsageError(
+                    f"The planner selected branch key '{active_key}', but that option does not exist in branch group '{state.group_id}'.",
+                    hint="Re-run planning from scratch if the branch options changed.",
+                )
+            return False
+
         marker = BranchMarkerNode(
             node_id=self._next_node_id(),
-            group_id=group_id,
+            group_id=state.group_id,
             active_key=active_key,
-            start_from=selected_case.start_from,
+            start_from=start_from,
         )
         self.nodes.append(marker)
-
-        return BranchSelector(
-            group_id=group_id,
-            active_key=active_key,
-            case_id_to_key=case_id_to_key,
-        )
-
-
-def _normalize_cases(
-    cases: list[BranchCase],
-) -> tuple[list[BranchCase], dict[int, str]]:
-    normalized: list[BranchCase] = []
-    case_id_to_key: dict[int, str] = {}
-    for index, item in enumerate(cases, start=1):
-        if isinstance(item, BranchCase):
-            key = item.key or f"branch_{index}"
-            normalized_case = BranchCase(key=key, start_from=item.start_from)
-            normalized.append(normalized_case)
-            case_id_to_key[id(item)] = key
-            continue
-        raise TypeError(
-            "checkpoint(branches=[...]) accepts only values returned by branch()."
-        )
-    return normalized, case_id_to_key
+        self._active_branch_chains.pop(spec.template_key, None)
+        return True
 
 
 def _normalize_retry_count(retry: int) -> int:
@@ -250,14 +256,14 @@ def compile_journey(journey_fn: Callable[..., Any]) -> JourneyPlan:
     if not callable(journey_fn):
         raise TypeError("compile_journey() expects a callable journey function.")
 
-    validate_journey(journey_fn)
+    validation = validate_journey(journey_fn)
 
     queue: deque[BranchEnv] = deque([{}])
     case_plans: list[CasePlan] = []
 
     while queue:
         env = queue.popleft()
-        session = _PlanSession(env)
+        session = _PlanSession(env, validation=validation)
 
         try:
             with use_session(session):

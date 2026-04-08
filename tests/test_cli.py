@@ -329,13 +329,9 @@ def test_execute_streams_live_case_progress_for_all_branches(
         @journey.journey
         def flow():
             journey.step(prepare)
-            fast_branch = journey.branch()
-            manual_branch = journey.branch()
-            selected = journey.checkpoint(branches=[fast_branch, manual_branch])
-
-            if selected.is_(fast_branch):
+            if journey.branch():
                 journey.step(finish_fast)
-            elif selected.is_(manual_branch):
+            elif journey.branch():
                 journey.step(finish_manual)
         """,
     )
@@ -381,13 +377,9 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
         def flow():
             journey.step(prepare)
             after_prepare = journey.checkpoint()
-            fast_branch = journey.branch()
-            manual_branch = journey.branch(start_from=after_prepare)
-            selected = journey.checkpoint(branches=[fast_branch, manual_branch])
-
-            if selected.is_(fast_branch):
+            if journey.branch():
                 journey.step(finish_fast)
-            elif selected.is_(manual_branch):
+            elif journey.branch(start_from=after_prepare):
                 journey.step(finish_manual)
         """,
     )
@@ -478,12 +470,9 @@ def test_plan_continues_and_summarizes_failures_by_default(
 
         @journey.journey
         def broken():
-            branch_a = journey.branch(start_from="missing_checkpoint")
-            branch_b = journey.branch()
-            selector = journey.checkpoint(branches=[branch_a, branch_b])
-            if selector.is_(branch_a):
+            if journey.branch(start_from="missing_checkpoint"):
                 journey.step(branch_a_step)
-            elif selector.is_(branch_b):
+            elif journey.branch():
                 journey.step(branch_b_step)
         """,
     )

@@ -133,11 +133,7 @@ def test_cloud_email_journey_supports_targeted_execution(monkeypatch: pytest.Mon
         def journey():
             inbox = journey_sdk.step(get_email_inbox())
             after_setup = journey_sdk.checkpoint()
-            email_branch = journey_sdk.branch(start_from=after_setup)
-            noop_branch = journey_sdk.branch(start_from=after_setup)
-            selected = journey_sdk.checkpoint(branches=[email_branch, noop_branch])
-
-            if selected.is_(email_branch):
+            if journey_sdk.branch(start_from=after_setup):
                 journey_sdk.step(
                     send_email(subject="Targeted", text_body="Email body"),
                     inbox,
@@ -151,7 +147,7 @@ def test_cloud_email_journey_supports_targeted_execution(monkeypatch: pytest.Mon
                     inbox,
                 )
                 journey_sdk.step(assert_message, message)
-            elif selected.is_(noop_branch):
+            elif journey_sdk.branch(start_from=after_setup):
                 journey_sdk.step(noop)
 
         targeted_report = journey_sdk.execute(journey, step="assert_message")

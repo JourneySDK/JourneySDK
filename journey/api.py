@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from typing import Any, ParamSpec, TypeVar, cast
 
 from .errors import InvalidBranchUsageError
 from .models import (
-    BranchCase,
-    BranchSelector,
     CheckpointRef,
     PlannedValue,
     StepRetryDelay,
@@ -17,6 +16,7 @@ from .models import (
 from .session import get_session
 
 _JOURNEY_MARKER_ATTR = "__journey_marker__"
+_CHECKPOINT_BRANCHES_UNSET = object()
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -66,12 +66,8 @@ def is_journey_callable(obj: Any) -> bool:
 def branch(
     *,
     start_from: CheckpointRef | str | None = None,
-) -> BranchCase:
-    """Create one branch option for ``checkpoint(branches=[...])``.
-
-    ``branch()`` returns an opaque case descriptor. Store it in a variable,
-    pass it to ``checkpoint(branches=[...])``, and compare it with
-    ``selector.is_(branch_case)`` inside the matching ``if``/``elif`` chain.
+) -> bool:
+    """Select one inline branch inside a direct ``if`` / ``elif`` chain.
 
     ``start_from`` names the checkpoint where this branch begins for downstream
     single-step execution and for full-case checkpoint replay. When a targeted
@@ -86,17 +82,20 @@ def branch(
             ``checkpoint()`` result.
 
     Returns:
-        A ``BranchCase`` that can be passed to ``checkpoint(branches=[...])``.
+        ``True`` only for the selected branch on the active journey path.
 
     Raises:
         TypeError: If ``start_from`` is not a ``CheckpointRef``, string, or
             ``None``.
+        InvalidBranchUsageError: If called outside planning or execution.
 
     Example:
         ```python
         after_login = journey.checkpoint()
-        fast_path = journey.branch()
-        review_path = journey.branch(start_from=after_login)
+        if journey.branch():
+            journey.step(finish_fast_path)
+        elif journey.branch(start_from=after_login):
+            journey.step(finish_review_path)
         ```
     """
     start_from_name: str | None
@@ -109,7 +108,24 @@ def branch(
             "branch(start_from=...) accepts a checkpoint reference, a checkpoint name, or None."
         )
 
-    return BranchCase(key=None, start_from=start_from_name)
+    session = get_session()
+    if session is None:
+        raise InvalidBranchUsageError(
+            "branch() can only be used while a journey is being planned or executed.",
+            hint=(
+                "Call branch() directly as the whole condition in an if/elif chain "
+                "inside a function decorated with @journey."
+            ),
+        )
+
+    caller = inspect.currentframe()
+    caller_frame = caller.f_back if caller is not None else None
+    if caller_frame is None:
+        raise InvalidBranchUsageError(
+            "branch() could not determine where it was called from.",
+            hint="Call branch() directly as the whole condition in an if/elif chain.",
+        )
+    return cast(bool, session.branch(start_from=start_from_name, frame=caller_frame))
 
 
 def step(
@@ -196,28 +212,16 @@ def step(
 
 def checkpoint(
     *,
-    branches: list[BranchCase] | None = None,
-) -> CheckpointRef | BranchSelector:
-    """Mark a checkpoint, optionally creating a branch decision point.
-
-    Use plain ``checkpoint()`` to create a named anchor that later steps or
-    branches can refer to. Use ``checkpoint(branches=[...])`` to define one
-    branch group and receive a ``BranchSelector`` that supports ``is_(...)``.
-
-    Branch selectors are intentionally constrained in v1:
-
-    - assign the selector to one variable,
-    - use it only in a direct ``if``/``elif`` chain,
-    - call only ``selector.is_(branch_case)`` in each condition,
-    - do not mix that condition with other boolean expressions.
+    branches: object = _CHECKPOINT_BRANCHES_UNSET,
+) -> CheckpointRef:
+    """Mark a checkpoint that later steps or branches can refer to.
 
     Args:
-        branches: Optional branch options created with ``branch()`` for one
-            decision point.
+        branches: Unsupported. Use inline ``if journey.branch(...):`` /
+            ``elif journey.branch(...):`` conditions instead.
 
     Returns:
-        A ``CheckpointRef`` when ``branches`` is omitted, or a
-        ``BranchSelector`` when ``branches`` is provided.
+        A ``CheckpointRef`` anchor that later steps or branches can reuse.
 
     Raises:
         InvalidBranchUsageError: If called outside planning or execution.
@@ -225,20 +229,26 @@ def checkpoint(
     Example:
         ```python
         after_signup = journey.checkpoint()
-        instant = journey.branch()
-        manual = journey.branch(start_from=after_signup)
-        selected = journey.checkpoint(branches=[instant, manual])
-
-        if selected.is_(instant):
+        if journey.branch():
             journey.step(finish_instant)
-        elif selected.is_(manual):
+        elif journey.branch(start_from=after_signup):
             journey.step(finish_manual)
         ```
     """
+    if branches is not _CHECKPOINT_BRANCHES_UNSET:
+        raise InvalidBranchUsageError(
+            "checkpoint(branches=[...]) is no longer supported.",
+            hint=(
+                "Create a plain checkpoint first, then use "
+                "`if journey.branch(start_from=checkpoint):` / "
+                "`elif journey.branch(start_from=checkpoint):`."
+            ),
+        )
+
     session = get_session()
     if session is None:
         raise InvalidBranchUsageError(
             "checkpoint() can only be used while a journey is being planned or executed.",
             hint="Call checkpoint() inside a function decorated with @journey.",
         )
-    return session.checkpoint(branches=branches)
+    return cast(CheckpointRef, session.checkpoint())

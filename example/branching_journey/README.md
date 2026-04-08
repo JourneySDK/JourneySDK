@@ -8,9 +8,8 @@ step in each case.
 ## What this teaches
 
 - how plain `checkpoint()` creates a named replay anchor
-- how `branch()` defines one branch option
-- how `checkpoint(branches=[...])` produces a branch decision
-- how `selected.is_(...)` chooses one branch body
+- how inline `journey.branch(...)` conditions create one branch case each
+- how `start_from=...` controls replay anchors for branch-specific execution
 - how `journey execute --step ...` runs only the path that reaches one target label
 
 ## Files to read

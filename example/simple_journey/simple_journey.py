@@ -117,15 +117,11 @@ def simple_journey() -> None:
     journey.step(assert_demo_homepage)
 
     after_setup = journey.checkpoint()
-    webhook_branch = journey.branch(start_from=after_setup)
-    file_branch = journey.branch(start_from=after_setup)
-    selected = journey.checkpoint(branches=[webhook_branch, file_branch])
-
-    if selected.is_(webhook_branch):
+    if journey.branch(start_from=after_setup):
         journey.step(click_trigger_endpoint_a)
         request_payload = journey.step(receive_endpoint_a)
         journey.step(assert_endpoint_a_webhook, request_payload)
-    elif selected.is_(file_branch):
+    elif journey.branch(start_from=after_setup):
         journey.step(click_store_local_file)
         file_info = journey.step(local_file_is_written)
         journey.step(assert_local_file_contents, file_info)

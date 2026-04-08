@@ -212,15 +212,11 @@ def test_webhook_journey_supports_targeted_execution_and_resume(tmp_path: Path):
             poll_interval=0.01,
         )
         after_setup = journey_sdk.checkpoint()
-        webhook_branch = journey_sdk.branch(start_from=after_setup)
-        file_branch = journey_sdk.branch(start_from=after_setup)
-        selected = journey_sdk.checkpoint(branches=[webhook_branch, file_branch])
-
-        if selected.is_(webhook_branch):
+        if journey_sdk.branch(start_from=after_setup):
             journey_sdk.step(_send_webhook_later, receive_endpoint_a.url, 0.01)
             request_payload = journey_sdk.step(receive_endpoint_a, retry=1, retry_delay=0)
             journey_sdk.step(assert_webhook, request_payload)
-        elif selected.is_(file_branch):
+        elif journey_sdk.branch(start_from=after_setup):
             retry_anchor = journey_sdk.checkpoint()
             journey_sdk.step(queue_file_write, str(file_target))
             file_info = journey_sdk.step(

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from dataclasses import dataclass, field
-from typing import Any, TypeAlias
+from dataclasses import dataclass
+from typing import TypeAlias
 
 StepRetryDelay: TypeAlias = int | float | timedelta
 
@@ -13,25 +13,6 @@ StepRetryDelay: TypeAlias = int | float | timedelta
 class BranchCase:
     key: str | None
     start_from: str | None = None
-
-
-@dataclass(frozen=True)
-class BranchSelector:
-    group_id: str
-    active_key: str
-    case_id_to_key: dict[int, str] = field(default_factory=dict)
-
-    def is_(self, branch_case: Any) -> bool:
-        if isinstance(branch_case, BranchCase):
-            candidate = branch_case.key
-            if candidate is None:
-                candidate = self.case_id_to_key.get(id(branch_case))
-        else:
-            raise TypeError(
-                "branch.is_(...) expects a value returned by branch() from the same "
-                "checkpoint(branches=[...]) call."
-            )
-        return candidate == self.active_key
 
 
 @dataclass(frozen=True)

@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
+from types import FrameType
 from typing import Any, ParamSpec, TypeVar, cast
 
 from .errors import (
@@ -18,9 +19,7 @@ from .errors import (
     StepNotFoundError,
 )
 from .models import (
-    BranchCase,
     BranchMarkerNode,
-    BranchSelector,
     CaseExecutionReport,
     CasePlan,
     CheckpointNode,
@@ -48,6 +47,7 @@ from .state import (
     save_execution_state,
 )
 from .utils import callable_ref
+from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
 
 @dataclass
@@ -64,6 +64,12 @@ class _RetryRequested(Exception):
 class _SelectedCase:
     case_plan: CasePlan
     stop_after_index: int | None
+
+
+@dataclass
+class _ActiveBranchChain:
+    group_id: str
+    seen_keys: list[str]
 
 
 P = ParamSpec("P")
@@ -544,6 +550,7 @@ class _RunSession:
         journey_plan: JourneyPlan,
         case_plan: CasePlan,
         *,
+        validation: JourneyValidation,
         stop_after_index: int | None,
         rehydration_enabled: bool,
         state_controller: _StateController | None = None,
@@ -554,9 +561,12 @@ class _RunSession:
     ) -> None:
         self.journey_plan = journey_plan
         self.case_plan = case_plan
+        self.validation = validation
         self.stop_after_index = stop_after_index
         self._rehydration_enabled = rehydration_enabled
         self.cursor = 0
+        self._group_counter = 0
+        self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
         self.records: list[NodeExecutionRecord] = []
         self._record_indices: list[int] = []
         self._step_bindings: dict[str, StepBindingState] = {}
@@ -591,6 +601,10 @@ class _RunSession:
             self._restore_checkpoint_seed(checkpoint_seed)
         if restored_state is not None:
             self._restore_state(restored_state)
+
+    def _next_group_id(self) -> str:
+        self._group_counter += 1
+        return f"bg_{self._group_counter}"
 
     def _runtime_snapshot(self) -> RuntimeSnapshotState:
         return RuntimeSnapshotState(
@@ -689,6 +703,8 @@ class _RunSession:
     def begin_attempt(self) -> None:
         self._journey_webhook_epoch = getattr(self, "_journey_webhook_epoch", 0) + 1
         self.cursor = 0
+        self._group_counter = 0
+        self._active_branch_chains.clear()
         self._resume_dirty_step()
 
     def _has_record_for(self, node_index: int) -> bool:
@@ -999,9 +1015,7 @@ class _RunSession:
 
     def checkpoint(
         self,
-        *,
-        branches: list[BranchCase] | None = None,
-    ) -> CheckpointRef | BranchSelector:
+    ) -> CheckpointRef:
         checkpoint_index = self.cursor
         checkpoint_node = self._consume(CheckpointNode)
         if checkpoint_index >= self.replay_from_index:
@@ -1020,31 +1034,66 @@ class _RunSession:
                     self._runtime_snapshot(),
                 )
 
-        if branches is None:
-            return CheckpointRef(name=checkpoint_node.name)
+        return CheckpointRef(name=checkpoint_node.name)
+
+    def branch(self, *, start_from: str | None, frame: FrameType) -> bool:
+        site = resolve_branch_call_site(frame)
+        spec = self.validation.branch_conditions.get(site)
+        if spec is None:
+            raise InvalidBranchUsageError(
+                "journey.branch(...) is only valid as a direct if/elif condition.",
+                hint="Use journey.branch(...) directly as `if journey.branch(...):` or `elif journey.branch(...):`.",
+            )
+
+        state = self._active_branch_chains.get(spec.template_key)
+        if spec.condition_index == 1:
+            if state is not None:
+                raise InvalidBranchUsageError(
+                    "journey.branch(...) re-entered the same if/elif chain before the prior branch selection finished.",
+                    hint="Keep journey.branch(...) in one direct if/elif chain without reusing it in helper callbacks.",
+                )
+            state = _ActiveBranchChain(
+                group_id=self._next_group_id(),
+                seen_keys=[],
+            )
+            self._active_branch_chains[spec.template_key] = state
+        elif state is None:
+            raise InvalidBranchUsageError(
+                "journey.branch(...) did not follow the expected if/elif chain.",
+                hint="Use journey.branch(...) only in one direct if/elif chain.",
+            )
+
+        state.seen_keys.append(spec.branch_key)
+        active_key = self.case_plan.branch_env.get(state.group_id)
+        if active_key is None:
+            self._active_branch_chains.pop(spec.template_key, None)
+            raise InvalidBranchUsageError(
+                f"The journey took a different path than the compiled plan at branch group '{state.group_id}'.",
+                hint="Make sure the journey calls journey.branch(...) in the same structure each time it runs.",
+            )
+
+        if active_key != spec.branch_key:
+            if spec.condition_index == spec.total_conditions:
+                self._active_branch_chains.pop(spec.template_key, None)
+                raise InvalidBranchUsageError(
+                    f"The compiled plan selected branch key '{active_key}', but the current if/elif chain only reached {state.seen_keys}.",
+                    hint="Make sure the journey calls the same journey.branch(...) conditions during execution that it used during planning.",
+                )
+            return False
 
         marker_index = self.cursor
         node = self._consume(BranchMarkerNode)
-        normalized, case_id_to_key = _normalize_cases(branches)
-        keys = {case.key for case in normalized}
-        if node.active_key not in keys:
+        if node.group_id != state.group_id or node.active_key != active_key:
             raise InvalidBranchUsageError(
-                "checkpoint(branches=[...]) received branch options that do not match the compiled plan.",
-                hint="Use the same branch() values in the same order each time this journey runs.",
+                "The journey took a different branch path than the compiled plan expected.",
+                hint="Make sure the journey calls journey.branch(...) in the same order during execution that it used during planning.",
             )
-        selected = next(case for case in normalized if case.key == node.active_key)
-
-        if selected.start_from != node.start_from:
+        if start_from != node.start_from:
             raise InvalidBranchUsageError(
-                "checkpoint(branches=[...]) used branch start points that do not match the compiled plan.",
-                hint="Make sure each branch(start_from=...) points to the same checkpoint it used during planning.",
+                "journey.branch(start_from=...) used a checkpoint that does not match the compiled plan.",
+                hint="Make sure each journey.branch(start_from=...) points to the same checkpoint it used during planning.",
             )
 
-        selector = BranchSelector(
-            group_id=node.group_id,
-            active_key=node.active_key,
-            case_id_to_key=case_id_to_key,
-        )
         if marker_index >= self.replay_from_index:
             should_stop = self._record(marker_index, node, ok=True, result=node.active_key)
             self._observer.on_branch(
@@ -1054,25 +1103,8 @@ class _RunSession:
             )
             if should_stop:
                 raise _StopCase()
-        return selector
-
-
-def _normalize_cases(
-    cases: list[BranchCase],
-) -> tuple[list[BranchCase], dict[int, str]]:
-    normalized: list[BranchCase] = []
-    case_id_to_key: dict[int, str] = {}
-    for index, item in enumerate(cases, start=1):
-        if isinstance(item, BranchCase):
-            key = item.key or f"branch_{index}"
-            normalized_case = BranchCase(key=key, start_from=item.start_from)
-            normalized.append(normalized_case)
-            case_id_to_key[id(item)] = key
-            continue
-        raise TypeError(
-            "checkpoint(branches=[...]) accepts only values returned by branch()."
-        )
-    return normalized, case_id_to_key
+        self._active_branch_chains.pop(spec.template_key, None)
+        return True
 
 
 def _node_label(node: Any) -> str | None:
@@ -1237,6 +1269,7 @@ def _execute_plan(
     observer: _ExecutionObserver | None = None,
 ) -> ExecutionReport:
     selected_cases = _select_cases(plan, step)
+    validation = validate_journey(journey_fn)
     execution_observer = observer or _ExecutionObserver()
     execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
     rehydration_enabled = _needs_rehydration(
@@ -1283,6 +1316,7 @@ def _execute_plan(
             run_session = _RunSession(
                 journey_plan=plan,
                 case_plan=selected_case.case_plan,
+                validation=validation,
                 stop_after_index=selected_case.stop_after_index,
                 rehydration_enabled=rehydration_enabled,
                 state_controller=state_controller,

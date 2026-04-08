@@ -49,11 +49,7 @@ def branching_journey() -> None:
     classified = journey.step(classify_signup_request, signup_request)
 
     after_classification = journey.checkpoint()
-    fast_track = journey.branch()
-    manual_review = journey.branch(start_from=after_classification)
-    selected = journey.checkpoint(branches=[fast_track, manual_review])
-
-    if selected.is_(fast_track):
+    if journey.branch():
         journey.step(assert_fast_track_path, classified)
-    elif selected.is_(manual_review):
+    elif journey.branch(start_from=after_classification):
         journey.step(assert_manual_review_path, classified)

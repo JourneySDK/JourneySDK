@@ -48,11 +48,7 @@ def rehydration_journey() -> None:
     after_setup = journey.checkpoint()
     shared = journey.step(shared_after_checkpoint, context)
 
-    branch_a = journey.branch(start_from=after_setup)
-    branch_b = journey.branch(start_from=after_setup)
-    selected = journey.checkpoint(branches=[branch_a, branch_b])
-
-    if selected.is_(branch_a):
+    if journey.branch(start_from=after_setup):
         journey.step(assert_branch_a, shared)
-    elif selected.is_(branch_b):
+    elif journey.branch(start_from=after_setup):
         journey.step(assert_branch_b, shared)
