@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import journey
+from journey import checkpoint, journey, step
 
 EVENTS: list[str] = []
 _ATTEMPTS = {
@@ -100,31 +100,31 @@ def assert_checkpoint_retry_ready(result: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def retry_current_step_journey() -> None:
-    journey.step(prepare_same_step_demo)
-    journey.step(wait_for_same_step, retry=1, retry_delay=0)
+    step(prepare_same_step_demo)
+    step(wait_for_same_step, retry=1, retry_delay=0)
 
 
-@journey.journey
+@journey
 def retry_from_step_result_journey() -> None:
-    request = journey.step(issue_report_request)
-    report = journey.step(
+    request = step(issue_report_request)
+    report = step(
         wait_for_report,
         request,
         retry=1,
         retry_delay=0,
         retry_from=request,
     )
-    journey.step(assert_report_ready, report)
+    step(assert_report_ready, report)
 
 
-@journey.journey
+@journey
 def retry_from_checkpoint_journey() -> None:
-    request = journey.step(load_status_request)
-    retry_anchor = journey.checkpoint()
-    cache = journey.step(refresh_status_cache)
-    result = journey.step(
+    request = step(load_status_request)
+    retry_anchor = checkpoint()
+    cache = step(refresh_status_cache)
+    result = step(
         wait_for_checkpoint_retry,
         request,
         cache,
@@ -132,4 +132,4 @@ def retry_from_checkpoint_journey() -> None:
         retry_delay=0,
         retry_from=retry_anchor,
     )
-    journey.step(assert_checkpoint_retry_ready, result)
+    step(assert_checkpoint_retry_ready, result)

@@ -12,31 +12,34 @@ This chapter covers both cases:
 Read `docs/retry_journey/retry_journey.py`.
 
 ```python
-@journey.journey
+from journey import checkpoint, journey, step
+
+
+@journey
 def retry_current_step_journey() -> None:
-    journey.step(prepare_same_step_demo)
-    journey.step(wait_for_same_step, retry=1, retry_delay=0)
+    step(prepare_same_step_demo)
+    step(wait_for_same_step, retry=1, retry_delay=0)
 
 
-@journey.journey
+@journey
 def retry_from_step_result_journey() -> None:
-    request = journey.step(issue_report_request)
-    report = journey.step(
+    request = step(issue_report_request)
+    report = step(
         wait_for_report,
         request,
         retry=1,
         retry_delay=0,
         retry_from=request,
     )
-    journey.step(assert_report_ready, report)
+    step(assert_report_ready, report)
 
 
-@journey.journey
+@journey
 def retry_from_checkpoint_journey() -> None:
-    request = journey.step(load_status_request)
-    retry_anchor = journey.checkpoint()
-    cache = journey.step(refresh_status_cache)
-    result = journey.step(
+    request = step(load_status_request)
+    retry_anchor = checkpoint()
+    cache = step(refresh_status_cache)
+    result = step(
         wait_for_checkpoint_retry,
         request,
         cache,
@@ -44,7 +47,7 @@ def retry_from_checkpoint_journey() -> None:
         retry_delay=0,
         retry_from=retry_anchor,
     )
-    journey.step(assert_checkpoint_retry_ready, result)
+    step(assert_checkpoint_retry_ready, result)
 ```
 
 Those three journeys represent the three most common retry strategies:
@@ -122,6 +125,9 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 Read `docs/resume_journey/resume_journey.py`.
 
 ```python
+from journey import journey, step
+
+
 def wait_for_resume_signal(
     ticket: dict[str, str],
     pause_seconds: float,
@@ -140,12 +146,12 @@ def wait_for_resume_signal(
     return ticket
 
 
-@journey.journey
+@journey
 def resume_journey() -> None:
     pause_seconds = 2.0
-    ticket = journey.step(load_support_ticket)
-    resumed_ticket = journey.step(wait_for_resume_signal, ticket, pause_seconds)
-    journey.step(assert_resumed_ticket, resumed_ticket)
+    ticket = step(load_support_ticket)
+    resumed_ticket = step(wait_for_resume_signal, ticket, pause_seconds)
+    step(assert_resumed_ticket, resumed_ticket)
 ```
 
 The key rule is that Journey resumes at a step boundary, not in the middle of a function body.

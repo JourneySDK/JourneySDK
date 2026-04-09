@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import journey
+from journey import journey, step
 
 EVENTS: list[str] = []
 
@@ -43,13 +43,13 @@ def assert_invoice_reminder(reminder: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def welcome_email_journey() -> None:
-    job = journey.step(load_welcome_email_job)
-    journey.step(assert_welcome_email_job, job)
+    job = step(load_welcome_email_job)
+    step(assert_welcome_email_job, job)
 
 
-@journey.journey
+@journey
 def invoice_reminder_journey() -> None:
-    reminder = journey.step(load_invoice_reminder)
-    journey.step(assert_invoice_reminder, reminder)
+    reminder = step(load_invoice_reminder)
+    step(assert_invoice_reminder, reminder)

@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-import journey
+from journey import journey, step
 from journey.tools.playwright import (
     PlaywrightPageState,
     capture_page_state,
@@ -106,12 +106,12 @@ def assert_protected_action_complete(result: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def playwright_resume_journey() -> None:
     pause_seconds = 2.0
-    session = journey.step(login_and_capture_session)
-    result = journey.step(continue_authenticated_dashboard, session, pause_seconds)
-    journey.step(assert_protected_action_complete, result)
+    session = step(login_and_capture_session)
+    result = step(continue_authenticated_dashboard, session, pause_seconds)
+    step(assert_protected_action_complete, result)
 
 
 def _tutorial_note(message: str) -> None:

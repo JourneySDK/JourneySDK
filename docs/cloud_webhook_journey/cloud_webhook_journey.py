@@ -7,7 +7,7 @@ import threading
 import time
 import urllib.request
 
-import journey
+from journey import journey, step
 from journey.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 EVENTS: list[str] = []
@@ -58,11 +58,11 @@ def assert_invoice_paid_webhook(request_payload: dict[str, object]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def cloud_webhook_journey() -> None:
-    endpoint = journey.step(get_webhook_endpoint(path="/invoice-paid"))
-    journey.step(send_invoice_paid_webhook_later, endpoint.url)
-    request_payload = journey.step(
+    endpoint = step(get_webhook_endpoint(path="/invoice-paid"))
+    step(send_invoice_paid_webhook_later, endpoint.url)
+    request_payload = step(
         wait_for_webhook_request(
             path="/invoice-paid",
             timeout=0.05,
@@ -72,4 +72,4 @@ def cloud_webhook_journey() -> None:
         retry=3,
         retry_delay=0,
     )
-    journey.step(assert_invoice_paid_webhook, request_payload)
+    step(assert_invoice_paid_webhook, request_payload)

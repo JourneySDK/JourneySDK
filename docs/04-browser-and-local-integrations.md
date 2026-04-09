@@ -46,21 +46,24 @@ def local_file_is_written() -> dict[str, str]:
 And the journey that ties them together still reads like sequential Python:
 
 ```python
-@journey.journey
+from journey import branch, checkpoint, journey, step
+
+
+@journey
 def simple_journey() -> None:
     receive_endpoint_a = host_webhook_endpoint(port=8765, path="/endpoint-a")
 
-    journey.step(assert_demo_homepage)
+    step(assert_demo_homepage)
 
-    after_setup = journey.checkpoint()
-    if journey.branch(start_from=after_setup):
-        journey.step(click_trigger_endpoint_a)
-        request_payload = journey.step(receive_endpoint_a)
-        journey.step(assert_endpoint_a_webhook, request_payload)
-    elif journey.branch(start_from=after_setup):
-        journey.step(click_store_local_file)
-        file_info = journey.step(local_file_is_written)
-        journey.step(assert_local_file_contents, file_info)
+    after_setup = checkpoint()
+    if branch(start_from=after_setup):
+        step(click_trigger_endpoint_a)
+        request_payload = step(receive_endpoint_a)
+        step(assert_endpoint_a_webhook, request_payload)
+    elif branch(start_from=after_setup):
+        step(click_store_local_file)
+        file_info = step(local_file_is_written)
+        step(assert_local_file_contents, file_info)
 ```
 
 ### One-Time Playwright Setup
@@ -144,12 +147,15 @@ def continue_authenticated_dashboard(
 The journey is still small:
 
 ```python
-@journey.journey
+from journey import journey, step
+
+
+@journey
 def playwright_resume_journey() -> None:
     pause_seconds = 2.0
-    session = journey.step(login_and_capture_session)
-    result = journey.step(continue_authenticated_dashboard, session, pause_seconds)
-    journey.step(assert_protected_action_complete, result)
+    session = step(login_and_capture_session)
+    result = step(continue_authenticated_dashboard, session, pause_seconds)
+    step(assert_protected_action_complete, result)
 ```
 
 ### Reset the Demo

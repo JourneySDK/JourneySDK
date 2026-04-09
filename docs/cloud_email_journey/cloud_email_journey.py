@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import journey
+from journey import journey, step
 from journey.tools.email import get_email_inbox, send_email, wait_for_email
 
 EVENTS: list[str] = []
@@ -32,16 +32,16 @@ def assert_welcome_email(
     return True
 
 
-@journey.journey
+@journey
 def cloud_email_journey() -> None:
-    inbox = journey.step(get_email_inbox())
-    receipt = journey.step(
+    inbox = step(get_email_inbox())
+    receipt = step(
         send_email(
             subject="Welcome to Journey",
             text_body="Hello from Journey Cloud",
         )
     )
-    message = journey.step(
+    message = step(
         wait_for_email(
             subject_contains="Welcome",
             timeout=0.05,
@@ -49,5 +49,4 @@ def cloud_email_journey() -> None:
         ),
         inbox,
     )
-    journey.step(assert_welcome_email, inbox, receipt, message)
-
+    step(assert_welcome_email, inbox, receipt, message)

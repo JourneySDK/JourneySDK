@@ -39,17 +39,17 @@ Install the published package as:
 pip install journey-sdk
 ```
 
-Import it in Python as:
+For authoring, prefer importing only the Journey primitives you use:
 
 ```python
-import journey
+from journey import checkpoint, journey, step
 ```
 
 ## Authoring model
 
 Write one journey in sequential Python with `step`, `checkpoint`, and optional step retries via
 `step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate module-level journey entrypoints with
-`@journey.journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching
+`@journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching
 workflows without duplicating test code. Step functions are plain callables: pass every required input as explicit
 arguments, and return any value that later steps or resumed runs must reuse.
 
@@ -67,21 +67,23 @@ Official tools are ordinary Python helpers that return step callables or seriali
 webhook tool can host a local endpoint before the app under test sends to it:
 
 ```python
+from journey import step
 from journey.tools.webhook import host_webhook_endpoint
 
 receive_invoice_paid = host_webhook_endpoint(port=8765, path="/invoice-paid")
 
-journey.step(receive_invoice_paid, retry=3, retry_delay=1)
+step(receive_invoice_paid, retry=3, retry_delay=1)
 ```
 
 The same module can also use a cloud-hosted webhook endpoint:
 
 ```python
+from journey import step
 from journey.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
 
-endpoint = journey.step(get_webhook_endpoint(path="/invoice-paid"))
-journey.step(send_invoice_paid_callback, endpoint.url)
-request_payload = journey.step(
+endpoint = step(get_webhook_endpoint(path="/invoice-paid"))
+step(send_invoice_paid_callback, endpoint.url)
+request_payload = step(
     wait_for_webhook_request(path="/invoice-paid", timeout=1, poll_interval=0.1),
     endpoint,
     retry=3,
@@ -93,19 +95,22 @@ The official email tool follows the same step-oriented model. It can use direct 
 to Journey Cloud:
 
 ```python
+from journey import step
 from journey.tools.email import get_email_inbox, send_email, wait_for_email
 
-inbox = journey.step(get_email_inbox())
-journey.step(send_email(subject="Welcome", text_body="Hello from Journey"))
-message = journey.step(
+inbox = step(get_email_inbox())
+step(send_email(subject="Welcome", text_body="Hello from Journey"))
+message = step(
     wait_for_email(subject_contains="Welcome", timeout=1, poll_interval=0.1),
     inbox,
 )
 ```
 
 ```python
-created = journey.step(create_subscription)
-journey.step(
+from journey import step
+
+created = step(create_subscription)
+step(
     invoice_paid,
     created,
     retry=15,
@@ -149,7 +154,7 @@ saved progress; delete the file when you want to start fresh.
 The default human-readable CLI output streams progress in real time: it prints each case start, branch selection,
 step attempt, retry, step status, and case completion as execution happens.
 
-CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
+CLI commands discover functions annotated with `@journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
 flow that reaches a target step label. Use `--develop-step` to run that same single case interactively, pausing
 after the target step and each later step so you can continue or retry while iterating on one part of the journey.

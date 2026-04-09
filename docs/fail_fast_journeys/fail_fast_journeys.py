@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import journey
+from journey import journey, step
 
 
 def raise_expected_failure() -> bool:
@@ -13,11 +13,11 @@ def finish_successfully() -> bool:
     return True
 
 
-@journey.journey
+@journey
 def broken_demo_journey() -> None:
-    journey.step(raise_expected_failure)
+    step(raise_expected_failure)
 
 
-@journey.journey
+@journey
 def good_demo_journey() -> None:
-    journey.step(finish_successfully)
+    step(finish_successfully)

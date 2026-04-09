@@ -6,8 +6,9 @@ The goal is simple: understand what a journey looks like in Python, what `journe
 
 ## The Mental Model
 
-- Mark one top-level function with `@journey.journey`.
-- Add steps with `journey.step(...)`.
+- Import the Journey primitives you use directly with `from journey import ...`.
+- Mark one top-level function with `@journey`.
+- Add steps with `step(...)`.
 - Pass step results explicitly into later steps.
 - Use `journey plan` to compile the authored flow into linear executable cases.
 - Use `journey execute` to run those cases and stream progress live.
@@ -19,11 +20,14 @@ If you remember only one thing, remember this: Journey does not ask you to stop 
 Read `docs/first_journey/first_journey.py`.
 
 ```python
-@journey.journey
+from journey import journey, step
+
+
+@journey
 def first_journey() -> None:
-    profile = journey.step(create_customer_profile)
-    message = journey.step(send_welcome_message, profile)
-    journey.step(assert_welcome_message_sent, message)
+    profile = step(create_customer_profile)
+    message = step(send_welcome_message, profile)
+    step(assert_welcome_message_sent, message)
 ```
 
 That is the whole authored flow. The helper functions in the same file do the real work:
@@ -79,16 +83,19 @@ The important part is not the formatting. The important part is that Journey sho
 Read `docs/selection_journeys/selection_journeys.py`.
 
 ```python
-@journey.journey
+from journey import journey, step
+
+
+@journey
 def welcome_email_journey() -> None:
-    job = journey.step(load_welcome_email_job)
-    journey.step(assert_welcome_email_job, job)
+    job = step(load_welcome_email_job)
+    step(assert_welcome_email_job, job)
 
 
-@journey.journey
+@journey
 def invoice_reminder_journey() -> None:
-    reminder = journey.step(load_invoice_reminder)
-    journey.step(assert_invoice_reminder, reminder)
+    reminder = step(load_invoice_reminder)
+    step(assert_invoice_reminder, reminder)
 ```
 
 This is the first time Journey's CLI selection flags matter:

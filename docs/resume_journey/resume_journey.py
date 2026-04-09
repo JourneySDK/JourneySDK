@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-import journey
+from journey import journey, step
 
 
 def reset_demo_state(*, state_path: str | Path | None = None) -> None:
@@ -63,12 +63,12 @@ def assert_resumed_ticket(ticket: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def resume_journey() -> None:
     pause_seconds = 2.0
-    ticket = journey.step(load_support_ticket)
-    resumed_ticket = journey.step(wait_for_resume_signal, ticket, pause_seconds)
-    journey.step(assert_resumed_ticket, resumed_ticket)
+    ticket = step(load_support_ticket)
+    resumed_ticket = step(wait_for_resume_signal, ticket, pause_seconds)
+    step(assert_resumed_ticket, resumed_ticket)
 
 
 def _tutorial_note(message: str) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import journey
+from journey import branch, checkpoint, journey, step
 from journey.tools.webhook import host_webhook_endpoint
 
 _DEMO_PAGE_URL = Path(__file__).with_name("demo_site.html").resolve().as_uri()
@@ -110,18 +110,18 @@ def assert_local_file_contents(file_info: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def simple_journey() -> None:
     receive_endpoint_a = host_webhook_endpoint(port=8765, path="/endpoint-a")
 
-    journey.step(assert_demo_homepage)
+    step(assert_demo_homepage)
 
-    after_setup = journey.checkpoint()
-    if journey.branch(start_from=after_setup):
-        journey.step(click_trigger_endpoint_a)
-        request_payload = journey.step(receive_endpoint_a)
-        journey.step(assert_endpoint_a_webhook, request_payload)
-    elif journey.branch(start_from=after_setup):
-        journey.step(click_store_local_file)
-        file_info = journey.step(local_file_is_written)
-        journey.step(assert_local_file_contents, file_info)
+    after_setup = checkpoint()
+    if branch(start_from=after_setup):
+        step(click_trigger_endpoint_a)
+        request_payload = step(receive_endpoint_a)
+        step(assert_endpoint_a_webhook, request_payload)
+    elif branch(start_from=after_setup):
+        step(click_store_local_file)
+        file_info = step(local_file_is_written)
+        step(assert_local_file_contents, file_info)

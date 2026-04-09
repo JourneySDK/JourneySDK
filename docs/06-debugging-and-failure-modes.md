@@ -9,6 +9,9 @@ This chapter explains what Journey's failure output means and when `--fail-fast`
 Read `docs/fail_fast_journeys/fail_fast_journeys.py`.
 
 ```python
+from journey import journey, step
+
+
 def raise_expected_failure() -> bool:
     raise RuntimeError("expected tutorial failure")
 
@@ -17,14 +20,14 @@ def finish_successfully() -> bool:
     return True
 
 
-@journey.journey
+@journey
 def broken_demo_journey() -> None:
-    journey.step(raise_expected_failure)
+    step(raise_expected_failure)
 
 
-@journey.journey
+@journey
 def good_demo_journey() -> None:
-    journey.step(finish_successfully)
+    step(finish_successfully)
 ```
 
 This file exists to answer a practical question: when one discovered journey fails, should the CLI keep going or stop immediately?

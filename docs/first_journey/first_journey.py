@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import journey
+from journey import journey, step
 
 EVENTS: list[str] = []
 
@@ -41,8 +41,8 @@ def assert_welcome_message_sent(message: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def first_journey() -> None:
-    profile = journey.step(create_customer_profile)
-    message = journey.step(send_welcome_message, profile)
-    journey.step(assert_welcome_message_sent, message)
+    profile = step(create_customer_profile)
+    message = step(send_welcome_message, profile)
+    step(assert_welcome_message_sent, message)

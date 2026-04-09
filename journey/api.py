@@ -38,12 +38,12 @@ def journey(fn: Callable[P, R]) -> Callable[P, R]:
 
     Example:
         ```python
-        import journey
+        from journey import journey, step
 
-        @journey.journey
+        @journey
         def signup_flow() -> None:
-            created = journey.step(create_account)
-            journey.step(account_is_ready, created)
+            created = step(create_account)
+            step(account_is_ready, created)
         ```
     """
 
@@ -90,11 +90,13 @@ def branch(
 
     Example:
         ```python
-        after_login = journey.checkpoint()
-        if journey.branch():
-            journey.step(finish_fast_path)
-        elif journey.branch(start_from=after_login):
-            journey.step(finish_review_path)
+        from journey import branch, checkpoint, step
+
+        after_login = checkpoint()
+        if branch():
+            step(finish_fast_path)
+        elif branch(start_from=after_login):
+            step(finish_review_path)
         ```
     """
     start_from_name: str | None
@@ -180,8 +182,10 @@ def step(
 
     Example:
         ```python
-        created = journey.step(create_subscription)
-        journey.step(
+        from journey import step
+
+        created = step(create_subscription)
+        step(
             invoice_paid,
             created,
             retry=15,
@@ -220,11 +224,13 @@ def checkpoint() -> CheckpointRef:
 
     Example:
         ```python
-        after_signup = journey.checkpoint()
-        if journey.branch():
-            journey.step(finish_instant)
-        elif journey.branch(start_from=after_signup):
-            journey.step(finish_manual)
+        from journey import branch, checkpoint, step
+
+        after_signup = checkpoint()
+        if branch():
+            step(finish_instant)
+        elif branch(start_from=after_signup):
+            step(finish_manual)
         ```
     """
     session = get_session()

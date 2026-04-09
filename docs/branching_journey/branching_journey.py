@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import journey
+from journey import branch, checkpoint, journey, step
 
 EVENTS: list[str] = []
 
@@ -43,13 +43,13 @@ def assert_manual_review_path(classified: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def branching_journey() -> None:
-    signup_request = journey.step(load_signup_request)
-    classified = journey.step(classify_signup_request, signup_request)
+    signup_request = step(load_signup_request)
+    classified = step(classify_signup_request, signup_request)
 
-    after_classification = journey.checkpoint()
-    if journey.branch():
-        journey.step(assert_fast_track_path, classified)
-    elif journey.branch(start_from=after_classification):
-        journey.step(assert_manual_review_path, classified)
+    after_classification = checkpoint()
+    if branch():
+        step(assert_fast_track_path, classified)
+    elif branch(start_from=after_classification):
+        step(assert_manual_review_path, classified)

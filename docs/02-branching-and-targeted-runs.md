@@ -13,23 +13,26 @@ This chapter covers three related ideas:
 Read `docs/branching_journey/branching_journey.py`.
 
 ```python
-@journey.journey
-def branching_journey() -> None:
-    signup_request = journey.step(load_signup_request)
-    classified = journey.step(classify_signup_request, signup_request)
+from journey import branch, checkpoint, journey, step
 
-    after_classification = journey.checkpoint()
-    if journey.branch():
-        journey.step(assert_fast_track_path, classified)
-    elif journey.branch(start_from=after_classification):
-        journey.step(assert_manual_review_path, classified)
+
+@journey
+def branching_journey() -> None:
+    signup_request = step(load_signup_request)
+    classified = step(classify_signup_request, signup_request)
+
+    after_classification = checkpoint()
+    if branch():
+        step(assert_fast_track_path, classified)
+    elif branch(start_from=after_classification):
+        step(assert_manual_review_path, classified)
 ```
 
 Why this shape matters:
 
 - `load_signup_request` and `classify_signup_request` are shared setup
 - the checkpoint gives later execution a replay anchor
-- each `journey.branch(...)` arm becomes its own case
+- each `branch(...)` arm becomes its own case
 
 ### Plan the Branches
 
@@ -89,18 +92,21 @@ Use `--develop-step` when you are actively editing one branch and want Journey t
 Read `docs/rehydration_journey/rehydration_journey.py`.
 
 ```python
-@journey.journey
+from journey import branch, checkpoint, journey, step
+
+
+@journey
 def rehydration_journey() -> None:
     payload = next_external_payload()
-    context = journey.step(prepare_context, payload)
+    context = step(prepare_context, payload)
 
-    after_setup = journey.checkpoint()
-    shared = journey.step(shared_after_checkpoint, context)
+    after_setup = checkpoint()
+    shared = step(shared_after_checkpoint, context)
 
-    if journey.branch(start_from=after_setup):
-        journey.step(assert_branch_a, shared)
-    elif journey.branch(start_from=after_setup):
-        journey.step(assert_branch_b, shared)
+    if branch(start_from=after_setup):
+        step(assert_branch_a, shared)
+    elif branch(start_from=after_setup):
+        step(assert_branch_b, shared)
 ```
 
 This example is intentionally small. It exists to show one idea clearly: later branches can restart from saved checkpoint state instead of rerunning shared setup.

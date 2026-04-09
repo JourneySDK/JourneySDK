@@ -21,11 +21,14 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 Read `docs/cloud_webhook_journey/cloud_webhook_journey.py`.
 
 ```python
-@journey.journey
+from journey import journey, step
+
+
+@journey
 def cloud_webhook_journey() -> None:
-    endpoint = journey.step(get_webhook_endpoint(path="/invoice-paid"))
-    journey.step(send_invoice_paid_webhook_later, endpoint.url)
-    request_payload = journey.step(
+    endpoint = step(get_webhook_endpoint(path="/invoice-paid"))
+    step(send_invoice_paid_webhook_later, endpoint.url)
+    request_payload = step(
         wait_for_webhook_request(
             path="/invoice-paid",
             timeout=0.05,
@@ -35,7 +38,7 @@ def cloud_webhook_journey() -> None:
         retry=3,
         retry_delay=0,
     )
-    journey.step(assert_invoice_paid_webhook, request_payload)
+    step(assert_invoice_paid_webhook, request_payload)
 ```
 
 The shape is familiar:
@@ -83,16 +86,19 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 Read `docs/cloud_email_journey/cloud_email_journey.py`.
 
 ```python
-@journey.journey
+from journey import journey, step
+
+
+@journey
 def cloud_email_journey() -> None:
-    inbox = journey.step(get_email_inbox())
-    receipt = journey.step(
+    inbox = step(get_email_inbox())
+    receipt = step(
         send_email(
             subject="Welcome to Journey",
             text_body="Hello from Journey Cloud",
         )
     )
-    message = journey.step(
+    message = step(
         wait_for_email(
             subject_contains="Welcome",
             timeout=0.05,
@@ -100,7 +106,7 @@ def cloud_email_journey() -> None:
         ),
         inbox,
     )
-    journey.step(assert_welcome_email, inbox, receipt, message)
+    step(assert_welcome_email, inbox, receipt, message)
 ```
 
 This flow uses the same pattern as the webhook example:

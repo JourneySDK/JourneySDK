@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import journey
+from journey import branch, checkpoint, journey, step
 
 EVENTS: list[str] = []
 _EXTERNAL_SEED_COUNTER = 0
@@ -40,15 +40,15 @@ def assert_branch_b(shared: dict[str, str]) -> bool:
     return True
 
 
-@journey.journey
+@journey
 def rehydration_journey() -> None:
     payload = next_external_payload()
-    context = journey.step(prepare_context, payload)
+    context = step(prepare_context, payload)
 
-    after_setup = journey.checkpoint()
-    shared = journey.step(shared_after_checkpoint, context)
+    after_setup = checkpoint()
+    shared = step(shared_after_checkpoint, context)
 
-    if journey.branch(start_from=after_setup):
-        journey.step(assert_branch_a, shared)
-    elif journey.branch(start_from=after_setup):
-        journey.step(assert_branch_b, shared)
+    if branch(start_from=after_setup):
+        step(assert_branch_a, shared)
+    elif branch(start_from=after_setup):
+        step(assert_branch_b, shared)
