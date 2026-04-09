@@ -7,8 +7,8 @@ import pytest
 
 from journey.cli import main
 
-import example.cloud_webhook_journey as cloud_webhook_example
-import example.resume_journey as resume_example
+import docs.cloud_webhook_journey as cloud_webhook_docs
+import docs.resume_journey as resume_docs
 from journey.tools._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
@@ -22,7 +22,7 @@ from tests._resume_tutorial_helpers import (
 )
 
 playwright_resume_example = __import__(
-    "example.playwright_resume_journey.playwright_resume_journey",
+    "docs.playwright_resume_journey.playwright_resume_journey",
     fromlist=["playwright_resume_journey"],
 )
 
@@ -37,13 +37,13 @@ def test_first_journey_readme_commands(
 ):
     monkeypatch.chdir(_repo_root())
 
-    plan_exit = main(["plan", "--file", "example/first_journey/first_journey.py"])
+    plan_exit = main(["plan", "--file", "docs/first_journey/first_journey.py"])
     plan_output = capsys.readouterr().out
     assert plan_exit == 0
-    assert "Journey example/first_journey/first_journey.py:first_journey" in plan_output
+    assert "Journey docs/first_journey/first_journey.py:first_journey" in plan_output
     assert "Summary: 1 journey planned, 1 case planned, 0 failed" in plan_output
 
-    execute_exit = main(["execute", "--file", "example/first_journey/first_journey.py"])
+    execute_exit = main(["execute", "--file", "docs/first_journey/first_journey.py"])
     execute_output = capsys.readouterr().out
     assert execute_exit == 0
     assert "  step create_customer_profile attempt=1 ok duration=" in execute_output
@@ -60,7 +60,7 @@ def test_selection_readme_commands_use_journey_and_json(
         [
             "plan",
             "--file",
-            "example/selection_journeys/selection_journeys.py",
+            "docs/selection_journeys/selection_journeys.py",
             "--journey",
             "welcome_email_journey",
             "--json",
@@ -76,7 +76,7 @@ def test_selection_readme_commands_use_journey_and_json(
         [
             "execute",
             "--file",
-            "example/selection_journeys/selection_journeys.py",
+            "docs/selection_journeys/selection_journeys.py",
             "--journey",
             "invoice_reminder_journey",
             "--json",
@@ -100,7 +100,7 @@ def test_branching_readme_target_command_reports_replay_anchor(
         [
             "execute",
             "--file",
-            "example/branching_journey/branching_journey.py",
+            "docs/branching_journey/branching_journey.py",
             "--step",
             "assert_manual_review_path",
         ]
@@ -129,7 +129,7 @@ def test_branching_readme_develop_step_command_pauses_then_completes(
         [
             "execute",
             "--file",
-            "example/branching_journey/branching_journey.py",
+            "docs/branching_journey/branching_journey.py",
             "--develop-step",
             "assert_manual_review_path",
         ]
@@ -151,7 +151,7 @@ def test_retry_readme_commands_show_retry_behavior(
         [
             "execute",
             "--file",
-            "example/retry_journey/retry_journey.py",
+            "docs/retry_journey/retry_journey.py",
             "--journey",
             "retry_current_step_journey",
         ]
@@ -165,7 +165,7 @@ def test_retry_readme_commands_show_retry_behavior(
         [
             "execute",
             "--file",
-            "example/retry_journey/retry_journey.py",
+            "docs/retry_journey/retry_journey.py",
             "--journey",
             "retry_from_step_result_journey",
         ]
@@ -179,7 +179,7 @@ def test_retry_readme_commands_show_retry_behavior(
         [
             "execute",
             "--file",
-            "example/retry_journey/retry_journey.py",
+            "docs/retry_journey/retry_journey.py",
             "--journey",
             "retry_from_checkpoint_journey",
         ]
@@ -198,11 +198,11 @@ def test_resume_readme_commands_interrupt_then_resume(
     monkeypatch.chdir(_repo_root())
     state_file = tmp_path / "resume.state"
     pause_seconds = configured_pause_seconds(
-        resume_example.resume_journey,
+        resume_docs.resume_journey,
         step_label="wait_for_resume_signal",
     )
     live_stderr = install_live_stderr(monkeypatch)
-    resume_example.reset_demo_state(state_path=state_file)
+    resume_docs.reset_demo_state(state_path=state_file)
     stop_event, interrupt_thread = start_interrupt_on_prompt(
         live_stderr,
         pause_seconds=pause_seconds,
@@ -213,7 +213,7 @@ def test_resume_readme_commands_interrupt_then_resume(
             [
                 "execute",
                 "--file",
-                "example/resume_journey/resume_journey.py",
+                "docs/resume_journey/resume_journey.py",
                 "--state",
                 str(state_file),
             ]
@@ -237,7 +237,7 @@ def test_resume_readme_commands_interrupt_then_resume(
         [
             "execute",
             "--file",
-            "example/resume_journey/resume_journey.py",
+            "docs/resume_journey/resume_journey.py",
             "--state",
             str(state_file),
         ]
@@ -261,16 +261,16 @@ def test_cloud_webhook_readme_commands(
     with serve_in_background() as cloud:
         monkeypatch.setenv(JOURNEY_CLOUD_API_KEY_ENV, cloud.api_key)
         monkeypatch.setenv(JOURNEY_CLOUD_BASE_URL_ENV, cloud.base_url)
-        cloud_webhook_example.reset_demo_state()
+        cloud_webhook_docs.reset_demo_state()
 
-        plan_exit = main(["plan", "--file", "example/cloud_webhook_journey/cloud_webhook_journey.py"])
+        plan_exit = main(["plan", "--file", "docs/cloud_webhook_journey/cloud_webhook_journey.py"])
         plan_output = capsys.readouterr().out
         assert plan_exit == 0
-        assert "Journey example/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in plan_output
+        assert "Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in plan_output
         assert "Summary: 1 journey planned, 1 case planned, 0 failed" in plan_output
 
         execute_exit = main(
-            ["execute", "--file", "example/cloud_webhook_journey/cloud_webhook_journey.py"]
+            ["execute", "--file", "docs/cloud_webhook_journey/cloud_webhook_journey.py"]
         )
         execute_output = capsys.readouterr().out
 
@@ -312,7 +312,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
                 [
                     "execute",
                     "--file",
-                    "example/playwright_resume_journey/playwright_resume_journey.py",
+                    "docs/playwright_resume_journey/playwright_resume_journey.py",
                     "--state",
                     str(state_file),
                 ]
@@ -336,7 +336,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
             [
                 "execute",
                 "--file",
-                "example/playwright_resume_journey/playwright_resume_journey.py",
+                "docs/playwright_resume_journey/playwright_resume_journey.py",
                 "--state",
                 str(state_file),
             ]
@@ -364,25 +364,25 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
         [
             "execute",
             "--file",
-            "example/fail_fast_journeys/fail_fast_journeys.py",
+            "docs/fail_fast_journeys/fail_fast_journeys.py",
         ]
     )
     default_output = capsys.readouterr().out
 
     assert default_exit == 1
-    assert "Journey example/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in default_output
+    assert "Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in default_output
     assert "Summary: 1 journey executed, 1 case executed, 1 failed" in default_output
 
     fail_fast_exit = main(
         [
             "execute",
             "--file",
-            "example/fail_fast_journeys/fail_fast_journeys.py",
+            "docs/fail_fast_journeys/fail_fast_journeys.py",
             "--fail-fast",
         ]
     )
     fail_fast_output = capsys.readouterr().out
 
     assert fail_fast_exit == 1
-    assert "Journey example/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" not in fail_fast_output
+    assert "Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" not in fail_fast_output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in fail_fast_output

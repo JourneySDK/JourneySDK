@@ -17,7 +17,7 @@ dev = ["pytest>=8.0"]
 journey = "journey.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["journey*", "example*"]
+include = ["journey*"]
 exclude = ["tests*", "output*", "journey_cloud*"]
 
 [tool.pytest.ini_options]

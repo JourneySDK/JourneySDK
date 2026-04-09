@@ -16,16 +16,16 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 - `journey/planner.py`: journey compilation (aka planning)
 - `journey/executor.py`: execution of a compiled journey
 - `journey/cli.py`: CLI implementation
-- `example/`: runnable examples that also serve as docs and tutorials
+- `docs/`: runnable tutorial journeys plus the handbook pages that explain them
 
 ## Preferred commands
 
 - `uv run pytest`
 - `cd ../private && uv run --with ../public --extra dev pytest`
 - `uv run journey plan`
-- `uv run journey plan --file example/first_journey/first_journey.py`
+- `uv run journey plan --file docs/first_journey/first_journey.py`
 - `uv run journey execute`
-- `uv run journey execute --file example/simple_journey/simple_journey.py --step assert_local_file_contents`
+- `uv run journey execute --file docs/simple_journey/simple_journey.py --step assert_local_file_contents`
 - `uv build`
 
 CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
@@ -56,7 +56,7 @@ flow that reaches a target step label.
 
 ## Change guidance
 
-- Keep docs (including this `AGENTS.md`, `README.md`, and `example/`), plus tests, aligned with behavior changes.
+- Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
 - When changes affect cloud email/webhook compatibility or shared service contracts in the combined workspace, also run
   `cd ../private && uv run --with ../public --extra dev pytest`.
@@ -65,6 +65,6 @@ flow that reaches a target step label.
 - Prefer adding or updating tests before changing planner, executor, or validator semantics.
 - When changing step-label behavior, check both full execution and targeted `--step` execution.
 - When changing branch behavior, verify case counts, label paths, ambiguity handling, and replay-anchor reporting.
-- Showcase every user-facing feature with runnable and documented examples in `example/`.
+- Showcase every user-facing feature with runnable and documented examples in `docs/`.
 - Follow strict typing.
 - Do not import from `../private` or reference private service implementation details in public docs, tests, or code.

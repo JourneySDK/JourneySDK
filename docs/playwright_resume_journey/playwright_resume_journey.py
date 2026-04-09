@@ -13,7 +13,7 @@ from journey.tools.playwright import (
     open_page,
 )
 
-from example.playwright_resume_journey._auth_demo import (
+from docs.playwright_resume_journey._auth_demo import (
     ensure_demo_server,
     reset_demo_port,
     shutdown_demo_server,

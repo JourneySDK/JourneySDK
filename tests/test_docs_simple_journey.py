@@ -7,7 +7,7 @@ from pathlib import Path
 import journey
 from journey.models import StepNode
 
-simple_journey = importlib.import_module("example.simple_journey.simple_journey")
+simple_journey = importlib.import_module("docs.simple_journey.simple_journey")
 
 
 def _case_labels(plan: journey.JourneyPlan) -> list[list[str]]:

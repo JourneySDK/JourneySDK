@@ -9,7 +9,7 @@ import pytest
 from journey.models import StepNode
 
 playwright_resume_module = importlib.import_module(
-    "example.playwright_resume_journey.playwright_resume_journey"
+    "docs.playwright_resume_journey.playwright_resume_journey"
 )
 
 from tests._resume_tutorial_helpers import (

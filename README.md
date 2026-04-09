@@ -248,6 +248,6 @@ cd ../private
 uv run --with ../public --extra dev pytest
 ```
 
-See [`example/README.md`](example/README.md) for the staged runnable tutorial. It starts with a minimal linear
-journey, then walks through selection, branching, retries, resume, cloud-hosted webhooks, cloud-hosted email,
-browser automation, resumable Playwright sessions, replay, and fail-fast execution.
+See [`docs/README.md`](docs/README.md) for the runnable handbook. It starts with getting oriented in Journey's
+authoring model, then walks through branching, retries, resume, browser automation, Journey Cloud integrations, and
+debugging failure modes with code, commands, and expected CLI output.
