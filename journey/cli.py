@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -17,7 +18,7 @@ from .errors import (
     NoJourneysFoundError,
     StepNotFoundError,
 )
-from .executor import _ExecutionObserver, _execute_plan
+from .executor import _ExecutionObserver, _PausedExecution, _execute_plan
 from .models import (
     BranchMarkerNode,
     CaseExecutionReport,
@@ -111,6 +112,7 @@ class _LiveTextReporter(_ExecutionObserver):
         self._display = _display_path(root, file_path)
         self._journey_name = journey_name
         self._needs_separator = needs_separator
+        self._journey_started = False
 
     def _emit(self, line: str = "") -> None:
         print(line, flush=True)
@@ -122,6 +124,9 @@ class _LiveTextReporter(_ExecutionObserver):
         selected_cases: list[Any],
     ) -> None:
         del selected_cases
+        if self._journey_started:
+            return
+        self._journey_started = True
         if self._needs_separator:
             self._emit()
         self._emit(f"Journey {self._display}:{self._journey_name}")
@@ -373,6 +378,88 @@ def _locate_step_matches(plan: JourneyPlan, step: str) -> list[tuple[CasePlan, i
     return matches
 
 
+def _select_targeted_journey(
+    planned: list[_PlannedJourney],
+    *,
+    step: str,
+) -> tuple[_PlannedJourney | None, list[_CommandError]]:
+    flow_matches: dict[str, _PlannedJourney] = {}
+
+    for item in planned:
+        matches = _locate_step_matches(item.plan, step)
+        for case, _ in matches:
+            flow_key = f"{item.file_path}:{item.journey_name}:{case.case_id}"
+            flow_matches[flow_key] = item
+
+    if not flow_matches:
+        return None, [_error_from_exception(StepNotFoundError(step), phase="execute")]
+
+    if len(flow_matches) != 1:
+        return None, [
+            _error_from_exception(
+                AmbiguousStepSelectionError(step, sorted(flow_matches)),
+                phase="execute",
+            )
+        ]
+
+    return next(iter(flow_matches.values())), []
+
+
+def _paused_prompt(paused: _PausedExecution) -> str:
+    step_name = paused.paused_step.label or paused.paused_step.node_id
+    if paused.paused_step.ok:
+        return (
+            f"Paused after step {step_name} attempt={paused.paused_step.attempt} ok. "
+            "Enter c to continue or r to retry: "
+        )
+    if paused.paused_step.error:
+        return (
+            f"Paused after step {step_name} attempt={paused.paused_step.attempt} "
+            f"failed ({paused.paused_step.error}). Enter c to exit with failure or r to retry: "
+        )
+    return (
+        f"Paused after step {step_name} attempt={paused.paused_step.attempt} failed. "
+        "Enter c to exit with failure or r to retry: "
+    )
+
+
+def _prompt_for_pause_action(paused: _PausedExecution) -> str:
+    while True:
+        choice = input(_paused_prompt(paused)).strip().lower()
+        if choice in {"c", "r"}:
+            return choice
+        print("Enter 'c' to continue or 'r' to retry.", flush=True)
+
+
+def _paused_failure_error(
+    selected: _PlannedJourney,
+    paused: _PausedExecution,
+) -> _CommandError:
+    message = paused.paused_step.failure_message
+    if message is None:
+        step_name = paused.paused_step.label or paused.paused_step.node_id
+        message = f"Step '{step_name}' failed while it was running."
+    return _CommandError(
+        file=str(selected.file_path),
+        journey_name=selected.journey_name,
+        phase="execute",
+        error_type="CallableExecutionError",
+        message=message,
+        hint=paused.paused_step.failure_hint,
+    )
+
+
+def _temporary_pause_state_path() -> Path:
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        prefix=".journey-pause.",
+        suffix=".state",
+    ) as handle:
+        path = Path(handle.name)
+    path.unlink(missing_ok=True)
+    return path
+
+
 def _execute_all_targets(
     targets: list[DiscoveredJourney],
     *,
@@ -389,7 +476,10 @@ def _execute_all_targets(
             _error_from_exception(
                 JourneySelectionError(
                     "Resuming with --state requires exactly one selected journey.",
-                    hint="Pass `--file`, `--journey`, or `--step` to narrow the selection to one journey.",
+                    hint=(
+                        "Pass `--file`, `--journey`, `--step`, or `--pause-on-step` "
+                        "to narrow the selection to one journey."
+                    ),
                 ),
                 phase="execute",
             )
@@ -447,26 +537,10 @@ def _execute_target_step(
     state: str | None = None,
     stream_live: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
-    flow_matches: dict[str, _PlannedJourney] = {}
+    selected, errors = _select_targeted_journey(planned, step=step)
+    if selected is None:
+        return [], errors
 
-    for item in planned:
-        matches = _locate_step_matches(item.plan, step)
-        for case, _ in matches:
-            flow_key = f"{item.file_path}:{item.journey_name}:{case.case_id}"
-            flow_matches[flow_key] = item
-
-    if not flow_matches:
-        return [], [_error_from_exception(StepNotFoundError(step), phase="execute")]
-
-    if len(flow_matches) != 1:
-        return [], [
-            _error_from_exception(
-                AmbiguousStepSelectionError(step, sorted(flow_matches)),
-                phase="execute",
-            )
-        ]
-
-    selected = next(iter(flow_matches.values()))
     try:
         observer = (
             _LiveTextReporter(
@@ -503,6 +577,76 @@ def _execute_target_step(
             report=report,
         )
     ], []
+
+
+def _execute_target_pause(
+    planned: list[_PlannedJourney],
+    *,
+    root: Path,
+    pause_on_step: str,
+    state: str | None = None,
+    stream_live: bool = False,
+) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
+    selected, errors = _select_targeted_journey(planned, step=pause_on_step)
+    if selected is None:
+        return [], errors
+
+    managed_state = Path(state) if state is not None else _temporary_pause_state_path()
+    cleanup_state = state is None
+
+    try:
+        observer = (
+            _LiveTextReporter(
+                root=root,
+                file_path=selected.file_path,
+                journey_name=selected.journey_name,
+                needs_separator=False,
+            )
+            if stream_live
+            else None
+        )
+        pause_action: str | None = None
+
+        while True:
+            outcome = _execute_plan(
+                selected.function,
+                plan=selected.plan,
+                pause_on_step=pause_on_step,
+                pause_action=pause_action,
+                state=str(managed_state),
+                observer=observer,
+            )
+            if isinstance(outcome, _PausedExecution):
+                choice = _prompt_for_pause_action(outcome)
+                if choice == "c":
+                    if not outcome.paused_step.ok:
+                        return [], [_paused_failure_error(selected, outcome)]
+                    pause_action = "continue"
+                else:
+                    pause_action = "retry"
+                continue
+
+            report = outcome
+            return [
+                _ExecutedJourney(
+                    file_path=selected.file_path,
+                    journey_name=selected.journey_name,
+                    plan=selected.plan,
+                    report=report,
+                )
+            ], []
+    except Exception as exc:
+        return [], [
+            _error_from_exception(
+                exc,
+                phase="execute",
+                file_path=str(selected.file_path),
+                journey_name=selected.journey_name,
+            )
+        ]
+    finally:
+        if cleanup_state:
+            managed_state.unlink(missing_ok=True)
 
 
 def _emit_plan_output(
@@ -644,7 +788,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     executed: list[_ExecutedJourney] = []
 
     try:
-        if args.step is None:
+        if args.step is None and args.pause_on_step is None:
             run_results, run_errors = _execute_all_targets(
                 targets,
                 root=root,
@@ -658,13 +802,22 @@ def _cmd_execute(args: argparse.Namespace) -> int:
             planned, plan_errors = _plan_targets(targets, fail_fast=args.fail_fast)
             errors.extend(plan_errors)
             if not errors:
-                run_results, run_errors = _execute_target_step(
-                    planned,
-                    root=root,
-                    step=args.step,
-                    state=args.state,
-                    stream_live=not args.json,
-                )
+                if args.pause_on_step is not None:
+                    run_results, run_errors = _execute_target_pause(
+                        planned,
+                        root=root,
+                        pause_on_step=args.pause_on_step,
+                        state=args.state,
+                        stream_live=not args.json,
+                    )
+                else:
+                    run_results, run_errors = _execute_target_step(
+                        planned,
+                        root=root,
+                        step=args.step,
+                        state=args.state,
+                        stream_live=not args.json,
+                    )
                 executed.extend(run_results)
                 errors.extend(run_errors)
     except KeyboardInterrupt:
@@ -693,7 +846,12 @@ def build_parser() -> argparse.ArgumentParser:
     execute_cmd = sub.add_parser("execute", help="Compile and execute decorated journeys")
     execute_cmd.add_argument("--file", help="Execute journeys defined in one Python file")
     execute_cmd.add_argument("--journey", help="Execute one decorated journey by function name")
-    execute_cmd.add_argument("--step", help="Execute only the flow that reaches one step label")
+    target_group = execute_cmd.add_mutually_exclusive_group()
+    target_group.add_argument("--step", help="Execute only the flow that reaches one step label")
+    target_group.add_argument(
+        "--pause-on-step",
+        help="Interactively pause after one target step label and each later step in that case",
+    )
     execute_cmd.add_argument("--state", help="Persist and resume execution state in one file")
     execute_cmd.add_argument("--json", action="store_true", help="Emit JSON")
     execute_cmd.add_argument(
@@ -709,6 +867,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if (
+        args.command == "execute"
+        and getattr(args, "pause_on_step", None) is not None
+        and args.json
+    ):
+        parser.error("--pause-on-step cannot be used with --json")
     return args.func(args)
 
 

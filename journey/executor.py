@@ -38,6 +38,7 @@ from .state import (
     STATE_FORMAT_VERSION,
     ActiveCaseState,
     ExecutionStateEnvelope,
+    PausedStepState,
     RuntimeSnapshotState,
     SelectedCaseState,
     StepBindingState,
@@ -58,6 +59,16 @@ class _StopCase(Exception):
 @dataclass
 class _RetryRequested(Exception):
     sleep_for: float
+
+
+@dataclass
+class _PauseRequested(Exception):
+    paused_step: PausedStepState
+
+
+@dataclass(frozen=True)
+class _PausedExecution:
+    paused_step: PausedStepState
 
 
 @dataclass(frozen=True)
@@ -244,6 +255,27 @@ def _case_rehydration_maps(
     return step_keys, checkpoint_keys, start_checkpoint_key
 
 
+def _callable_execution_error_for_step(
+    node: StepNode,
+    exc: Exception,
+) -> CallableExecutionError:
+    message = (
+        f"Step '{node.label or node.node_id}' failed while it was running: "
+        f"{type(exc).__name__}: {exc}"
+    )
+    hint = "Inspect the step implementation or rerun after fixing the underlying failure."
+    if node.retry is not None:
+        message = (
+            f"Step '{node.label or node.node_id}' failed while it was running "
+            f"and its retry attempts were exhausted: {type(exc).__name__}: {exc}"
+        )
+        hint = (
+            "Inspect the step implementation, or increase step(..., retry=...) if "
+            "the failure is expected to clear on its own."
+        )
+    return CallableExecutionError(message, hint=hint)
+
+
 class _StateController:
     def __init__(
         self,
@@ -251,13 +283,20 @@ class _StateController:
         *,
         journey_plan: JourneyPlan,
         step: str | None,
+        pause_on_step: str | None,
         selected_cases: list[_SelectedCase],
     ) -> None:
         self.path = path
         self.journey_plan = journey_plan
         self.step = step
+        self.pause_on_step = pause_on_step
         self.selected_cases = list(selected_cases)
-        self.plan_signature = _plan_signature(journey_plan, self.selected_cases, step)
+        self.plan_signature = _plan_signature(
+            journey_plan,
+            self.selected_cases,
+            step,
+            pause_on_step,
+        )
 
         loaded: ExecutionStateEnvelope | None = None
         if path is not None:
@@ -269,6 +308,7 @@ class _StateController:
                 journey_id=journey_plan.journey_id,
                 function_ref=journey_plan.function_ref,
                 step=step,
+                pause_on_step=pause_on_step,
                 plan_signature=self.plan_signature,
                 selected_cases=_selected_case_refs(self.selected_cases),
                 current_case_index=0,
@@ -397,6 +437,11 @@ class _StateController:
                 f"The journey state file '{self.path}' was created for step {state.step!r}, "
                 f"not {self.step!r}."
             )
+        if state.pause_on_step != self.pause_on_step:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' was created for pause_on_step "
+                f"{state.pause_on_step!r}, not {self.pause_on_step!r}."
+            )
         if state.plan_signature != self.plan_signature:
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' no longer matches the current journey plan."
@@ -478,6 +523,40 @@ class _StateController:
                 f"The journey state file '{self.path}' points at missing step "
                 f"'{active_case.dirty_node_id}'."
             )
+        if active_case.stop_after_index is not None:
+            if not isinstance(active_case.stop_after_index, int):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid active-case stop index."
+                )
+            if not 0 <= active_case.stop_after_index < len(expected_case.nodes):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' points at invalid stop index "
+                    f"{active_case.stop_after_index}."
+                )
+        if active_case.paused_step is not None:
+            paused_step = active_case.paused_step
+            if paused_step.node_id not in node_ids:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' points at missing paused step "
+                    f"'{paused_step.node_id}'."
+                )
+            if (
+                isinstance(paused_step.node_index, bool)
+                or not isinstance(paused_step.node_index, int)
+                or not 0 <= paused_step.node_index < len(expected_case.nodes)
+            ):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid paused-step index."
+                )
+            paused_node = expected_case.nodes[paused_step.node_index]
+            if not isinstance(paused_node, StepNode) or paused_node.node_id != paused_step.node_id:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' points at an invalid paused step."
+                )
+            if isinstance(paused_step.attempt, bool) or not isinstance(paused_step.attempt, int):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid paused-step attempt data."
+                )
         for node_id, remaining in active_case.snapshot.retry_remaining.items():
             if node_id not in node_ids:
                 raise ExecutionStateMismatchError(
@@ -552,6 +631,7 @@ class _RunSession:
         *,
         validation: JourneyValidation,
         stop_after_index: int | None,
+        pause_on_step_enabled: bool,
         rehydration_enabled: bool,
         state_controller: _StateController | None = None,
         restored_state: ActiveCaseState | None = None,
@@ -563,6 +643,7 @@ class _RunSession:
         self.case_plan = case_plan
         self.validation = validation
         self.stop_after_index = stop_after_index
+        self._pause_on_step_enabled = pause_on_step_enabled
         self._rehydration_enabled = rehydration_enabled
         self.cursor = 0
         self._group_counter = 0
@@ -574,6 +655,7 @@ class _RunSession:
         self._step_attempts: dict[str, int] = {}
         self.replay_from_index = 0
         self._dirty_node_id: str | None = None
+        self._paused_step: PausedStepState | None = None
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
         (
@@ -624,6 +706,8 @@ class _RunSession:
             snapshot=self._runtime_snapshot(),
             replay_from_index=self.replay_from_index,
             dirty_node_id=self._dirty_node_id,
+            stop_after_index=self.stop_after_index,
+            paused_step=self._paused_step,
         )
 
     def _persist_state(self) -> None:
@@ -655,6 +739,54 @@ class _RunSession:
         self.replay_from_index = restored_state.replay_from_index
         self._dirty_node_id = restored_state.dirty_node_id
         self._step_attempts = restored.step_attempts
+        self.stop_after_index = restored_state.stop_after_index
+        self._paused_step = restored_state.paused_step
+
+    @property
+    def paused_step(self) -> PausedStepState | None:
+        return self._paused_step
+
+    def apply_pause_action(self, action: str | None) -> None:
+        if self._paused_step is None:
+            if action is not None:
+                raise ExecutionStateMismatchError(
+                    "Pause-on-step state was not available for the requested action."
+                )
+            return
+        if action is None:
+            return
+
+        paused_step = self._paused_step
+        if action == "continue":
+            self.replay_from_index = paused_step.node_index + 1
+            self.stop_after_index = _next_step_index_after(
+                self.case_plan,
+                paused_step.node_index,
+            )
+            self._paused_step = None
+            self._persist_state()
+            return
+
+        if action == "retry":
+            node = self.case_plan.nodes[paused_step.node_index]
+            if not isinstance(node, StepNode):
+                raise ExecutionStateMismatchError(
+                    "Pause-on-step state points at a non-step node."
+                )
+            anchor_index = paused_step.node_index
+            if node.retry is not None:
+                anchor_index = self._retry_anchor_index(node, paused_step.node_index)
+            self._trim_from(anchor_index, preserve_retry_for=None)
+            self.replay_from_index = anchor_index
+            self.stop_after_index = paused_step.node_index
+            self._dirty_node_id = None
+            self._paused_step = None
+            self._persist_state()
+            return
+
+        raise ExecutionStateMismatchError(
+            f"Pause-on-step action {action!r} is not supported."
+        )
 
     def _resume_dirty_step(self) -> None:
         if self._dirty_node_id is None:
@@ -795,6 +927,31 @@ class _RunSession:
         self.replay_from_index = anchor_index
         return node.retry.delay_seconds
 
+    def _pause_after_step(
+        self,
+        node: StepNode,
+        *,
+        node_index: int,
+        attempt: int,
+        ok: bool,
+        error: str | None = None,
+        failure: CallableExecutionError | None = None,
+    ) -> None:
+        paused_step = PausedStepState(
+            node_id=node.node_id,
+            label=node.label,
+            node_index=node_index,
+            attempt=attempt,
+            ok=ok,
+            error=error,
+            failure_message=failure.message if failure is not None else None,
+            failure_hint=failure.hint if failure is not None else None,
+        )
+        self._paused_step = paused_step
+        self._dirty_node_id = None
+        self._persist_state()
+        raise _PauseRequested(paused_step)
+
     def _capture_value(self, value: Any, *, description: str) -> Any:
         if not self._rehydration_enabled:
             return value
@@ -916,6 +1073,13 @@ class _RunSession:
         if binding is not None and binding.has_result and not self._has_record_for(node_index):
             should_stop = self._record(node_index, node, ok=True, result=binding.result)
             if should_stop:
+                if self._pause_on_step_enabled:
+                    self._pause_after_step(
+                        node,
+                        node_index=node_index,
+                        attempt=self._step_attempts.get(node.node_id, 0),
+                        ok=True,
+                    )
                 raise _StopCase()
             return cast(R, binding.result)
 
@@ -970,7 +1134,7 @@ class _RunSession:
                 raise _RetryRequested(sleep_for=sleep_for)
             self._retry_remaining.pop(node.node_id, None)
             self._dirty_node_id = None
-            self._record(node_index, node, ok=False, error=str(exc))
+            should_stop = self._record(node_index, node, ok=False, error=str(exc))
             self._observer.on_step_failure(
                 case_plan=self.case_plan,
                 node=node,
@@ -979,24 +1143,17 @@ class _RunSession:
                 duration_seconds=duration_seconds,
                 error=exc,
             )
-            message = (
-                f"Step '{node.label or node.node_id}' failed while it was running: "
-                f"{type(exc).__name__}: {exc}"
-            )
-            hint = "Inspect the step implementation or rerun after fixing the underlying failure."
-            if node.retry is not None:
-                message = (
-                    f"Step '{node.label or node.node_id}' failed while it was running "
-                    f"and its retry attempts were exhausted: {type(exc).__name__}: {exc}"
+            failure = _callable_execution_error_for_step(node, exc)
+            if should_stop and self._pause_on_step_enabled:
+                self._pause_after_step(
+                    node,
+                    node_index=node_index,
+                    attempt=attempt,
+                    ok=False,
+                    error=str(exc),
+                    failure=failure,
                 )
-                hint = (
-                    "Inspect the step implementation, or increase step(..., retry=...) if "
-                    "the failure is expected to clear on its own."
-                )
-            raise CallableExecutionError(
-                message,
-                hint=hint,
-            ) from exc
+            raise failure from exc
 
         binding = self._set_step_result(node, output)
         self._retry_remaining.pop(node.node_id, None)
@@ -1010,6 +1167,13 @@ class _RunSession:
             duration_seconds=time.perf_counter() - started_at,
         )
         if should_stop:
+            if self._pause_on_step_enabled:
+                self._pause_after_step(
+                    node,
+                    node_index=node_index,
+                    attempt=attempt,
+                    ok=True,
+                )
             raise _StopCase()
         return cast(R, binding.result)
 
@@ -1111,6 +1275,13 @@ def _node_label(node: Any) -> str | None:
     return getattr(node, "label", None)
 
 
+def _next_step_index_after(case_plan: CasePlan, node_index: int) -> int | None:
+    for index in range(node_index + 1, len(case_plan.nodes)):
+        if isinstance(case_plan.nodes[index], StepNode):
+            return index
+    return None
+
+
 def _locate_step_matches(plan: JourneyPlan, step: str) -> list[tuple[CasePlan, int]]:
     matches: list[tuple[CasePlan, int]] = []
     for case in plan.case_plans:
@@ -1162,8 +1333,11 @@ def _needs_rehydration(
     selected_cases: list[_SelectedCase],
     *,
     step: str | None,
+    pause_on_step: str | None,
     state: str | Path | None,
 ) -> bool:
+    if pause_on_step is not None:
+        return True
     if state is not None:
         return True
     if step is None:
@@ -1241,11 +1415,13 @@ def _plan_signature(
     journey_plan: JourneyPlan,
     selected_cases: list[_SelectedCase],
     step: str | None,
+    pause_on_step: str | None,
 ) -> str:
     payload = {
         "journey_id": journey_plan.journey_id,
         "function_ref": journey_plan.function_ref,
         "step": step,
+        "pause_on_step": pause_on_step,
         "cases": [
             {
                 "case_id": item.case_plan.case_id,
@@ -1265,22 +1441,27 @@ def _execute_plan(
     *,
     plan: JourneyPlan,
     step: str | None = None,
+    pause_on_step: str | None = None,
+    pause_action: str | None = None,
     state: str | Path | None = None,
     observer: _ExecutionObserver | None = None,
-) -> ExecutionReport:
-    selected_cases = _select_cases(plan, step)
+) -> ExecutionReport | _PausedExecution:
+    target_step = pause_on_step if pause_on_step is not None else step
+    selected_cases = _select_cases(plan, target_step)
     validation = validate_journey(journey_fn)
     execution_observer = observer or _ExecutionObserver()
     execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
     rehydration_enabled = _needs_rehydration(
         selected_cases,
         step=step,
+        pause_on_step=pause_on_step,
         state=state,
     )
     state_controller = _StateController(
         Path(state) if state is not None else None,
         journey_plan=plan,
         step=step,
+        pause_on_step=pause_on_step,
         selected_cases=selected_cases,
     )
 
@@ -1318,6 +1499,7 @@ def _execute_plan(
                 case_plan=selected_case.case_plan,
                 validation=validation,
                 stop_after_index=selected_case.stop_after_index,
+                pause_on_step_enabled=pause_on_step is not None,
                 rehydration_enabled=rehydration_enabled,
                 state_controller=state_controller,
                 restored_state=restored_state,
@@ -1334,16 +1516,21 @@ def _execute_plan(
             if restored_state is None:
                 execution_observer.on_case_start(
                     case_plan=selected_case.case_plan,
-                    stop_after_index=selected_case.stop_after_index,
+                    stop_after_index=run_session.stop_after_index,
                     replay_anchor=replay_anchor,
                 )
-            else:
+            elif pause_action is None:
                 execution_observer.on_case_resume(
                     case_plan=selected_case.case_plan,
-                    stop_after_index=selected_case.stop_after_index,
+                    stop_after_index=run_session.stop_after_index,
                     replay_anchor=replay_anchor,
                     replay_from_index=restored_state.replay_from_index,
                 )
+
+            if pause_on_step is not None:
+                if run_session.paused_step is not None and pause_action is None:
+                    return _PausedExecution(run_session.paused_step)
+                run_session.apply_pause_action(pause_action)
 
             case_started_at = time.perf_counter()
             stopped_label: str | None = None
@@ -1357,19 +1544,21 @@ def _execute_plan(
                     if retry_request.sleep_for > 0:
                         time.sleep(retry_request.sleep_for)
                     continue
+                except _PauseRequested as pause_request:
+                    return _PausedExecution(pause_request.paused_step)
                 except _StopCase:
                     stopped_label = step
                 if (
                     run_session.cursor < len(selected_case.case_plan.nodes)
-                    and selected_case.stop_after_index is None
+                    and run_session.stop_after_index is None
                 ):
                     raise InvalidBranchUsageError(
                         "The journey finished before it reached every step in the compiled plan.",
                         hint="Check for conditional logic that exits early or skips step() calls during execution.",
                     )
                 if (
-                    selected_case.stop_after_index is not None
-                    and run_session.cursor <= selected_case.stop_after_index
+                    run_session.stop_after_index is not None
+                    and run_session.cursor <= run_session.stop_after_index
                 ):
                     raise InvalidBranchUsageError(
                         "The journey finished before it reached the targeted step label.",
@@ -1383,7 +1572,7 @@ def _execute_plan(
                 records=list(run_session.records),
                 completed=True,
                 stopped_at_label=stopped_label,
-                replay_anchor=replay_anchor,
+                replay_anchor=replay_anchor if step is not None else None,
             )
             case_reports.append(report)
             state_controller.complete_case(report)

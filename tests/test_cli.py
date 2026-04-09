@@ -47,6 +47,18 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.json is True
     assert execute_args.fail_fast is True
 
+    pause_args = parser.parse_args(
+        [
+            "execute",
+            "--file",
+            "journeys.py",
+            "--pause-on-step",
+            "target",
+        ]
+    )
+    assert pause_args.pause_on_step == "target"
+    assert pause_args.step is None
+
     with pytest.raises(SystemExit):
         parser.parse_args(["plan", "journeys.py:alpha"])
     with pytest.raises(SystemExit):
@@ -55,6 +67,19 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
         parser.parse_args(["execute", "--only-step", "target"])
     with pytest.raises(SystemExit):
         parser.parse_args(["execute", "--case-id", "case_1"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["execute", "--step", "target", "--pause-on-step", "target"])
+
+
+def test_execute_pause_on_step_rejects_json_mode(
+    capsys: pytest.CaptureFixture[str],
+):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["execute", "--pause-on-step", "target", "--json"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "--pause-on-step cannot be used with --json" in captured.err
 
 
 def test_plan_discovers_decorated_journeys_recursively_and_via_aliases(
@@ -400,6 +425,224 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
     assert "  branch bg_1=branch_2" in output
     assert "  step finish_manual attempt=1 ok duration=" in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+
+
+def test_execute_pause_on_step_steps_forward_with_continue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journey
+
+        def prepare():
+            return True
+
+        def publish():
+            return True
+
+        def cleanup():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+            journey.step(cleanup)
+        """,
+    )
+
+    prompts = iter(["c", "c"])
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(prompts)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["execute", "--file", "flow.py", "--pause-on-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "  step prepare attempt=1 ok duration=" in output
+    assert "  step publish attempt=1 ok duration=" in output
+    assert "Paused after step publish attempt=1 ok." in output
+    assert "  step cleanup attempt=1 ok duration=" in output
+    assert "Paused after step cleanup attempt=1 ok." in output
+    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+
+
+def test_execute_pause_on_step_resume_reopens_prompt_after_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    state_file = tmp_path / "pause.state"
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journey
+
+        def prepare():
+            return True
+
+        def publish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+        """,
+    )
+
+    def interrupting_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        raise KeyboardInterrupt()
+
+    prompts = iter(["c"])
+
+    def resume_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(prompts)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", interrupting_input)
+
+    first_exit = main(
+        [
+            "execute",
+            "--file",
+            "flow.py",
+            "--pause-on-step",
+            "publish",
+            "--state",
+            str(state_file),
+        ]
+    )
+    first_output = capsys.readouterr().out
+
+    assert first_exit == 130
+    assert state_file.exists()
+    assert "Paused after step publish attempt=1 ok." in first_output
+    assert "Interrupted." in first_output
+
+    monkeypatch.setattr("builtins.input", resume_input)
+    second_exit = main(
+        [
+            "execute",
+            "--file",
+            "flow.py",
+            "--pause-on-step",
+            "publish",
+            "--state",
+            str(state_file),
+        ]
+    )
+    second_output = capsys.readouterr().out
+
+    assert second_exit == 0
+    assert "- case_1 resume branches={}" in second_output
+    assert "Paused after step publish attempt=1 ok." in second_output
+    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in second_output
+
+
+def test_execute_pause_on_step_retry_from_checkpoint_after_failed_pause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journey
+
+        ATTEMPTS = {"poll": 0}
+
+        def prepare():
+            return True
+
+        def poll():
+            ATTEMPTS["poll"] += 1
+            if ATTEMPTS["poll"] < 3:
+                raise RuntimeError("pending")
+            return True
+
+        def finish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            anchor = journey.checkpoint()
+            journey.step(poll, retry=1, retry_delay=0, retry_from=anchor)
+            journey.step(finish)
+        """,
+    )
+
+    prompts = iter(["r", "c", "c"])
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(prompts)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["execute", "--file", "flow.py", "--pause-on-step", "poll"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "  step poll attempt=1 retry duration=" in output
+    assert "  step poll attempt=2 failed duration=" in output
+    assert "Paused after step poll attempt=2 failed (pending)." in output
+    assert "  step poll attempt=3 ok duration=" in output
+    assert "Paused after step poll attempt=3 ok." in output
+    assert "  step finish attempt=1 ok duration=" in output
+    assert "Paused after step finish attempt=1 ok." in output
+    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+
+
+def test_execute_pause_on_step_continue_from_failed_pause_exits_with_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journey
+
+        ATTEMPTS = {"poll": 0}
+
+        def poll():
+            ATTEMPTS["poll"] += 1
+            raise RuntimeError("pending")
+
+        @journey.journey
+        def flow():
+            journey.step(poll, retry=1, retry_delay=0)
+        """,
+    )
+
+    prompts = iter(["c"])
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(prompts)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["execute", "--file", "flow.py", "--pause-on-step", "poll"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "Paused after step poll attempt=2 failed (pending)." in output
+    assert "ERROR [execute] " in output
+    assert "CallableExecutionError" in output
+    assert "retry attempts were exhausted" in output
+    assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in output
 
 
 def test_execute_streams_retry_events_in_text_mode(

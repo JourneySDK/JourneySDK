@@ -950,6 +950,256 @@ def test_execute_step_supports_retryable_target_steps():
     assert _record_labels(report.case_reports[0]) == ["prepare", "publish"]
 
 
+def test_execute_pause_on_step_continues_to_later_steps_without_rerunning_prior_steps(
+    tmp_path,
+):
+    state_file = tmp_path / "pause.state"
+    events: list[str] = []
+
+    def prepare():
+        events.append("prepare")
+        return True
+
+    def publish():
+        events.append("publish")
+        return True
+
+    def cleanup():
+        events.append("cleanup")
+        return True
+
+    def journey():
+        journey_sdk.step(prepare)
+        journey_sdk.step(publish)
+        journey_sdk.step(cleanup)
+
+    plan = journey_sdk.compile_journey(journey)
+
+    first = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="publish",
+        state=state_file,
+    )
+
+    assert isinstance(first, journey_executor._PausedExecution)
+    assert first.paused_step.label == "publish"
+    assert first.paused_step.ok is True
+    assert events == ["prepare", "publish"]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="publish",
+        pause_action="continue",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_executor._PausedExecution)
+    assert report.paused_step.label == "cleanup"
+    assert report.paused_step.ok is True
+    assert events == ["prepare", "publish", "cleanup"]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="publish",
+        pause_action="continue",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_models.ExecutionReport)
+    assert events == ["prepare", "publish", "cleanup"]
+    assert report.case_reports[0].stopped_at_label is None
+    assert report.case_reports[0].replay_anchor is None
+    assert _record_labels(report.case_reports[0]) == ["prepare", "publish", "cleanup"]
+
+
+def test_execute_pause_on_step_retry_rewinds_from_checkpoint_and_refreshes_retry_budget(
+    tmp_path,
+):
+    state_file = tmp_path / "pause.state"
+    events: list[str] = []
+    attempts = {"poll": 0}
+
+    def prepare():
+        events.append("prepare")
+        return True
+
+    def poll():
+        attempts["poll"] += 1
+        events.append(f"poll_{attempts['poll']}")
+        if attempts["poll"] < 3:
+            raise RuntimeError("pending")
+        return True
+
+    def finish():
+        events.append("finish")
+        return True
+
+    def journey():
+        journey_sdk.step(prepare)
+        anchor = journey_sdk.checkpoint()
+        journey_sdk.step(poll, retry=1, retry_delay=0, retry_from=anchor)
+        journey_sdk.step(finish)
+
+    plan = journey_sdk.compile_journey(journey)
+
+    first = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        state=state_file,
+    )
+
+    assert isinstance(first, journey_executor._PausedExecution)
+    assert first.paused_step.label == "poll"
+    assert first.paused_step.ok is False
+    assert first.paused_step.attempt == 2
+    assert events == ["prepare", "poll_1", "poll_2"]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        pause_action="retry",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_executor._PausedExecution)
+    assert report.paused_step.label == "poll"
+    assert report.paused_step.ok is True
+    assert events == ["prepare", "poll_1", "poll_2", "poll_3"]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        pause_action="continue",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_executor._PausedExecution)
+    assert report.paused_step.label == "finish"
+    assert report.paused_step.ok is True
+    assert events == ["prepare", "poll_1", "poll_2", "poll_3", "finish"]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        pause_action="continue",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_models.ExecutionReport)
+    assert events == ["prepare", "poll_1", "poll_2", "poll_3", "finish"]
+    assert _record_labels(report.case_reports[0]) == ["prepare", "poll", "finish"]
+
+
+def test_execute_pause_on_step_retry_rewinds_from_step_result_anchor(
+    tmp_path,
+):
+    state_file = tmp_path / "pause.state"
+    events: list[str] = []
+    attempts = {"poll": 0, "issue": 0}
+
+    def issue_request():
+        attempts["issue"] += 1
+        request_id = f"req-{attempts['issue']}"
+        events.append(f"issue_{request_id}")
+        return {"request_id": request_id}
+
+    def poll(request):
+        attempts["poll"] += 1
+        events.append(f"poll_{attempts['poll']}_{request['request_id']}")
+        if attempts["poll"] < 3:
+            raise RuntimeError("pending")
+        return True
+
+    def finish():
+        events.append("finish")
+        return True
+
+    def journey():
+        request = journey_sdk.step(issue_request)
+        journey_sdk.step(poll, request, retry=1, retry_delay=0, retry_from=request)
+        journey_sdk.step(finish)
+
+    plan = journey_sdk.compile_journey(journey)
+
+    first = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        state=state_file,
+    )
+
+    assert isinstance(first, journey_executor._PausedExecution)
+    assert first.paused_step.ok is False
+    assert events == ["issue_req-1", "poll_1_req-1", "issue_req-2", "poll_2_req-2"]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        pause_action="retry",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_executor._PausedExecution)
+    assert report.paused_step.label == "poll"
+    assert report.paused_step.ok is True
+    assert events == [
+        "issue_req-1",
+        "poll_1_req-1",
+        "issue_req-2",
+        "poll_2_req-2",
+        "issue_req-3",
+        "poll_3_req-3",
+    ]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        pause_action="continue",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_executor._PausedExecution)
+    assert report.paused_step.label == "finish"
+    assert report.paused_step.ok is True
+    assert events == [
+        "issue_req-1",
+        "poll_1_req-1",
+        "issue_req-2",
+        "poll_2_req-2",
+        "issue_req-3",
+        "poll_3_req-3",
+        "finish",
+    ]
+
+    report = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        pause_on_step="poll",
+        pause_action="continue",
+        state=state_file,
+    )
+
+    assert isinstance(report, journey_models.ExecutionReport)
+    assert events == [
+        "issue_req-1",
+        "poll_1_req-1",
+        "issue_req-2",
+        "poll_2_req-2",
+        "issue_req-3",
+        "poll_3_req-3",
+        "finish",
+    ]
+
+
 def test_execute_retries_exception_until_step_succeeds():
     events: list[str] = []
     attempts = {"poll": 0}
@@ -1977,9 +2227,11 @@ def test_execute_state_rejects_old_state_format_version(tmp_path):
         journey_id=plan.journey_id,
         function_ref=plan.function_ref,
         step=None,
+        pause_on_step=None,
         plan_signature=journey_executor._plan_signature(
             plan,
             journey_executor._select_cases(plan, None),
+            None,
             None,
         ),
         selected_cases=selected_cases,

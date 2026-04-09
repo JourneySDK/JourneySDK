@@ -151,7 +151,8 @@ step attempt, retry, step status, and case completion as execution happens.
 
 CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
-flow that reaches a target step label.
+flow that reaches a target step label. Use `--pause-on-step` to run that same single case interactively, pausing
+after the target step and each later step so you can continue or retry while iterating on one part of the journey.
 
 ## Core principles
 
@@ -160,6 +161,7 @@ flow that reaches a target step label.
 - **Tool-friendly**: integrate external systems and domain-specific tools without forcing them into a custom DSL
 - **Journey-centric**: optimize around the full business process rather than isolated pages or API calls
 - **Single-step execution**: make it cheap to run only the flow that reaches a target step label during development
+- **Interactive step retries**: pause on one target step and each later step so local iteration feels fast
 
 ## Quick start
 
@@ -187,6 +189,12 @@ Execute only the path that reaches a target step label:
 
 ```bash
 uv run journey execute --step assert_local_file_contents
+```
+
+Execute one target path interactively and pause after that step and each later step:
+
+```bash
+uv run journey execute --pause-on-step assert_local_file_contents
 ```
 
 The cloud webhook helpers use `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL` at execution time only, so planning

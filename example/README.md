@@ -25,7 +25,7 @@ uv run --with playwright python -m playwright install chromium
 2. [`selection_journeys/README.md`](selection_journeys/README.md): Learn discovery, `--journey`, and `--json` with
    multiple journeys in one file.
 3. [`branching_journey/README.md`](branching_journey/README.md): Learn `checkpoint()`, inline `branch()` conditions,
-   and targeted execution with `--step`.
+   targeted execution with `--step`, and interactive stepping with `--pause-on-step`.
 4. [`retry_journey/README.md`](retry_journey/README.md): See same-step retries, `retry_from` with an earlier step,
    and `retry_from` with a checkpoint.
 5. [`resume_journey/README.md`](resume_journey/README.md): Resume an interrupted run with `--state`.

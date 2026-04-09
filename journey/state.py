@@ -18,7 +18,7 @@ from .models import (
     NodeExecutionRecord,
 )
 
-STATE_FORMAT_VERSION = 5
+STATE_FORMAT_VERSION = 6
 
 
 @dataclass
@@ -45,11 +45,25 @@ class RuntimeSnapshotState:
 
 
 @dataclass
+class PausedStepState:
+    node_id: str
+    label: str | None
+    node_index: int
+    attempt: int
+    ok: bool
+    error: str | None = None
+    failure_message: str | None = None
+    failure_hint: str | None = None
+
+
+@dataclass
 class ActiveCaseState:
     case_id: str
     snapshot: RuntimeSnapshotState
     replay_from_index: int
     dirty_node_id: str | None
+    stop_after_index: int | None = None
+    paused_step: PausedStepState | None = None
 
 
 @dataclass
@@ -58,6 +72,7 @@ class ExecutionStateEnvelope:
     journey_id: str
     function_ref: str
     step: str | None
+    pause_on_step: str | None
     plan_signature: str
     selected_cases: list[SelectedCaseState]
     current_case_index: int
