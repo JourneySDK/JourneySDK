@@ -283,19 +283,19 @@ class _StateController:
         *,
         journey_plan: JourneyPlan,
         step: str | None,
-        pause_on_step: str | None,
+        develop_step: str | None,
         selected_cases: list[_SelectedCase],
     ) -> None:
         self.path = path
         self.journey_plan = journey_plan
         self.step = step
-        self.pause_on_step = pause_on_step
+        self.develop_step = develop_step
         self.selected_cases = list(selected_cases)
         self.plan_signature = _plan_signature(
             journey_plan,
             self.selected_cases,
             step,
-            pause_on_step,
+            develop_step,
         )
 
         loaded: ExecutionStateEnvelope | None = None
@@ -308,7 +308,7 @@ class _StateController:
                 journey_id=journey_plan.journey_id,
                 function_ref=journey_plan.function_ref,
                 step=step,
-                pause_on_step=pause_on_step,
+                develop_step=develop_step,
                 plan_signature=self.plan_signature,
                 selected_cases=_selected_case_refs(self.selected_cases),
                 current_case_index=0,
@@ -437,10 +437,10 @@ class _StateController:
                 f"The journey state file '{self.path}' was created for step {state.step!r}, "
                 f"not {self.step!r}."
             )
-        if state.pause_on_step != self.pause_on_step:
+        if state.develop_step != self.develop_step:
             raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' was created for pause_on_step "
-                f"{state.pause_on_step!r}, not {self.pause_on_step!r}."
+                f"The journey state file '{self.path}' was created for develop_step "
+                f"{state.develop_step!r}, not {self.develop_step!r}."
             )
         if state.plan_signature != self.plan_signature:
             raise ExecutionStateMismatchError(
@@ -631,7 +631,7 @@ class _RunSession:
         *,
         validation: JourneyValidation,
         stop_after_index: int | None,
-        pause_on_step_enabled: bool,
+        develop_step_enabled: bool,
         rehydration_enabled: bool,
         state_controller: _StateController | None = None,
         restored_state: ActiveCaseState | None = None,
@@ -643,7 +643,7 @@ class _RunSession:
         self.case_plan = case_plan
         self.validation = validation
         self.stop_after_index = stop_after_index
-        self._pause_on_step_enabled = pause_on_step_enabled
+        self._develop_step_enabled = develop_step_enabled
         self._rehydration_enabled = rehydration_enabled
         self.cursor = 0
         self._group_counter = 0
@@ -1073,7 +1073,7 @@ class _RunSession:
         if binding is not None and binding.has_result and not self._has_record_for(node_index):
             should_stop = self._record(node_index, node, ok=True, result=binding.result)
             if should_stop:
-                if self._pause_on_step_enabled:
+                if self._develop_step_enabled:
                     self._pause_after_step(
                         node,
                         node_index=node_index,
@@ -1144,7 +1144,7 @@ class _RunSession:
                 error=exc,
             )
             failure = _callable_execution_error_for_step(node, exc)
-            if should_stop and self._pause_on_step_enabled:
+            if should_stop and self._develop_step_enabled:
                 self._pause_after_step(
                     node,
                     node_index=node_index,
@@ -1167,7 +1167,7 @@ class _RunSession:
             duration_seconds=time.perf_counter() - started_at,
         )
         if should_stop:
-            if self._pause_on_step_enabled:
+            if self._develop_step_enabled:
                 self._pause_after_step(
                     node,
                     node_index=node_index,
@@ -1333,10 +1333,10 @@ def _needs_rehydration(
     selected_cases: list[_SelectedCase],
     *,
     step: str | None,
-    pause_on_step: str | None,
+    develop_step: str | None,
     state: str | Path | None,
 ) -> bool:
-    if pause_on_step is not None:
+    if develop_step is not None:
         return True
     if state is not None:
         return True
@@ -1415,13 +1415,13 @@ def _plan_signature(
     journey_plan: JourneyPlan,
     selected_cases: list[_SelectedCase],
     step: str | None,
-    pause_on_step: str | None,
+    develop_step: str | None,
 ) -> str:
     payload = {
         "journey_id": journey_plan.journey_id,
         "function_ref": journey_plan.function_ref,
         "step": step,
-        "pause_on_step": pause_on_step,
+        "develop_step": develop_step,
         "cases": [
             {
                 "case_id": item.case_plan.case_id,
@@ -1441,12 +1441,12 @@ def _execute_plan(
     *,
     plan: JourneyPlan,
     step: str | None = None,
-    pause_on_step: str | None = None,
+    develop_step: str | None = None,
     pause_action: str | None = None,
     state: str | Path | None = None,
     observer: _ExecutionObserver | None = None,
 ) -> ExecutionReport | _PausedExecution:
-    target_step = pause_on_step if pause_on_step is not None else step
+    target_step = develop_step if develop_step is not None else step
     selected_cases = _select_cases(plan, target_step)
     validation = validate_journey(journey_fn)
     execution_observer = observer or _ExecutionObserver()
@@ -1454,14 +1454,14 @@ def _execute_plan(
     rehydration_enabled = _needs_rehydration(
         selected_cases,
         step=step,
-        pause_on_step=pause_on_step,
+        develop_step=develop_step,
         state=state,
     )
     state_controller = _StateController(
         Path(state) if state is not None else None,
         journey_plan=plan,
         step=step,
-        pause_on_step=pause_on_step,
+        develop_step=develop_step,
         selected_cases=selected_cases,
     )
 
@@ -1499,7 +1499,7 @@ def _execute_plan(
                 case_plan=selected_case.case_plan,
                 validation=validation,
                 stop_after_index=selected_case.stop_after_index,
-                pause_on_step_enabled=pause_on_step is not None,
+                develop_step_enabled=develop_step is not None,
                 rehydration_enabled=rehydration_enabled,
                 state_controller=state_controller,
                 restored_state=restored_state,
@@ -1527,7 +1527,7 @@ def _execute_plan(
                     replay_from_index=restored_state.replay_from_index,
                 )
 
-            if pause_on_step is not None:
+            if develop_step is not None:
                 if run_session.paused_step is not None and pause_action is None:
                     return _PausedExecution(run_session.paused_step)
                 run_session.apply_pause_action(pause_action)

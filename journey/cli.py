@@ -477,7 +477,7 @@ def _execute_all_targets(
                 JourneySelectionError(
                     "Resuming with --state requires exactly one selected journey.",
                     hint=(
-                        "Pass `--file`, `--journey`, `--step`, or `--pause-on-step` "
+                        "Pass `--file`, `--journey`, `--step`, or `--develop-step` "
                         "to narrow the selection to one journey."
                     ),
                 ),
@@ -583,11 +583,11 @@ def _execute_target_pause(
     planned: list[_PlannedJourney],
     *,
     root: Path,
-    pause_on_step: str,
+    develop_step: str,
     state: str | None = None,
     stream_live: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
-    selected, errors = _select_targeted_journey(planned, step=pause_on_step)
+    selected, errors = _select_targeted_journey(planned, step=develop_step)
     if selected is None:
         return [], errors
 
@@ -611,7 +611,7 @@ def _execute_target_pause(
             outcome = _execute_plan(
                 selected.function,
                 plan=selected.plan,
-                pause_on_step=pause_on_step,
+                develop_step=develop_step,
                 pause_action=pause_action,
                 state=str(managed_state),
                 observer=observer,
@@ -788,7 +788,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     executed: list[_ExecutedJourney] = []
 
     try:
-        if args.step is None and args.pause_on_step is None:
+        if args.step is None and args.develop_step is None:
             run_results, run_errors = _execute_all_targets(
                 targets,
                 root=root,
@@ -802,11 +802,11 @@ def _cmd_execute(args: argparse.Namespace) -> int:
             planned, plan_errors = _plan_targets(targets, fail_fast=args.fail_fast)
             errors.extend(plan_errors)
             if not errors:
-                if args.pause_on_step is not None:
+                if args.develop_step is not None:
                     run_results, run_errors = _execute_target_pause(
                         planned,
                         root=root,
-                        pause_on_step=args.pause_on_step,
+                        develop_step=args.develop_step,
                         state=args.state,
                         stream_live=not args.json,
                     )
@@ -849,7 +849,7 @@ def build_parser() -> argparse.ArgumentParser:
     target_group = execute_cmd.add_mutually_exclusive_group()
     target_group.add_argument("--step", help="Execute only the flow that reaches one step label")
     target_group.add_argument(
-        "--pause-on-step",
+        "--develop-step",
         help="Interactively pause after one target step label and each later step in that case",
     )
     execute_cmd.add_argument("--state", help="Persist and resume execution state in one file")
@@ -869,10 +869,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if (
         args.command == "execute"
-        and getattr(args, "pause_on_step", None) is not None
+        and getattr(args, "develop_step", None) is not None
         and args.json
     ):
-        parser.error("--pause-on-step cannot be used with --json")
+        parser.error("--develop-step cannot be used with --json")
     return args.func(args)
 
 

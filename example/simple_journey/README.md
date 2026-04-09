@@ -11,7 +11,7 @@ checks a downloaded file in the other branch.
 - how the official webhook tool returns a step callable
 - how one journey can cover a browser path and a webhook path together
 - how targeted execution with `--step` works in a realistic flow
-- how `--pause-on-step` can turn one target path into an interactive debugging loop
+- how `--develop-step` can turn one target path into an interactive debugging loop
 
 ## Files to read
 
@@ -68,7 +68,7 @@ What to expect:
 If you are actively iterating on that branch, you can also pause after the target step and each later step:
 
 ```bash
-uv run --with playwright journey execute --file example/simple_journey/simple_journey.py --pause-on-step assert_local_file_contents
+uv run --with playwright journey execute --file example/simple_journey/simple_journey.py --develop-step assert_local_file_contents
 ```
 
 ## Why this matters

@@ -52,11 +52,11 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "execute",
             "--file",
             "journeys.py",
-            "--pause-on-step",
+            "--develop-step",
             "target",
         ]
     )
-    assert pause_args.pause_on_step == "target"
+    assert pause_args.develop_step == "target"
     assert pause_args.step is None
 
     with pytest.raises(SystemExit):
@@ -68,18 +68,18 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     with pytest.raises(SystemExit):
         parser.parse_args(["execute", "--case-id", "case_1"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["execute", "--step", "target", "--pause-on-step", "target"])
+        parser.parse_args(["execute", "--step", "target", "--develop-step", "target"])
 
 
-def test_execute_pause_on_step_rejects_json_mode(
+def test_execute_develop_step_rejects_json_mode(
     capsys: pytest.CaptureFixture[str],
 ):
     with pytest.raises(SystemExit) as exc_info:
-        main(["execute", "--pause-on-step", "target", "--json"])
+        main(["execute", "--develop-step", "target", "--json"])
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "--pause-on-step cannot be used with --json" in captured.err
+    assert "--develop-step cannot be used with --json" in captured.err
 
 
 def test_plan_discovers_decorated_journeys_recursively_and_via_aliases(
@@ -427,7 +427,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
-def test_execute_pause_on_step_steps_forward_with_continue(
+def test_execute_develop_step_steps_forward_with_continue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -462,7 +462,7 @@ def test_execute_pause_on_step_steps_forward_with_continue(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["execute", "--file", "flow.py", "--pause-on-step", "publish"])
+    exit_code = main(["execute", "--file", "flow.py", "--develop-step", "publish"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -474,7 +474,7 @@ def test_execute_pause_on_step_steps_forward_with_continue(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
-def test_execute_pause_on_step_resume_reopens_prompt_after_interrupt(
+def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -516,7 +516,7 @@ def test_execute_pause_on_step_resume_reopens_prompt_after_interrupt(
             "execute",
             "--file",
             "flow.py",
-            "--pause-on-step",
+            "--develop-step",
             "publish",
             "--state",
             str(state_file),
@@ -535,7 +535,7 @@ def test_execute_pause_on_step_resume_reopens_prompt_after_interrupt(
             "execute",
             "--file",
             "flow.py",
-            "--pause-on-step",
+            "--develop-step",
             "publish",
             "--state",
             str(state_file),
@@ -549,7 +549,7 @@ def test_execute_pause_on_step_resume_reopens_prompt_after_interrupt(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in second_output
 
 
-def test_execute_pause_on_step_retry_from_checkpoint_after_failed_pause(
+def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -590,7 +590,7 @@ def test_execute_pause_on_step_retry_from_checkpoint_after_failed_pause(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["execute", "--file", "flow.py", "--pause-on-step", "poll"])
+    exit_code = main(["execute", "--file", "flow.py", "--develop-step", "poll"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -604,7 +604,7 @@ def test_execute_pause_on_step_retry_from_checkpoint_after_failed_pause(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
-def test_execute_pause_on_step_continue_from_failed_pause_exits_with_error(
+def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -634,7 +634,7 @@ def test_execute_pause_on_step_continue_from_failed_pause_exits_with_error(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["execute", "--file", "flow.py", "--pause-on-step", "poll"])
+    exit_code = main(["execute", "--file", "flow.py", "--develop-step", "poll"])
 
     output = capsys.readouterr().out
     assert exit_code == 1

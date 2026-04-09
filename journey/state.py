@@ -18,7 +18,7 @@ from .models import (
     NodeExecutionRecord,
 )
 
-STATE_FORMAT_VERSION = 6
+STATE_FORMAT_VERSION = 7
 
 
 @dataclass
@@ -72,7 +72,7 @@ class ExecutionStateEnvelope:
     journey_id: str
     function_ref: str
     step: str | None
-    pause_on_step: str | None
+    develop_step: str | None
     plan_signature: str
     selected_cases: list[SelectedCaseState]
     current_case_index: int

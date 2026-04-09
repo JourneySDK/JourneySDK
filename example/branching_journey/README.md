@@ -11,7 +11,7 @@ step in each case.
 - how inline `journey.branch(...)` conditions create one branch case each
 - how `start_from=...` controls replay anchors for branch-specific execution
 - how `journey execute --step ...` runs only the path that reaches one target label
-- how `journey execute --pause-on-step ...` lets you iterate on one branch step interactively
+- how `journey execute --develop-step ...` lets you iterate on one branch step interactively
 
 ## Files to read
 
@@ -59,7 +59,7 @@ What to expect:
 4. Pause on the manual-review path and continue from the prompt:
 
 ```bash
-uv run journey execute --file example/branching_journey/branching_journey.py --pause-on-step assert_manual_review_path
+uv run journey execute --file example/branching_journey/branching_journey.py --develop-step assert_manual_review_path
 ```
 
 What to expect:

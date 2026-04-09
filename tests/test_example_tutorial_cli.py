@@ -112,7 +112,7 @@ def test_branching_readme_target_command_reports_replay_anchor(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
-def test_branching_readme_pause_on_step_command_pauses_then_completes(
+def test_branching_readme_develop_step_command_pauses_then_completes(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
@@ -130,7 +130,7 @@ def test_branching_readme_pause_on_step_command_pauses_then_completes(
             "execute",
             "--file",
             "example/branching_journey/branching_journey.py",
-            "--pause-on-step",
+            "--develop-step",
             "assert_manual_review_path",
         ]
     )

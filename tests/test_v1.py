@@ -950,7 +950,7 @@ def test_execute_step_supports_retryable_target_steps():
     assert _record_labels(report.case_reports[0]) == ["prepare", "publish"]
 
 
-def test_execute_pause_on_step_continues_to_later_steps_without_rerunning_prior_steps(
+def test_execute_develop_step_continues_to_later_steps_without_rerunning_prior_steps(
     tmp_path,
 ):
     state_file = tmp_path / "pause.state"
@@ -978,7 +978,7 @@ def test_execute_pause_on_step_continues_to_later_steps_without_rerunning_prior_
     first = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="publish",
+        develop_step="publish",
         state=state_file,
     )
 
@@ -990,7 +990,7 @@ def test_execute_pause_on_step_continues_to_later_steps_without_rerunning_prior_
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="publish",
+        develop_step="publish",
         pause_action="continue",
         state=state_file,
     )
@@ -1003,7 +1003,7 @@ def test_execute_pause_on_step_continues_to_later_steps_without_rerunning_prior_
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="publish",
+        develop_step="publish",
         pause_action="continue",
         state=state_file,
     )
@@ -1015,7 +1015,7 @@ def test_execute_pause_on_step_continues_to_later_steps_without_rerunning_prior_
     assert _record_labels(report.case_reports[0]) == ["prepare", "publish", "cleanup"]
 
 
-def test_execute_pause_on_step_retry_rewinds_from_checkpoint_and_refreshes_retry_budget(
+def test_execute_develop_step_retry_rewinds_from_checkpoint_and_refreshes_retry_budget(
     tmp_path,
 ):
     state_file = tmp_path / "pause.state"
@@ -1048,7 +1048,7 @@ def test_execute_pause_on_step_retry_rewinds_from_checkpoint_and_refreshes_retry
     first = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         state=state_file,
     )
 
@@ -1061,7 +1061,7 @@ def test_execute_pause_on_step_retry_rewinds_from_checkpoint_and_refreshes_retry
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         pause_action="retry",
         state=state_file,
     )
@@ -1074,7 +1074,7 @@ def test_execute_pause_on_step_retry_rewinds_from_checkpoint_and_refreshes_retry
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         pause_action="continue",
         state=state_file,
     )
@@ -1087,7 +1087,7 @@ def test_execute_pause_on_step_retry_rewinds_from_checkpoint_and_refreshes_retry
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         pause_action="continue",
         state=state_file,
     )
@@ -1097,7 +1097,7 @@ def test_execute_pause_on_step_retry_rewinds_from_checkpoint_and_refreshes_retry
     assert _record_labels(report.case_reports[0]) == ["prepare", "poll", "finish"]
 
 
-def test_execute_pause_on_step_retry_rewinds_from_step_result_anchor(
+def test_execute_develop_step_retry_rewinds_from_step_result_anchor(
     tmp_path,
 ):
     state_file = tmp_path / "pause.state"
@@ -1131,7 +1131,7 @@ def test_execute_pause_on_step_retry_rewinds_from_step_result_anchor(
     first = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         state=state_file,
     )
 
@@ -1142,7 +1142,7 @@ def test_execute_pause_on_step_retry_rewinds_from_step_result_anchor(
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         pause_action="retry",
         state=state_file,
     )
@@ -1162,7 +1162,7 @@ def test_execute_pause_on_step_retry_rewinds_from_step_result_anchor(
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         pause_action="continue",
         state=state_file,
     )
@@ -1183,7 +1183,7 @@ def test_execute_pause_on_step_retry_rewinds_from_step_result_anchor(
     report = journey_executor._execute_plan(
         journey,
         plan=plan,
-        pause_on_step="poll",
+        develop_step="poll",
         pause_action="continue",
         state=state_file,
     )
@@ -2227,7 +2227,7 @@ def test_execute_state_rejects_old_state_format_version(tmp_path):
         journey_id=plan.journey_id,
         function_ref=plan.function_ref,
         step=None,
-        pause_on_step=None,
+        develop_step=None,
         plan_signature=journey_executor._plan_signature(
             plan,
             journey_executor._select_cases(plan, None),
