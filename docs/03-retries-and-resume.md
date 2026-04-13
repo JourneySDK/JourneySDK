@@ -56,6 +56,35 @@ Those three journeys represent the three most common retry strategies:
 - retry from an earlier step result
 - retry from a checkpoint and replay everything after it
 
+Hooked checkpoints follow the same replay rule. If you write
+`checkpoint(..., store=..., restore=...)`, Journey calls `store(...)` on the
+first forward hit and `restore(...)` only when execution rewinds back to that
+checkpoint.
+
+That matters when checkpoint arguments come from plain Python helpers instead of
+earlier `step()` results:
+
+```python
+def next_context() -> dict[str, str]:
+    ...
+
+
+@journey
+def retry_with_external_state() -> None:
+    context = next_context()
+    anchor = checkpoint(
+        context,
+        store=save_external_state,
+        restore=load_external_state,
+    )
+    step(refresh_after_checkpoint, context)
+    step(wait_until_ready, context, retry=1, retry_delay=0, retry_from=anchor)
+```
+
+Journey saves those checkpoint arguments the first time the checkpoint runs and
+reuses them on retries and resume, even though `next_context()` itself is plain
+Python outside `step()`.
+
 ### Retry the Current Step
 
 ```bash
@@ -221,6 +250,7 @@ Expected stderr:
 
 - Retries are explicit. Journey does not silently retry behind your back.
 - `retry_from=` is the switch that decides how much earlier work gets replayed.
+- Hooked checkpoints run `store(...)` on the first hit and `restore(...)` when a retry or resume rewinds back to that checkpoint.
 - Any value that Journey may need to replay later must be pickle-serializable.
 - `--state` keeps successful step results so the rerun can skip what already succeeded.
 - Resume starts the interrupted step again from the top. It does not jump into the middle of the function.

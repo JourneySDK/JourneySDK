@@ -37,6 +37,7 @@ from .session import use_session
 from .state import (
     STATE_FORMAT_VERSION,
     ActiveCaseState,
+    CheckpointBindingState,
     ExecutionStateEnvelope,
     PausedStepState,
     RuntimeSnapshotState,
@@ -47,7 +48,7 @@ from .state import (
     load_execution_state,
     save_execution_state,
 )
-from .utils import callable_ref
+from .utils import callable_ref, validate_checkpoint_call
 from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
 
@@ -205,6 +206,13 @@ def _copy_binding(binding: StepBindingState) -> StepBindingState:
     )
 
 
+def _copy_checkpoint_binding(binding: CheckpointBindingState) -> CheckpointBindingState:
+    return CheckpointBindingState(
+        args=tuple(binding.args),
+        kwargs=dict(binding.kwargs),
+    )
+
+
 def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotState:
     return RuntimeSnapshotState(
         record_indices=list(snapshot.record_indices),
@@ -214,6 +222,10 @@ def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotSta
             for key, binding in snapshot.step_bindings.items()
         },
         retry_remaining=dict(snapshot.retry_remaining),
+        checkpoint_bindings={
+            key: _copy_checkpoint_binding(binding)
+            for key, binding in snapshot.checkpoint_bindings.items()
+        },
         step_attempts=dict(snapshot.step_attempts),
     )
 
@@ -274,6 +286,21 @@ def _callable_execution_error_for_step(
             "the failure is expected to clear on its own."
         )
     return CallableExecutionError(message, hint=hint)
+
+
+def _callable_execution_error_for_checkpoint(
+    node: CheckpointNode,
+    *,
+    phase: str,
+    exc: Exception,
+) -> CallableExecutionError:
+    return CallableExecutionError(
+        (
+            f"Checkpoint '{node.name}' failed while running its {phase} hook: "
+            f"{type(exc).__name__}: {exc}"
+        ),
+        hint="Inspect the checkpoint hook implementation or rerun after fixing the underlying failure.",
+    )
 
 
 class _StateController:
@@ -418,6 +445,11 @@ class _StateController:
 
     def _validate_loaded_state(self, state: ExecutionStateEnvelope) -> None:
         expected_cases = _selected_case_refs(self.selected_cases)
+        expected_checkpoint_keys = {
+            checkpoint_key
+            for selected_case in self.selected_cases
+            for checkpoint_key in _case_rehydration_maps(selected_case.case_plan)[1].values()
+        }
         if state.version != STATE_FORMAT_VERSION:
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' uses format version {state.version}, which this version of journey does not understand."
@@ -468,7 +500,7 @@ class _StateController:
             label="run-wide step bindings",
         )
         for checkpoint_key, snapshot in state.checkpoint_snapshots.items():
-            if not isinstance(checkpoint_key, str):
+            if not isinstance(checkpoint_key, str) or checkpoint_key not in expected_checkpoint_keys:
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' has invalid checkpoint snapshot data."
                 )
@@ -518,6 +550,7 @@ class _StateController:
             for node in expected_case.nodes
             if isinstance(node, StepNode)
         }
+        checkpoint_keys = set(_case_rehydration_maps(expected_case)[1].values())
         if active_case.dirty_node_id is not None and active_case.dirty_node_id not in node_ids:
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' points at missing step "
@@ -577,6 +610,12 @@ class _StateController:
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' has invalid attempt state for step '{node_id}'."
                 )
+        for checkpoint_key in active_case.snapshot.checkpoint_bindings:
+            if checkpoint_key not in checkpoint_keys:
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' points at missing checkpoint binding "
+                    f"'{checkpoint_key}'."
+                )
 
     def _validate_runtime_snapshot(
         self,
@@ -603,6 +642,10 @@ class _StateController:
                     f"The journey state file '{self.path}' has invalid attempt data in {label}."
                 )
         self._validate_step_bindings(snapshot.step_bindings, label=f"{label} step bindings")
+        self._validate_checkpoint_bindings(
+            snapshot.checkpoint_bindings,
+            label=f"{label} checkpoint bindings",
+        )
 
     def _validate_step_bindings(
         self,
@@ -616,6 +659,22 @@ class _StateController:
             )
         for key, binding in bindings.items():
             if not isinstance(key, str) or not isinstance(binding, StepBindingState):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid {label}."
+                )
+
+    def _validate_checkpoint_bindings(
+        self,
+        bindings: dict[str, CheckpointBindingState],
+        *,
+        label: str,
+    ) -> None:
+        if not isinstance(bindings, dict):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has invalid {label}."
+            )
+        for key, binding in bindings.items():
+            if not isinstance(key, str) or not isinstance(binding, CheckpointBindingState):
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' has invalid {label}."
                 )
@@ -636,6 +695,7 @@ class _RunSession:
         state_controller: _StateController | None = None,
         restored_state: ActiveCaseState | None = None,
         checkpoint_seed: RuntimeSnapshotState | None = None,
+        checkpoint_restore_name: str | None = None,
         successful_bindings: dict[str, StepBindingState] | None = None,
         observer: _ExecutionObserver | None = None,
     ) -> None:
@@ -651,11 +711,13 @@ class _RunSession:
         self.records: list[NodeExecutionRecord] = []
         self._record_indices: list[int] = []
         self._step_bindings: dict[str, StepBindingState] = {}
+        self._checkpoint_bindings: dict[str, CheckpointBindingState] = {}
         self._retry_remaining: dict[str, int] = {}
         self._step_attempts: dict[str, int] = {}
         self.replay_from_index = 0
         self._dirty_node_id: str | None = None
         self._paused_step: PausedStepState | None = None
+        self._pending_checkpoint_restore_name = checkpoint_restore_name
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
         (
@@ -697,6 +759,10 @@ class _RunSession:
                 for key, binding in self._step_bindings.items()
             },
             retry_remaining=dict(self._retry_remaining),
+            checkpoint_bindings={
+                key: _copy_checkpoint_binding(binding)
+                for key, binding in self._checkpoint_bindings.items()
+            },
             step_attempts=dict(self._step_attempts),
         )
 
@@ -720,6 +786,7 @@ class _RunSession:
         self._record_indices = restored.record_indices
         self.records = restored.records
         self._step_bindings.update(restored.step_bindings)
+        self._checkpoint_bindings.update(restored.checkpoint_bindings)
         self._retry_remaining = restored.retry_remaining
         self._step_attempts = restored.step_attempts
         self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
@@ -735,6 +802,7 @@ class _RunSession:
         self._record_indices = restored.record_indices
         self.records = restored.records
         self._step_bindings = restored.step_bindings
+        self._checkpoint_bindings = restored.checkpoint_bindings
         self._retry_remaining = restored.retry_remaining
         self.replay_from_index = restored_state.replay_from_index
         self._dirty_node_id = restored_state.dirty_node_id
@@ -763,6 +831,7 @@ class _RunSession:
                 self.case_plan,
                 paused_step.node_index,
             )
+            self._pending_checkpoint_restore_name = None
             self._paused_step = None
             self._persist_state()
             return
@@ -776,6 +845,8 @@ class _RunSession:
             anchor_index = paused_step.node_index
             if node.retry is not None:
                 anchor_index = self._retry_anchor_index(node, paused_step.node_index)
+                if node.retry.from_checkpoint is not None:
+                    self._pending_checkpoint_restore_name = node.retry.from_checkpoint
             self._trim_from(anchor_index, preserve_retry_for=None)
             self.replay_from_index = anchor_index
             self.stop_after_index = paused_step.node_index
@@ -809,6 +880,8 @@ class _RunSession:
         if node.retry is not None:
             anchor_index = self._retry_anchor_index(node, node_index)
             preserve_retry_for = node.node_id
+            if node.retry.from_checkpoint is not None:
+                self._pending_checkpoint_restore_name = node.retry.from_checkpoint
 
         self._trim_from(anchor_index, preserve_retry_for=preserve_retry_for)
         self.replay_from_index = anchor_index
@@ -923,6 +996,8 @@ class _RunSession:
 
         self._retry_remaining[node.node_id] = remaining - 1
         anchor_index = self._retry_anchor_index(node, node_index)
+        if node.retry.from_checkpoint is not None:
+            self._pending_checkpoint_restore_name = node.retry.from_checkpoint
         self._trim_from(anchor_index, preserve_retry_for=node.node_id)
         self.replay_from_index = anchor_index
         return node.retry.delay_seconds
@@ -978,6 +1053,28 @@ class _RunSession:
             has_result=False,
         )
         self._step_bindings[binding_key] = binding
+        return binding
+
+    def _store_checkpoint_inputs(
+        self,
+        node: CheckpointNode,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> CheckpointBindingState:
+        binding_key = self._checkpoint_key_by_name[node.name]
+        stored_args = self._capture_value(
+            tuple(args),
+            description=f"checkpoint inputs for '{node.name}'",
+        )
+        stored_kwargs = self._capture_value(
+            dict(kwargs),
+            description=f"checkpoint inputs for '{node.name}'",
+        )
+        binding = CheckpointBindingState(
+            args=tuple(stored_args),
+            kwargs=dict(stored_kwargs),
+        )
+        self._checkpoint_bindings[binding_key] = binding
         return binding
 
     def _set_step_result(self, node: StepNode, output: Any) -> StepBindingState:
@@ -1041,6 +1138,30 @@ class _RunSession:
             for key in binding.kwargs
         }
         return resolved_args, resolved_kwargs
+
+    def _resolve_checkpoint_inputs(
+        self,
+        node: CheckpointNode,
+        binding: CheckpointBindingState,
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        resolved_args = tuple(
+            self._resolve_binding_value(template, stored_value)
+            for template, stored_value in zip(node.args, binding.args)
+        )
+        resolved_kwargs = {
+            key: self._resolve_binding_value(node.kwargs.get(key), binding.kwargs[key])
+            for key in binding.kwargs
+        }
+        return resolved_args, resolved_kwargs
+
+    def _checkpoint_phase_for(self, node: CheckpointNode) -> str | None:
+        if not node.has_hooks:
+            return None
+        if self._pending_checkpoint_restore_name == node.name:
+            return "restore"
+        if self.cursor - 1 >= self.replay_from_index:
+            return "store"
+        return None
 
     def step(
         self,
@@ -1179,9 +1300,63 @@ class _RunSession:
 
     def checkpoint(
         self,
+        *args: Any,
+        store: Callable[..., object] | None = None,
+        restore: Callable[..., object] | None = None,
+        **kwargs: Any,
     ) -> CheckpointRef:
+        validate_checkpoint_call(
+            args=tuple(args),
+            kwargs=dict(kwargs),
+            store=store,
+            restore=restore,
+        )
         checkpoint_index = self.cursor
         checkpoint_node = self._consume(CheckpointNode)
+        expected_store_ref = checkpoint_node.store_fn_ref
+        expected_restore_ref = checkpoint_node.restore_fn_ref
+        actual_store_ref = callable_ref(store) if store is not None else None
+        actual_restore_ref = callable_ref(restore) if restore is not None else None
+        if actual_store_ref != expected_store_ref or actual_restore_ref != expected_restore_ref:
+            raise InvalidBranchUsageError(
+                "checkpoint() was called with hook callables that do not match the compiled plan.",
+                hint="Make sure the journey calls checkpoint(..., store=..., restore=...) the same way during execution that it used during planning.",
+            )
+
+        checkpoint_key = self._checkpoint_key_by_name[checkpoint_node.name]
+        if checkpoint_node.has_hooks:
+            binding = self._checkpoint_bindings.get(checkpoint_key)
+            if binding is None:
+                binding = self._store_checkpoint_inputs(
+                    checkpoint_node,
+                    tuple(args),
+                    dict(kwargs),
+                )
+            bound_args, bound_kwargs = self._resolve_checkpoint_inputs(
+                checkpoint_node,
+                binding,
+            )
+            phase = self._checkpoint_phase_for(checkpoint_node)
+            if phase == "restore":
+                try:
+                    cast(Callable[..., object], restore)(*bound_args, **bound_kwargs)
+                except Exception as exc:
+                    raise _callable_execution_error_for_checkpoint(
+                        checkpoint_node,
+                        phase="restore",
+                        exc=exc,
+                    ) from exc
+                self._pending_checkpoint_restore_name = None
+            elif phase == "store":
+                try:
+                    cast(Callable[..., object], store)(*bound_args, **bound_kwargs)
+                except Exception as exc:
+                    raise _callable_execution_error_for_checkpoint(
+                        checkpoint_node,
+                        phase="store",
+                        exc=exc,
+                    ) from exc
+
         if checkpoint_index >= self.replay_from_index:
             should_stop = self._record(
                 checkpoint_index,
@@ -1191,7 +1366,6 @@ class _RunSession:
             )
             if should_stop:
                 raise _StopCase()
-            checkpoint_key = self._checkpoint_key_by_name[checkpoint_node.name]
             if self._state_controller is not None:
                 self._state_controller.store_checkpoint_snapshot(
                     checkpoint_key,
@@ -1319,6 +1493,13 @@ def _replay_anchor_for(case_plan: CasePlan, stop_after_index: int | None) -> str
     return None
 
 
+def _start_checkpoint_name_for(case_plan: CasePlan) -> str | None:
+    for node in case_plan.nodes:
+        if isinstance(node, BranchMarkerNode) and node.start_from is not None:
+            return node.start_from
+    return None
+
+
 def _selected_case_refs(selected_cases: list[_SelectedCase]) -> list[SelectedCaseState]:
     return [
         SelectedCaseState(
@@ -1408,6 +1589,15 @@ def _stable_node_payload(node: Any) -> Any:
             "kwargs": _stable_arg_template(node.kwargs),
             "retry": _stable_value(asdict(node.retry)) if node.retry is not None else None,
         }
+    if isinstance(node, CheckpointNode):
+        return {
+            "node_id": node.node_id,
+            "name": node.name,
+            "store_fn_ref": node.store_fn_ref,
+            "restore_fn_ref": node.restore_fn_ref,
+            "args": _stable_arg_template(node.args),
+            "kwargs": _stable_arg_template(node.kwargs),
+        }
     return _stable_value(asdict(node))
 
 
@@ -1480,7 +1670,13 @@ def _execute_plan(
                 case_index=case_index,
                 case_id=selected_case.case_plan.case_id,
             )
-            _, _, start_checkpoint_key = _case_rehydration_maps(selected_case.case_plan)
+            _, checkpoint_keys, _ = _case_rehydration_maps(selected_case.case_plan)
+            start_checkpoint_name = _start_checkpoint_name_for(selected_case.case_plan)
+            start_checkpoint_key = (
+                checkpoint_keys.get(start_checkpoint_name)
+                if start_checkpoint_name is not None
+                else None
+            )
             checkpoint_seed = (
                 state_controller.checkpoint_snapshot_for(start_checkpoint_key)
                 if rehydration_enabled
@@ -1504,6 +1700,9 @@ def _execute_plan(
                 state_controller=state_controller,
                 restored_state=restored_state,
                 checkpoint_seed=checkpoint_seed,
+                checkpoint_restore_name=(
+                    start_checkpoint_name if checkpoint_seed is not None else None
+                ),
                 successful_bindings=successful_bindings,
                 observer=execution_observer,
             )

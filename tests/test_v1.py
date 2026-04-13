@@ -20,7 +20,7 @@ from journey.errors import (
     UnsupportedControlFlowError,
     UnsupportedLoopError,
 )
-from journey.models import BranchMarkerNode, StepNode, StepRetry
+from journey.models import BranchMarkerNode, CheckpointNode, StepNode, StepRetry
 from journey.state import ExecutionStateEnvelope, SelectedCaseState
 
 
@@ -541,7 +541,81 @@ def test_checkpoint_branches_keyword_is_rejected_with_migration_hint():
 
 
 def test_checkpoint_signature_has_no_branches_keyword():
-    assert list(inspect.signature(journey_sdk.checkpoint).parameters) == []
+    assert list(inspect.signature(journey_sdk.checkpoint).parameters) == [
+        "args",
+        "store",
+        "restore",
+        "kwargs",
+    ]
+
+
+def test_checkpoint_rejects_one_hook_without_the_other():
+    def save_state():
+        return None
+
+    def journey():
+        journey_sdk.checkpoint(store=save_state)
+
+    with pytest.raises(TypeError) as exc_info:
+        journey_sdk.compile_journey(journey)
+
+    assert "requires both store=... and restore=... together" in str(exc_info.value)
+
+
+def test_checkpoint_rejects_noncallable_hooks():
+    def restore_state():
+        return None
+
+    def journey():
+        journey_sdk.checkpoint(store="not-callable", restore=restore_state)
+
+    with pytest.raises(TypeError) as exc_info:
+        journey_sdk.compile_journey(journey)
+
+    assert "checkpoint(store=...) needs a callable" in str(exc_info.value)
+
+
+def test_checkpoint_rejects_args_without_hooks():
+    def journey():
+        journey_sdk.checkpoint("payload")
+
+    with pytest.raises(TypeError) as exc_info:
+        journey_sdk.compile_journey(journey)
+
+    assert "only accepts positional and keyword arguments" in str(exc_info.value)
+
+
+def test_plan_includes_checkpoint_hook_metadata_and_arg_templates():
+    def prepare():
+        return {"token": "abc"}
+
+    def store_state(payload):
+        return None
+
+    def restore_state(payload):
+        return None
+
+    def journey():
+        prepared = journey_sdk.step(prepare)
+        journey_sdk.checkpoint(
+            prepared,
+            store=store_state,
+            restore=restore_state,
+            mode="test",
+        )
+
+    plan = journey_sdk.compile_journey(journey)
+    checkpoint_node = next(
+        node for node in plan.case_plans[0].nodes if isinstance(node, CheckpointNode)
+    )
+
+    assert checkpoint_node.name == "cp_1"
+    assert checkpoint_node.store_fn_ref == f"{store_state.__module__}:{store_state.__qualname__}"
+    assert checkpoint_node.restore_fn_ref == (
+        f"{restore_state.__module__}:{restore_state.__qualname__}"
+    )
+    assert checkpoint_node.args[0].kind == "step"
+    assert checkpoint_node.kwargs == {"mode": "test"}
 
 
 def test_branch_selector_is_rejected_with_migration_hint():
@@ -918,6 +992,69 @@ def test_execute_retries_from_checkpoint_without_rerunning_prior_steps():
     assert _record_labels(report.case_reports[0]) == ["begin_polling", "poll", "finish"]
 
 
+def test_execute_hooked_checkpoint_stores_once_and_restores_on_retry():
+    helper_calls = {"count": 0}
+    events: list[str] = []
+    attempts = {"poll": 0}
+
+    def next_payload():
+        helper_calls["count"] += 1
+        return {"seed": helper_calls["count"]}
+
+    def warmup(payload):
+        events.append(f"warmup_{payload['seed']}")
+        return True
+
+    def store_state(payload, *, mode):
+        events.append(f"store_{payload['seed']}_{mode}")
+
+    def restore_state(payload, *, mode):
+        events.append(f"restore_{payload['seed']}_{mode}")
+
+    def refresh(payload):
+        events.append(f"refresh_{payload['seed']}")
+        return True
+
+    def poll(payload):
+        attempts["poll"] += 1
+        events.append(f"poll_{attempts['poll']}_{payload['seed']}")
+        if attempts["poll"] == 1:
+            raise RuntimeError("pending")
+        return True
+
+    def journey():
+        payload = next_payload()
+        journey_sdk.step(warmup, payload)
+        anchor = journey_sdk.checkpoint(
+            payload,
+            store=store_state,
+            restore=restore_state,
+            mode="checkpoint",
+        )
+        journey_sdk.step(refresh, payload)
+        journey_sdk.step(
+            poll,
+            payload,
+            retry=1,
+            retry_delay=0,
+            retry_from=anchor,
+        )
+
+    journey_sdk.execute(journey)
+
+    seed = events[0].split("_")[1]
+
+    assert events == [
+        f"warmup_{seed}",
+        f"store_{seed}_checkpoint",
+        f"refresh_{seed}",
+        f"poll_1_{seed}",
+        f"restore_{seed}_checkpoint",
+        f"refresh_{seed}",
+        f"poll_2_{seed}",
+    ]
+
+
 def test_execute_step_supports_retryable_target_steps():
     events: list[str] = []
     attempts = {"publish": 0}
@@ -1279,6 +1416,49 @@ def test_execute_retries_exception_from_checkpoint_anchor():
         "finish",
     ]
     assert _record_labels(report.case_reports[0]) == ["warmup", "refresh", "poll", "finish"]
+
+
+def test_execute_checkpoint_store_hook_failure_surfaces_checkpoint_context():
+    def store_state():
+        raise RuntimeError("could not save")
+
+    def restore_state():
+        return None
+
+    def journey():
+        journey_sdk.checkpoint(store=store_state, restore=restore_state)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    assert "Checkpoint 'cp_1'" in str(exc_info.value)
+    assert "store hook" in str(exc_info.value)
+
+
+def test_execute_checkpoint_restore_hook_failure_surfaces_checkpoint_context():
+    attempts = {"poll": 0}
+
+    def store_state():
+        return None
+
+    def restore_state():
+        raise RuntimeError("could not restore")
+
+    def poll():
+        attempts["poll"] += 1
+        if attempts["poll"] == 1:
+            raise RuntimeError("pending")
+        return True
+
+    def journey():
+        anchor = journey_sdk.checkpoint(store=store_state, restore=restore_state)
+        journey_sdk.step(poll, retry=1, retry_delay=0, retry_from=anchor)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    assert "Checkpoint 'cp_1'" in str(exc_info.value)
+    assert "restore hook" in str(exc_info.value)
 
 
 def test_execute_observer_reports_success_and_branch_events():
@@ -1753,6 +1933,73 @@ def test_execute_resumes_interrupted_retryable_step_from_checkpoint_anchor(tmp_p
     assert state_file.exists()
 
 
+def test_execute_resumes_hooked_checkpoint_restore_with_saved_args(tmp_path):
+    state_file = tmp_path / "journey.state"
+    helper_calls = {"count": 0}
+    events: list[str] = []
+    attempts = {"poll": 0}
+
+    def next_payload():
+        helper_calls["count"] += 1
+        return {"seed": helper_calls["count"]}
+
+    def warmup(payload):
+        events.append(f"warmup_{payload['seed']}")
+        return True
+
+    def store_state(payload, *, mode):
+        events.append(f"store_{payload['seed']}_{mode}")
+
+    def restore_state(payload, *, mode):
+        events.append(f"restore_{payload['seed']}_{mode}")
+
+    def poll(payload):
+        attempts["poll"] += 1
+        events.append(f"poll_{attempts['poll']}_{payload['seed']}")
+        if attempts["poll"] == 1:
+            raise KeyboardInterrupt()
+        return True
+
+    def finish():
+        events.append("finish")
+        return True
+
+    def journey():
+        payload = next_payload()
+        journey_sdk.step(warmup, payload)
+        anchor = journey_sdk.checkpoint(
+            payload,
+            store=store_state,
+            restore=restore_state,
+            mode="resume",
+        )
+        journey_sdk.step(
+            poll,
+            payload,
+            retry=1,
+            retry_delay=0,
+            retry_from=anchor,
+        )
+        journey_sdk.step(finish)
+
+    with pytest.raises(KeyboardInterrupt):
+        journey_sdk.execute(journey, state=state_file)
+
+    report = journey_sdk.execute(journey, state=state_file)
+
+    seed = events[0].split("_")[1]
+
+    assert events == [
+        f"warmup_{seed}",
+        f"store_{seed}_resume",
+        f"poll_1_{seed}",
+        f"restore_{seed}_resume",
+        f"poll_2_{seed}",
+        "finish",
+    ]
+    assert _record_labels(report.case_reports[0]) == ["warmup", "poll", "finish"]
+
+
 def test_execute_resume_preserves_retry_budget_for_checkpoint_anchor(tmp_path):
     state_file = tmp_path / "journey.state"
     events: list[str] = []
@@ -2060,6 +2307,61 @@ def test_execute_rehydrates_checkpoint_started_branch_cases_without_rerunning_co
         "prepare",
         "shared_after_checkpoint",
         "finish_branch_b",
+    ]
+
+
+def test_execute_checkpoint_started_branches_restore_hooked_anchor_state():
+    helper_calls = {"count": 0}
+    events: list[str] = []
+
+    def next_payload():
+        helper_calls["count"] += 1
+        return {"seed": helper_calls["count"]}
+
+    def prepare(payload):
+        events.append(f"prepare_{payload['seed']}")
+        return True
+
+    def store_state(payload, *, mode):
+        events.append(f"store_{payload['seed']}_{mode}")
+
+    def restore_state(payload, *, mode):
+        events.append(f"restore_{payload['seed']}_{mode}")
+
+    def shared_after_checkpoint(payload):
+        events.append(f"shared_{payload['seed']}")
+        return {"shared": payload["seed"]}
+
+    def finish(branch_name, shared):
+        events.append(f"finish_{branch_name}_{shared['shared']}")
+        return True
+
+    def journey():
+        payload = next_payload()
+        journey_sdk.step(prepare, payload)
+        anchor = journey_sdk.checkpoint(
+            payload,
+            store=store_state,
+            restore=restore_state,
+            mode="branch",
+        )
+        shared = journey_sdk.step(shared_after_checkpoint, payload)
+        if journey_sdk.branch(start_from=anchor):
+            journey_sdk.step(finish, "a", shared)
+        elif journey_sdk.branch(start_from=anchor):
+            journey_sdk.step(finish, "b", shared)
+
+    journey_sdk.execute(journey)
+
+    seed = events[0].split("_")[1]
+
+    assert events == [
+        f"prepare_{seed}",
+        f"store_{seed}_branch",
+        f"shared_{seed}",
+        f"finish_a_{seed}",
+        f"restore_{seed}_branch",
+        f"finish_b_{seed}",
     ]
 
 

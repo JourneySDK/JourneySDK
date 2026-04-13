@@ -34,6 +34,23 @@ Why this shape matters:
 - the checkpoint gives later execution a replay anchor
 - each `branch(...)` arm becomes its own case
 
+`checkpoint()` can also manage external system state. Plain `checkpoint()` is a
+marker only. A hooked checkpoint uses paired store and restore hooks:
+
+```python
+session = open_browser_session()
+
+after_login = checkpoint(
+    session,
+    store=save_browser_session,
+    restore=load_browser_session,
+)
+```
+
+Journey calls `store(...)` the first time it hits that checkpoint and later
+calls `restore(...)` only when execution truly rewinds back to it, such as a
+checkpoint-started later branch.
+
 ### Plan the Branches
 
 ```bash
@@ -111,6 +128,9 @@ def rehydration_journey() -> None:
 
 This example is intentionally small. It exists to show one idea clearly: later branches can restart from saved checkpoint state instead of rerunning shared setup.
 
+If the checkpoint also has `store=` / `restore=` hooks, Journey restores that
+external state before the later branch continues from the checkpoint anchor.
+
 ### Target the Second Branch
 
 ```bash
@@ -134,7 +154,7 @@ The `replay_anchor=cp_1` part is what matters. It tells you which checkpoint Jou
 ## What To Notice
 
 - Authoring stays sequential, even when execution becomes multi-case.
-- `checkpoint()` is not just a marker for humans. It is a replay anchor for targeted runs and later branch execution.
+- `checkpoint()` is not just a marker for humans. It is a replay anchor for targeted runs and later branch execution, and it can optionally store and restore external system state on rewinds.
 - `--step` picks one case. `--develop-step` picks one case and then pauses so you can iterate faster.
 - Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.
 

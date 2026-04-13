@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
-from dataclasses import dataclass
-from typing import TypeAlias
+from dataclasses import dataclass, field
+from typing import Any, TypeAlias
 
 StepRetryDelay: TypeAlias = int | float | timedelta
 
@@ -80,6 +81,14 @@ EvaluateNode = StepNode
 class CheckpointNode:
     node_id: str
     name: str
+    store_fn_ref: str | None = None
+    restore_fn_ref: str | None = None
+    args: tuple[Any, ...] = ()
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def has_hooks(self) -> bool:
+        return self.store_fn_ref is not None and self.restore_fn_ref is not None
 
 
 @dataclass
@@ -132,3 +141,6 @@ class ExecutionReport:
     journey_id: str
     function_ref: str
     case_reports: list[CaseExecutionReport]
+
+
+CheckpointHook: TypeAlias = Callable[..., object]

@@ -14,6 +14,7 @@ from .models import (
     StepRetryFrom,
 )
 from .session import get_session
+from .utils import validate_checkpoint_call
 
 _JOURNEY_MARKER_ATTR = "__journey_marker__"
 P = ParamSpec("P")
@@ -213,20 +214,36 @@ def step(
     )
 
 
-def checkpoint() -> CheckpointRef:
+def checkpoint(
+    *args: Any,
+    store: Callable[..., object] | None = None,
+    restore: Callable[..., object] | None = None,
+    **kwargs: Any,
+) -> CheckpointRef:
     """Mark a checkpoint that later steps or branches can refer to.
+
+    Plain ``checkpoint()`` keeps the current marker-only behavior. When both
+    ``store`` and ``restore`` are provided, Journey binds the checkpoint
+    arguments once, calls ``store(*args, **kwargs)`` the first time the
+    checkpoint is hit, and later calls ``restore(*args, **kwargs)`` whenever
+    execution rewinds back to that checkpoint.
 
     Returns:
         A ``CheckpointRef`` anchor that later steps or branches can reuse.
 
     Raises:
+        TypeError: If checkpoint hooks are provided in an unsupported shape.
         InvalidBranchUsageError: If called outside planning or execution.
 
     Example:
         ```python
         from journey import branch, checkpoint, step
 
-        after_signup = checkpoint()
+        after_signup = checkpoint(
+            request_context,
+            store=save_browser_state,
+            restore=load_browser_state,
+        )
         if branch():
             step(finish_instant)
         elif branch(start_from=after_signup):
@@ -239,4 +256,18 @@ def checkpoint() -> CheckpointRef:
             "checkpoint() can only be used while a journey is being planned or executed.",
             hint="Call checkpoint() inside a function decorated with @journey.",
         )
-    return cast(CheckpointRef, session.checkpoint())
+    validate_checkpoint_call(
+        args=tuple(args),
+        kwargs=dict(kwargs),
+        store=store,
+        restore=restore,
+    )
+    return cast(
+        CheckpointRef,
+        session.checkpoint(
+            *args,
+            store=store,
+            restore=restore,
+            **kwargs,
+        ),
+    )

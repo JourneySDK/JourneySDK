@@ -28,6 +28,7 @@ from .models import (
 )
 from .session import use_session
 from .utils import callable_ref
+from .utils import validate_checkpoint_call
 from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
 BranchEnv = dict[str, str]
@@ -110,7 +111,17 @@ class _PlanSession:
 
     def checkpoint(
         self,
+        *args: Any,
+        store: Callable[..., object] | None = None,
+        restore: Callable[..., object] | None = None,
+        **kwargs: Any,
     ) -> CheckpointRef:
+        validate_checkpoint_call(
+            args=tuple(args),
+            kwargs=dict(kwargs),
+            store=store,
+            restore=restore,
+        )
         name = self._next_checkpoint_name()
         if name in self._checkpoints_seen:
             raise InvalidBranchUsageError(
@@ -119,7 +130,14 @@ class _PlanSession:
             )
         self._checkpoints_seen.add(name)
 
-        node = CheckpointNode(node_id=self._next_node_id(), name=name)
+        node = CheckpointNode(
+            node_id=self._next_node_id(),
+            name=name,
+            store_fn_ref=callable_ref(store) if store is not None else None,
+            restore_fn_ref=callable_ref(restore) if restore is not None else None,
+            args=tuple(args),
+            kwargs=dict(kwargs),
+        )
         self.nodes.append(node)
         return CheckpointRef(name=name)
 

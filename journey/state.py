@@ -18,7 +18,7 @@ from .models import (
     NodeExecutionRecord,
 )
 
-STATE_FORMAT_VERSION = 7
+STATE_FORMAT_VERSION = 8
 
 
 @dataclass
@@ -36,11 +36,18 @@ class StepBindingState:
 
 
 @dataclass
+class CheckpointBindingState:
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+
+
+@dataclass
 class RuntimeSnapshotState:
     record_indices: list[int]
     records: list[NodeExecutionRecord]
     step_bindings: dict[str, StepBindingState]
     retry_remaining: dict[str, int]
+    checkpoint_bindings: dict[str, CheckpointBindingState] = field(default_factory=dict)
     step_attempts: dict[str, int] = field(default_factory=dict)
 
 
