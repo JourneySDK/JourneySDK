@@ -11,9 +11,9 @@ background jobs, third-party services, voice or AI systems, and delayed side eff
 Each step is just plain Python, so teams can use existing testing tools and scripts without adapting them to a special
 framework. A `step` can run browser automation, mobile checks, API assertions, or service-specific validation logic.
 Official tools live under `journey.tools`; today that includes the `webhook` tool for hosting a local webhook
-endpoint or acquiring a cloud-hosted one, the `email` tool for direct or cloud-hosted inbox access, and the
-`playwright` tool for resumable page state. Retryable steps can poll for async effects or replay from an earlier step
-or checkpoint.
+endpoint or acquiring a cloud-hosted one, the `email` tool for direct or cloud-hosted inbox access, the `docker`
+tool for local Compose-backed snapshots, and the `playwright` tool for resumable page state. Retryable steps can poll
+for async effects or replay from an earlier step or checkpoint.
 
 That makes Journey SDK useful for flows such as:
 
@@ -105,6 +105,26 @@ message = step(
     inbox,
 )
 ```
+
+The Docker tool can start a local Compose app as a step value and pair a checkpoint with exact rollback of container
+filesystems plus Docker-managed volume contents:
+
+```python
+from journey import checkpoint, step
+from journey.tools.docker import restore_docker, run_docker, store_docker
+
+stack = step(run_docker(compose_file="docker-compose.yml"))
+checkpoint(
+    stack,
+    store=store_docker,
+    restore=restore_docker,
+    snapshot_name="after_boot",
+)
+step(assert_compose_logs, stack)
+```
+
+Current Docker snapshots are intentionally strict: bind mounts, external volumes, read-only mounts, and multi-container
+services are rejected so restore can stay exact and predictable.
 
 ```python
 from journey import step

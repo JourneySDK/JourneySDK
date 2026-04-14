@@ -5,6 +5,7 @@ Journey does not care whether a step talks to a browser, a file on disk, or a we
 This chapter shows both sides of that idea:
 
 - one journey that mixes Playwright, a local webhook, and a downloaded file
+- one journey that snapshots a local Docker Compose app behind a checkpoint
 - one journey that captures a browser session so a later run can reopen it
 
 ## One Journey Can Mix Browser, Webhook, and Local File Work
@@ -105,6 +106,61 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
 That targeted run is a good example of why Journey is useful during development. You can focus on the file branch without rerunning the webhook branch.
+
+## Snapshot a Local Docker Compose App
+
+Read these files together:
+
+- `docs/docker_compose_journey/docker_compose_journey.py`
+- `docs/docker_compose_journey/docker-compose.yml`
+
+The Docker helper is still just a normal Journey step factory:
+
+```python
+stack = step(
+    run_docker(
+        compose_file=_COMPOSE_FILE,
+        project_name="journey-docker-docs",
+    )
+)
+```
+
+Later steps can inspect the live stack through plain Python attributes:
+
+```python
+def assert_stack_running(stack: DockerComposeStack) -> bool:
+    app_statuses = stack.statuses.get("app")
+    if not app_statuses or app_statuses[0].state != "running":
+        raise AssertionError("Expected app service to be running.")
+    return True
+```
+
+And the checkpoint stays explicit about what gets stored and restored:
+
+```python
+checkpoint(
+    stack,
+    store=store_docker,
+    restore=restore_docker,
+    snapshot_name="after_boot",
+)
+```
+
+### Plan the Docker Journey
+
+```bash
+uv run journey plan --file docs/docker_compose_journey/docker_compose_journey.py
+```
+
+### Execute the Docker Journey
+
+```bash
+uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py
+```
+
+`store_docker(...)` and `restore_docker(...)` are strict on purpose. In v1 they aim for exact rollback of container
+filesystems plus Docker-managed volume contents, so they reject bind mounts, external volumes, read-only mounts, and
+multi-container services.
 
 ## Capture and Resume a Browser Session
 
