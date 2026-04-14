@@ -113,9 +113,14 @@ Read these files together:
 
 - `docs/docker_compose_journey/docker_compose_journey.py`
 - `docs/docker_compose_journey/docker-compose.yml`
+- `docs/docker_compose_journey/app/Dockerfile`
+- `docs/docker_compose_journey/app/server.py`
 
-This example is intentionally branched. It shows one shared Docker setup, one hooked checkpoint, and two later
-branches that both start from the same `after_boot` anchor.
+This example is intentionally branched. It boots a tiny HTTP app plus Postgres, saves that stack at
+`after_boot`, then uses two later branches to show what restore means in practice:
+
+- branch A increments a database-backed counter from `0` to `1`
+- branch B starts from the same checkpoint and sees the counter back at `0`
 
 The Docker helper is still just a normal Journey step factory:
 
@@ -128,7 +133,7 @@ stack = step(
 )
 ```
 
-The shared setup still reads like plain Python:
+The shared setup reads like plain Python, even though the app is running locally in Docker:
 
 ```python
 stack = step(
@@ -137,7 +142,7 @@ stack = step(
         project_name="journey-docker-docs",
     )
 )
-step(assert_stack_running, stack)
+step(assert_stack_ready, stack)
 ```
 
 The checkpoint stays explicit about what gets stored and restored:
@@ -151,14 +156,17 @@ after_boot = checkpoint(
 )
 ```
 
-And the branch structure mirrors Journey's other checkpoint-started examples:
+The interesting part is the branch structure. One shared step captures the baseline counter before either
+branch mutates anything, then the branches diverge:
 
 ```python
-summary = step(capture_stack_summary, stack)
+baseline = step(capture_baseline_state, stack)
 if branch(start_from=after_boot):
-    step(assert_running_branch, summary)
+    incremented = step(increment_counter, stack)
+    step(assert_increment_branch, baseline, incremented)
 elif branch(start_from=after_boot):
-    step(assert_boot_logs_branch, summary)
+    restored = step(read_counter_state, stack)
+    step(assert_restored_counter_branch, baseline, restored)
 ```
 
 ### Plan the Docker Journey
@@ -170,33 +178,46 @@ uv run journey plan --file docs/docker_compose_journey/docker_compose_journey.py
 ```console
 Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
 journey_id=docker_compose_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['run_docker', 'assert_stack_running', 'capture_stack_summary', 'assert_running_branch']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['run_docker', 'assert_stack_running', 'capture_stack_summary', 'assert_boot_logs_branch']
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['run_docker', 'assert_stack_ready', 'capture_baseline_state', 'increment_counter', 'assert_increment_branch']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['run_docker', 'assert_stack_ready', 'capture_baseline_state', 'read_counter_state', 'assert_restored_counter_branch']
 
 Summary: 1 journey planned, 2 cases planned, 0 failed
 ```
 
-### Target the Second Docker Branch
+### Execute Both Docker Branches
 
 ```bash
-uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py --step assert_boot_logs_branch
+uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py
 ```
 
 ```console
 Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
 journey_id=docker_compose_journey function_ref=...
-- case_2 start branches={bg_1=branch_2}
+- case_1 start branches={bg_1=branch_1}
   step run_docker attempt=1 ok duration=...
-  step assert_stack_running attempt=1 ok duration=...
-  step capture_stack_summary attempt=1 ok duration=...
-  step assert_boot_logs_branch attempt=1 ok duration=...
-- case_2 ok steps=4 duration=... stopped_at=assert_boot_logs_branch replay_anchor=cp_1
-Summary: 1 journey executed, 1 case executed, 0 failed
+  step assert_stack_ready attempt=1 ok duration=...
+  step capture_baseline_state attempt=1 ok duration=...
+  step increment_counter attempt=1 ok duration=...
+  step assert_increment_branch attempt=1 ok duration=...
+- case_1 ok steps=5 duration=...
+- case_2 start branches={bg_1=branch_2}
+  step read_counter_state attempt=1 ok duration=...
+  step assert_restored_counter_branch attempt=1 ok duration=...
+- case_2 ok steps=5 duration=... replay_anchor=cp_1
+Summary: 1 journey executed, 2 cases executed, 0 failed
 ```
 
-That `replay_anchor=cp_1` is the important bit. It shows that the branch is associated with the saved Docker
-checkpoint. During a full two-case run, Journey restores the `after_boot` snapshot before it continues into the later
-branch.
+That second case is the whole point. Branch A already changed the counter to `1`, but branch B still reads `0`
+because Journey restored the `after_boot` Docker snapshot before `read_counter_state` ran.
+
+### Target the Restore Branch While Iterating
+
+```bash
+uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py --step assert_restored_counter_branch
+```
+
+That targeted run still reports `replay_anchor=cp_1`, so you can focus on the restore branch without changing the
+checkpoint behavior.
 
 `store_docker(...)` and `restore_docker(...)` are strict on purpose. In v1 they aim for exact rollback of container
 filesystems plus Docker-managed volume contents, so they reject bind mounts, external volumes, read-only mounts, and

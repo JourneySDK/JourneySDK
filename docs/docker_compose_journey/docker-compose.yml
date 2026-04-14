@@ -1,16 +1,40 @@
 services:
-  app:
-    image: busybox:1.36
-    command:
-      - sh
-      - -c
-      - |
-        mkdir -p /data
-        echo "Journey docker demo ready" >/data/state.txt
-        echo "Journey docker demo ready"
-        sleep 300
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: journey_demo
+      POSTGRES_USER: journey
+      POSTGRES_PASSWORD: journey
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U journey -d journey_demo
+      interval: 2s
+      timeout: 2s
+      retries: 20
     volumes:
-      - app_data:/data
+      - db_data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: ./app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_PORT: "8000"
+      DATABASE_URL: postgresql://journey:journey@db:5432/journey_demo
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2).read()
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    ports:
+      - "127.0.0.1:${JOURNEY_DOCKER_DOCS_PORT:-18080}:8000"
 
 volumes:
-  app_data: {}
+  db_data: {}

@@ -1,65 +1,243 @@
-"""Tutorial journey showing Docker Compose checkpoint-started branches."""
+"""Tutorial journey showing Docker Compose checkpoint rewind with app+db state."""
 
 from __future__ import annotations
 
+import json
+import os
+from collections.abc import Mapping
 from pathlib import Path
+import urllib.request
 
 from journey import branch, checkpoint, journey, step
 from journey.tools.docker import (
     DockerComposeStack,
+    DockerContainerStatus,
     restore_docker,
     run_docker,
     store_docker,
 )
 
 _COMPOSE_FILE = Path(__file__).with_name("docker-compose.yml")
+_DEFAULT_APP_PORT = 18080
 
 
-def assert_stack_running(stack: DockerComposeStack) -> bool:
-    """Confirm that the demo Compose app is up before snapshotting it."""
+def _app_base_url() -> str:
+    port = os.environ.get("JOURNEY_DOCKER_DOCS_PORT", str(_DEFAULT_APP_PORT)).strip()
+    return f"http://127.0.0.1:{port or _DEFAULT_APP_PORT}"
 
-    app_statuses = stack.statuses.get("app")
-    if not app_statuses:
-        raise AssertionError("Expected one 'app' service in Docker Compose statuses.")
-    app_status = app_statuses[0]
-    if app_status.state != "running":
+
+def _fetch_json(path: str, *, method: str = "GET") -> dict[str, object]:
+    request = urllib.request.Request(
+        f"{_app_base_url()}{path}",
+        method=method,
+        headers={"Accept": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        raw_body = response.read().decode("utf-8")
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
         raise AssertionError(
-            f"Expected app service to be running, got {app_status.state!r}."
+            f"Expected JSON from Docker demo endpoint {path!r}, got: {raw_body!r}."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise AssertionError(
+            f"Expected a JSON object from Docker demo endpoint {path!r}, got {type(payload).__name__}."
         )
-    return True
+    return payload
 
 
-def capture_stack_summary(stack: DockerComposeStack) -> dict[str, str]:
-    """Read one small serializable summary from the running Docker stack."""
+def _require_service_status(
+    stack: DockerComposeStack,
+    service: str,
+) -> DockerContainerStatus:
+    statuses = stack.statuses.get(service)
+    if not statuses:
+        raise AssertionError(
+            f"Expected one {service!r} service in Docker Compose statuses."
+        )
+    if len(statuses) != 1:
+        raise AssertionError(
+            f"Expected exactly one {service!r} container, got {len(statuses)}."
+        )
+    return statuses[0]
 
-    app_statuses = stack.statuses.get("app")
-    if not app_statuses:
-        raise AssertionError("Expected one 'app' service in Docker Compose statuses.")
-    app_status = app_statuses[0]
-    app_logs = stack.logs.get("app", "")
+
+def _assert_running_healthy(
+    status: DockerContainerStatus,
+    *,
+    service: str,
+) -> None:
+    if status.state != "running":
+        raise AssertionError(
+            f"Expected {service!r} to be running, got {status.state!r}."
+        )
+    if status.health != "healthy":
+        raise AssertionError(
+            f"Expected {service!r} to be healthy, got {status.health!r}."
+        )
+
+
+def _require_int_field(
+    payload: Mapping[str, object],
+    *,
+    field: str,
+    owner: str,
+) -> int:
+    value = payload.get(field)
+    if not isinstance(value, int):
+        raise AssertionError(
+            f"{owner} expected integer field {field!r}, got {value!r}."
+        )
+    return value
+
+
+def _require_string_field(
+    payload: Mapping[str, object],
+    *,
+    field: str,
+    owner: str,
+) -> str:
+    value = payload.get(field)
+    if not isinstance(value, str) or not value:
+        raise AssertionError(
+            f"{owner} expected non-empty string field {field!r}, got {value!r}."
+        )
+    return value
+
+
+def _parse_counter_payload(
+    payload: Mapping[str, object],
+    *,
+    owner: str,
+) -> dict[str, object]:
     return {
-        "state": app_status.state,
-        "logs": app_logs,
+        "count": _require_int_field(payload, field="count", owner=owner),
+        "database": _require_string_field(payload, field="database", owner=owner),
     }
 
 
-def assert_running_branch(summary: dict[str, str]) -> bool:
-    """Confirm that the rewound branch still sees a running app service."""
+def _parse_increment_payload(
+    payload: Mapping[str, object],
+    *,
+    owner: str,
+) -> dict[str, int]:
+    return {
+        "before": _require_int_field(payload, field="before", owner=owner),
+        "after": _require_int_field(payload, field="after", owner=owner),
+    }
 
-    if summary.get("state") != "running":
+
+def assert_stack_ready(stack: DockerComposeStack) -> bool:
+    """Confirm that the demo app and database are healthy before snapshotting."""
+
+    app_status = _require_service_status(stack, "app")
+    db_status = _require_service_status(stack, "db")
+    _assert_running_healthy(app_status, service="app")
+    _assert_running_healthy(db_status, service="db")
+
+    health_payload = _fetch_json("/health")
+    status = _require_string_field(
+        health_payload,
+        field="status",
+        owner="assert_stack_ready",
+    )
+    database = _require_string_field(
+        health_payload,
+        field="database",
+        owner="assert_stack_ready",
+    )
+    if status != "ok" or database != "ready":
         raise AssertionError(
-            f"Expected app state 'running', got {summary.get('state')!r}."
+            "Expected Docker demo /health endpoint to report status='ok' and database='ready'."
         )
     return True
 
 
-def assert_boot_logs_branch(summary: dict[str, str]) -> bool:
-    """Confirm that the rewound branch still sees the boot log line."""
+def capture_baseline_state(stack: DockerComposeStack) -> dict[str, object]:
+    """Read one small serializable baseline payload from the running app."""
 
-    logs = summary.get("logs", "")
-    if "Journey docker demo ready" not in logs:
+    app_status = _require_service_status(stack, "app")
+    db_status = _require_service_status(stack, "db")
+    counter_payload = _parse_counter_payload(
+        _fetch_json("/counter"),
+        owner="capture_baseline_state",
+    )
+    return {
+        "count": counter_payload["count"],
+        "database": counter_payload["database"],
+        "app_state": app_status.state,
+        "db_health": db_status.health,
+    }
+
+
+def increment_counter(stack: DockerComposeStack) -> dict[str, int]:
+    """Mutate the app+db state in one branch."""
+
+    del stack
+    return _parse_increment_payload(
+        _fetch_json("/counter/increment", method="POST"),
+        owner="increment_counter",
+    )
+
+
+def read_counter_state(stack: DockerComposeStack) -> dict[str, object]:
+    """Read the counter after Journey restores the saved Docker snapshot."""
+
+    del stack
+    return _parse_counter_payload(
+        _fetch_json("/counter"),
+        owner="read_counter_state",
+    )
+
+
+def assert_increment_branch(
+    baseline: Mapping[str, object],
+    incremented: Mapping[str, object],
+) -> bool:
+    """Confirm that the mutation branch changed the database-backed counter."""
+
+    baseline_count = _require_int_field(
+        baseline,
+        field="count",
+        owner="assert_increment_branch",
+    )
+    before = _require_int_field(
+        incremented,
+        field="before",
+        owner="assert_increment_branch",
+    )
+    after = _require_int_field(
+        incremented,
+        field="after",
+        owner="assert_increment_branch",
+    )
+    if before != baseline_count or after != baseline_count + 1:
         raise AssertionError(
-            "Expected app logs to contain the Docker demo boot message."
+            f"Expected counter transition {baseline_count}->{baseline_count + 1}, got {before}->{after}."
+        )
+    return True
+
+
+def assert_restored_counter_branch(
+    baseline: Mapping[str, object],
+    restored: Mapping[str, object],
+) -> bool:
+    """Confirm that the rewind branch sees the original baseline state again."""
+
+    baseline_count = _require_int_field(
+        baseline,
+        field="count",
+        owner="assert_restored_counter_branch",
+    )
+    restored_count = _require_int_field(
+        restored,
+        field="count",
+        owner="assert_restored_counter_branch",
+    )
+    if restored_count != baseline_count:
+        raise AssertionError(
+            f"Expected restored counter {baseline_count}, got {restored_count}."
         )
     return True
 
@@ -70,17 +248,20 @@ def docker_compose_journey() -> None:
         run_docker(
             compose_file=_COMPOSE_FILE,
             project_name="journey-docker-docs",
+            wait_timeout=60,
         )
     )
-    step(assert_stack_running, stack)
+    step(assert_stack_ready, stack)
     after_boot = checkpoint(
         stack,
         store=store_docker,
         restore=restore_docker,
         snapshot_name="after_boot",
     )
-    summary = step(capture_stack_summary, stack)
+    baseline = step(capture_baseline_state, stack)
     if branch(start_from=after_boot):
-        step(assert_running_branch, summary)
+        incremented = step(increment_counter, stack)
+        step(assert_increment_branch, baseline, incremented)
     elif branch(start_from=after_boot):
-        step(assert_boot_logs_branch, summary)
+        restored = step(read_counter_state, stack)
+        step(assert_restored_counter_branch, baseline, restored)

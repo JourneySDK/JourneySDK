@@ -64,6 +64,7 @@ def _inspect_row(
     mount_type: str = "volume",
     read_write: bool = True,
     health: str | None = "healthy",
+    mounts: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     health_block: dict[str, str] | None = None
     if health is not None:
@@ -85,7 +86,9 @@ def _inspect_row(
             "FinishedAt": "0001-01-01T00:00:00Z",
             "Health": health_block,
         },
-        "Mounts": [
+        "Mounts": mounts
+        if mounts is not None
+        else [
             {
                 "Type": mount_type,
                 "Name": volume_name,
@@ -102,6 +105,7 @@ class _FakeDockerRuntime:
         self,
         *,
         compose_config: dict[str, object] | None = None,
+        compose_config_yaml: str | None = None,
         live_ps_rows: list[dict[str, str]] | None = None,
         live_inspect_rows: list[dict[str, object]] | None = None,
         restored_ps_rows: list[dict[str, str]] | None = None,
@@ -116,6 +120,10 @@ class _FakeDockerRuntime:
                 "demo_data": {},
             },
         }
+        self.compose_config_yaml = (
+            compose_config_yaml
+            or "services:\n  web:\n    image: demo-web:latest\n"
+        )
         self.live_ps_rows = live_ps_rows or [
             _ps_row("web-container-1", "demo-web-1", "web"),
         ]
@@ -165,7 +173,7 @@ class _FakeDockerRuntime:
         if args[:2] == ["docker", "compose"] and "config" in args:
             format_value = args[args.index("--format") + 1]
             if format_value == "yaml":
-                return "services:\n  web:\n    image: demo-web:latest\n"
+                return self.compose_config_yaml
             if format_value == "json":
                 return json.dumps(self.compose_config)
 
@@ -635,34 +643,149 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
     tmp_path: Path,
 ):
     compose_file = _write_compose_file(tmp_path)
-    runtime = _FakeDockerRuntime()
+    runtime = _FakeDockerRuntime(
+        compose_config={
+            "services": {
+                "app": {"image": "demo-app:latest"},
+                "db": {"image": "postgres:16-alpine"},
+            },
+            "volumes": {"db_data": {}},
+        },
+        compose_config_yaml=(
+            "services:\n"
+            "  app:\n"
+            "    image: demo-app:latest\n"
+            "  db:\n"
+            "    image: postgres:16-alpine\n"
+            "volumes:\n"
+            "  db_data: {}\n"
+        ),
+        live_ps_rows=[
+            _ps_row("app-container-1", "demo-app-1", "app"),
+            _ps_row("db-container-1", "demo-db-1", "db"),
+        ],
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="app-container-1",
+                name="demo-app-1",
+                service="app",
+                image="demo-app:latest",
+                mounts=[],
+            ),
+            _inspect_row(
+                container_id="db-container-1",
+                name="demo-db-1",
+                service="db",
+                image="postgres:16-alpine",
+                volume_name="demo_db_data",
+                destination="/var/lib/postgresql/data",
+            ),
+        ],
+        restored_ps_rows=[
+            _ps_row("app-container-2", "demo-app-1", "app"),
+            _ps_row("db-container-2", "demo-db-1", "db"),
+        ],
+        restored_inspect_rows=[
+            _inspect_row(
+                container_id="app-container-2",
+                name="demo-app-1",
+                service="app",
+                image="journey-sdk-snapshot:demo-after-boot-app-1",
+                mounts=[],
+            ),
+            _inspect_row(
+                container_id="db-container-2",
+                name="demo-db-1",
+                service="db",
+                image="journey-sdk-snapshot:demo-after-boot-db-1",
+                volume_name="demo_db_data",
+                destination="/var/lib/postgresql/data",
+            ),
+        ],
+        logs_by_service={
+            "app": "app-1  | 2026-04-14T10:00:01Z listening\n",
+            "db": "db-1  | 2026-04-14T10:00:00Z ready\n",
+        },
+    )
+    runtime.volume_names = {"demo_db_data"}
     monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
     monkeypatch.setattr(journey_docker, "_run_cli", runtime)
     events: list[str] = []
+    counter = {"value": 0}
+    snapshots: dict[str, int] = {}
 
-    def assert_stack_running(stack: journey_docker.DockerComposeStack) -> bool:
-        status = stack.statuses["web"][0]
-        events.append(f"ready_{status.container_id}")
-        return status.state == "running"
-
-    def capture_stack_summary(
-        stack: journey_docker.DockerComposeStack,
-    ) -> dict[str, str]:
-        status = stack.statuses["web"][0]
-        events.append(f"shared_{status.container_id}")
-        return {
-            "state": status.state,
-            "logs": stack.logs["web"],
-        }
-
-    def assert_running_branch(summary: dict[str, str]) -> bool:
-        events.append(f"branch_running_{summary['state']}")
-        assert summary["state"] == "running"
+    def assert_stack_ready(stack: journey_docker.DockerComposeStack) -> bool:
+        app_status = stack.statuses["app"][0]
+        db_status = stack.statuses["db"][0]
+        events.append(f"ready_{app_status.container_id}_{db_status.container_id}")
+        assert app_status.state == "running"
+        assert app_status.health == "healthy"
+        assert db_status.state == "running"
+        assert db_status.health == "healthy"
         return True
 
-    def assert_logs_branch(summary: dict[str, str]) -> bool:
-        events.append("branch_logs")
-        assert "booted" in summary["logs"]
+    def store_snapshot(
+        stack: journey_docker.DockerComposeStack,
+        *,
+        snapshot_name: str,
+    ) -> None:
+        snapshots[snapshot_name] = counter["value"]
+        events.append(f"store_{snapshot_name}_{counter['value']}")
+        journey_docker.store_docker(stack, snapshot_name=snapshot_name)
+
+    def restore_snapshot(
+        stack: journey_docker.DockerComposeStack,
+        *,
+        snapshot_name: str,
+    ) -> None:
+        counter["value"] = snapshots[snapshot_name]
+        events.append(f"restore_{snapshot_name}_{counter['value']}")
+        journey_docker.restore_docker(stack, snapshot_name=snapshot_name)
+
+    def capture_baseline_state(
+        stack: journey_docker.DockerComposeStack,
+    ) -> dict[str, object]:
+        app_status = stack.statuses["app"][0]
+        db_status = stack.statuses["db"][0]
+        events.append(f"baseline_{counter['value']}_{app_status.container_id}")
+        return {
+            "count": counter["value"],
+            "app_state": app_status.state,
+            "db_health": db_status.health,
+        }
+
+    def increment_counter(
+        stack: journey_docker.DockerComposeStack,
+    ) -> dict[str, int]:
+        del stack
+        before = counter["value"]
+        counter["value"] += 1
+        events.append(f"increment_{before}_{counter['value']}")
+        return {"before": before, "after": counter["value"]}
+
+    def assert_increment_branch(
+        baseline: dict[str, object],
+        incremented: dict[str, int],
+    ) -> bool:
+        events.append(f"assert_increment_{incremented['after']}")
+        assert incremented["before"] == baseline["count"]
+        assert incremented["after"] == baseline["count"] + 1
+        return True
+
+    def read_counter_state(
+        stack: journey_docker.DockerComposeStack,
+    ) -> dict[str, int]:
+        app_status = stack.statuses["app"][0]
+        events.append(f"read_{counter['value']}_{app_status.container_id}")
+        return {"count": counter["value"]}
+
+    def assert_restored_counter_branch(
+        baseline: dict[str, object],
+        current: dict[str, int],
+    ) -> bool:
+        events.append(f"assert_restored_{current['count']}")
+        assert baseline["count"] == 0
+        assert current["count"] == baseline["count"]
         return True
 
     def journey():
@@ -672,26 +795,32 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
                 project_name="demo",
             )
         )
-        journey_sdk.step(assert_stack_running, stack)
+        journey_sdk.step(assert_stack_ready, stack)
         after_boot = journey_sdk.checkpoint(
             stack,
-            store=journey_docker.store_docker,
-            restore=journey_docker.restore_docker,
+            store=store_snapshot,
+            restore=restore_snapshot,
             snapshot_name="after_boot",
         )
-        summary = journey_sdk.step(capture_stack_summary, stack)
+        baseline = journey_sdk.step(capture_baseline_state, stack)
         if journey_sdk.branch(start_from=after_boot):
-            journey_sdk.step(assert_running_branch, summary)
+            incremented = journey_sdk.step(increment_counter, stack)
+            journey_sdk.step(assert_increment_branch, baseline, incremented)
         elif journey_sdk.branch(start_from=after_boot):
-            journey_sdk.step(assert_logs_branch, summary)
+            current = journey_sdk.step(read_counter_state, stack)
+            journey_sdk.step(assert_restored_counter_branch, baseline, current)
 
     report = journey_sdk.execute(journey)
 
     assert events == [
-        "ready_web-container-1",
-        "shared_web-container-1",
-        "branch_running_running",
-        "branch_logs",
+        "ready_app-container-1_db-container-1",
+        "store_after_boot_0",
+        "baseline_0_app-container-1",
+        "increment_0_1",
+        "assert_increment_1",
+        "restore_after_boot_0",
+        "read_0_app-container-2",
+        "assert_restored_0",
     ]
     assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
     assert [
@@ -700,22 +829,25 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
     ] == [
         [
             "run_docker",
-            "assert_stack_running",
-            "capture_stack_summary",
-            "assert_running_branch",
+            "assert_stack_ready",
+            "capture_baseline_state",
+            "increment_counter",
+            "assert_increment_branch",
         ],
         [
             "run_docker",
-            "assert_stack_running",
-            "capture_stack_summary",
-            "assert_logs_branch",
+            "assert_stack_ready",
+            "capture_baseline_state",
+            "read_counter_state",
+            "assert_restored_counter_branch",
         ],
     ]
+    assert events.count("store_after_boot_0") == 1
     assert sum(
         1
         for owner, command in runtime.commands
         if owner == "store_docker" and "commit" in command
-    ) == 1
+    ) == 2
     assert sum(
         1
         for owner, command in runtime.commands
