@@ -1,10 +1,10 @@
-"""Tutorial journey showing Docker Compose app snapshots."""
+"""Tutorial journey showing Docker Compose checkpoint-started branches."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from journey import checkpoint, journey, step
+from journey import branch, checkpoint, journey, step
 from journey.tools.docker import (
     DockerComposeStack,
     restore_docker,
@@ -29,23 +29,38 @@ def assert_stack_running(stack: DockerComposeStack) -> bool:
     return True
 
 
-def assert_boot_logs(stack: DockerComposeStack) -> bool:
-    """Confirm that the boot log line is still visible after restore."""
+def capture_stack_summary(stack: DockerComposeStack) -> dict[str, str]:
+    """Read one small serializable summary from the running Docker stack."""
 
+    app_statuses = stack.statuses.get("app")
+    if not app_statuses:
+        raise AssertionError("Expected one 'app' service in Docker Compose statuses.")
+    app_status = app_statuses[0]
     app_logs = stack.logs.get("app", "")
-    if "Journey docker demo ready" not in app_logs:
+    return {
+        "state": app_status.state,
+        "logs": app_logs,
+    }
+
+
+def assert_running_branch(summary: dict[str, str]) -> bool:
+    """Confirm that the rewound branch still sees a running app service."""
+
+    if summary.get("state") != "running":
         raise AssertionError(
-            "Expected app logs to contain the Docker demo boot message."
+            f"Expected app state 'running', got {summary.get('state')!r}."
         )
     return True
 
 
-def assert_stack_is_still_running(stack: DockerComposeStack) -> bool:
-    """Confirm that later steps can keep using the restored stack descriptor."""
+def assert_boot_logs_branch(summary: dict[str, str]) -> bool:
+    """Confirm that the rewound branch still sees the boot log line."""
 
-    app_statuses = stack.statuses.get("app")
-    if not app_statuses or app_statuses[0].state != "running":
-        raise AssertionError("Expected app service to still be running.")
+    logs = summary.get("logs", "")
+    if "Journey docker demo ready" not in logs:
+        raise AssertionError(
+            "Expected app logs to contain the Docker demo boot message."
+        )
     return True
 
 
@@ -58,11 +73,14 @@ def docker_compose_journey() -> None:
         )
     )
     step(assert_stack_running, stack)
-    checkpoint(
+    after_boot = checkpoint(
         stack,
         store=store_docker,
         restore=restore_docker,
         snapshot_name="after_boot",
     )
-    step(assert_boot_logs, stack)
-    step(assert_stack_is_still_running, stack)
+    summary = step(capture_stack_summary, stack)
+    if branch(start_from=after_boot):
+        step(assert_running_branch, summary)
+    elif branch(start_from=after_boot):
+        step(assert_boot_logs_branch, summary)

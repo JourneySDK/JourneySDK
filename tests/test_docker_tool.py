@@ -630,6 +630,99 @@ def test_journey_retry_from_checkpoint_restores_docker_snapshot_once(
     assert (tmp_path / "cache" / "demo" / "after_boot" / "manifest.json").exists()
 
 
+def test_execute_checkpoint_started_branches_restore_docker_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+    events: list[str] = []
+
+    def assert_stack_running(stack: journey_docker.DockerComposeStack) -> bool:
+        status = stack.statuses["web"][0]
+        events.append(f"ready_{status.container_id}")
+        return status.state == "running"
+
+    def capture_stack_summary(
+        stack: journey_docker.DockerComposeStack,
+    ) -> dict[str, str]:
+        status = stack.statuses["web"][0]
+        events.append(f"shared_{status.container_id}")
+        return {
+            "state": status.state,
+            "logs": stack.logs["web"],
+        }
+
+    def assert_running_branch(summary: dict[str, str]) -> bool:
+        events.append(f"branch_running_{summary['state']}")
+        assert summary["state"] == "running"
+        return True
+
+    def assert_logs_branch(summary: dict[str, str]) -> bool:
+        events.append("branch_logs")
+        assert "booted" in summary["logs"]
+        return True
+
+    def journey():
+        stack = journey_sdk.step(
+            journey_docker.run_docker(
+                compose_file=compose_file,
+                project_name="demo",
+            )
+        )
+        journey_sdk.step(assert_stack_running, stack)
+        after_boot = journey_sdk.checkpoint(
+            stack,
+            store=journey_docker.store_docker,
+            restore=journey_docker.restore_docker,
+            snapshot_name="after_boot",
+        )
+        summary = journey_sdk.step(capture_stack_summary, stack)
+        if journey_sdk.branch(start_from=after_boot):
+            journey_sdk.step(assert_running_branch, summary)
+        elif journey_sdk.branch(start_from=after_boot):
+            journey_sdk.step(assert_logs_branch, summary)
+
+    report = journey_sdk.execute(journey)
+
+    assert events == [
+        "ready_web-container-1",
+        "shared_web-container-1",
+        "branch_running_running",
+        "branch_logs",
+    ]
+    assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
+    assert [
+        [record.label for record in case.records if record.label is not None]
+        for case in report.case_reports
+    ] == [
+        [
+            "run_docker",
+            "assert_stack_running",
+            "capture_stack_summary",
+            "assert_running_branch",
+        ],
+        [
+            "run_docker",
+            "assert_stack_running",
+            "capture_stack_summary",
+            "assert_logs_branch",
+        ],
+    ]
+    assert sum(
+        1
+        for owner, command in runtime.commands
+        if owner == "store_docker" and "commit" in command
+    ) == 1
+    assert sum(
+        1
+        for owner, command in runtime.commands
+        if owner == "restore_docker" and "down" in command
+    ) == 1
+
+
 def test_journey_resume_restores_docker_snapshot_with_saved_checkpoint_args(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

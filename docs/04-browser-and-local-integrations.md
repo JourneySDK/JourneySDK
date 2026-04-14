@@ -114,6 +114,9 @@ Read these files together:
 - `docs/docker_compose_journey/docker_compose_journey.py`
 - `docs/docker_compose_journey/docker-compose.yml`
 
+This example is intentionally branched. It shows one shared Docker setup, one hooked checkpoint, and two later
+branches that both start from the same `after_boot` anchor.
+
 The Docker helper is still just a normal Journey step factory:
 
 ```python
@@ -125,25 +128,37 @@ stack = step(
 )
 ```
 
-Later steps can inspect the live stack through plain Python attributes:
+The shared setup still reads like plain Python:
 
 ```python
-def assert_stack_running(stack: DockerComposeStack) -> bool:
-    app_statuses = stack.statuses.get("app")
-    if not app_statuses or app_statuses[0].state != "running":
-        raise AssertionError("Expected app service to be running.")
-    return True
+stack = step(
+    run_docker(
+        compose_file=_COMPOSE_FILE,
+        project_name="journey-docker-docs",
+    )
+)
+step(assert_stack_running, stack)
 ```
 
-And the checkpoint stays explicit about what gets stored and restored:
+The checkpoint stays explicit about what gets stored and restored:
 
 ```python
-checkpoint(
+after_boot = checkpoint(
     stack,
     store=store_docker,
     restore=restore_docker,
     snapshot_name="after_boot",
 )
+```
+
+And the branch structure mirrors Journey's other checkpoint-started examples:
+
+```python
+summary = step(capture_stack_summary, stack)
+if branch(start_from=after_boot):
+    step(assert_running_branch, summary)
+elif branch(start_from=after_boot):
+    step(assert_boot_logs_branch, summary)
 ```
 
 ### Plan the Docker Journey
@@ -152,11 +167,36 @@ checkpoint(
 uv run journey plan --file docs/docker_compose_journey/docker_compose_journey.py
 ```
 
-### Execute the Docker Journey
+```console
+Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
+journey_id=docker_compose_journey function_ref=...
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['run_docker', 'assert_stack_running', 'capture_stack_summary', 'assert_running_branch']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['run_docker', 'assert_stack_running', 'capture_stack_summary', 'assert_boot_logs_branch']
+
+Summary: 1 journey planned, 2 cases planned, 0 failed
+```
+
+### Target the Second Docker Branch
 
 ```bash
-uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py
+uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py --step assert_boot_logs_branch
 ```
+
+```console
+Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
+journey_id=docker_compose_journey function_ref=...
+- case_2 start branches={bg_1=branch_2}
+  step run_docker attempt=1 ok duration=...
+  step assert_stack_running attempt=1 ok duration=...
+  step capture_stack_summary attempt=1 ok duration=...
+  step assert_boot_logs_branch attempt=1 ok duration=...
+- case_2 ok steps=4 duration=... stopped_at=assert_boot_logs_branch replay_anchor=cp_1
+Summary: 1 journey executed, 1 case executed, 0 failed
+```
+
+That `replay_anchor=cp_1` is the important bit. It shows that the branch is associated with the saved Docker
+checkpoint. During a full two-case run, Journey restores the `after_boot` snapshot before it continues into the later
+branch.
 
 `store_docker(...)` and `restore_docker(...)` are strict on purpose. In v1 they aim for exact rollback of container
 filesystems plus Docker-managed volume contents, so they reject bind mounts, external volumes, read-only mounts, and

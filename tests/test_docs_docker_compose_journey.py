@@ -37,19 +37,35 @@ def test_docker_compose_example_compiles_without_touching_docker(
     second_plan = journey.compile_journey(reloaded.docker_compose_journey)
 
     monkeypatch.setattr(journey_docker.subprocess, "run", original_run)
-    assert _case_labels(first_plan) == [
+    assert sorted(_case_labels(first_plan)) == sorted(
         [
-            "run_docker",
-            "assert_stack_running",
-            "assert_boot_logs",
-            "assert_stack_is_still_running",
+            [
+                "run_docker",
+                "assert_stack_running",
+                "capture_stack_summary",
+                "assert_running_branch",
+            ],
+            [
+                "run_docker",
+                "assert_stack_running",
+                "capture_stack_summary",
+                "assert_boot_logs_branch",
+            ],
         ]
-    ]
-    assert _case_labels(second_plan) == [
+    )
+    assert sorted(_case_labels(second_plan)) == sorted(
         [
-            "run_docker",
-            "assert_stack_running",
-            "assert_boot_logs",
-            "assert_stack_is_still_running",
+            [
+                "run_docker",
+                "assert_stack_running",
+                "capture_stack_summary",
+                "assert_running_branch",
+            ],
+            [
+                "run_docker",
+                "assert_stack_running",
+                "capture_stack_summary",
+                "assert_boot_logs_branch",
+            ],
         ]
-    ]
+    )
