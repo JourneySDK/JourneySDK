@@ -1,4 +1,4 @@
-"""Internal helpers for public webhook tooling."""
+"""Internal helpers for webhook tooling."""
 
 from __future__ import annotations
 

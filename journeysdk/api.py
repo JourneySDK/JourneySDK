@@ -1,4 +1,4 @@
-"""Public authoring primitives for journey."""
+"""Authoring primitives for journey."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def journey(fn: Callable[P, R]) -> Callable[P, R]:
 
 
 def is_journey_callable(obj: Any) -> bool:
-    """Return whether a callable was marked with the public journey decorator."""
+    """Return whether a callable was marked with the journey decorator."""
 
     return callable(obj) and bool(getattr(obj, _JOURNEY_MARKER_ATTR, False))
 

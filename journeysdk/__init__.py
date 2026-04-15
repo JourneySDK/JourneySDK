@@ -1,4 +1,4 @@
-"""journey v1 public API."""
+"""journey v1 API."""
 
 from .api import branch, checkpoint, journey, step
 from .errors import (

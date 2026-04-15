@@ -1,6 +1,6 @@
 # Installation And CLI
 
-Run every command in this guide from the `public/` repository root.
+Run every command in this guide from the repository root.
 
 ## Install The Python Package
 
@@ -16,7 +16,7 @@ Add Journey SDK to a `uv` project:
 uv add journey-sdk
 ```
 
-Import the public API from `journeysdk`:
+Import the Journey SDK API from `journeysdk`:
 
 ```python
 from journeysdk import journey, step

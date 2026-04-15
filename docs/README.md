@@ -7,7 +7,7 @@ This directory does two jobs:
 - it contains the runnable tutorial journeys under `docs/<journey_name>/...`
 - it contains the handbook pages in this directory that explain why each pattern exists and what a healthy run looks like
 
-Run every command in this handbook from the `public/` repository root.
+Run every command in this handbook from the repository root.
 
 ## Before You Start
 

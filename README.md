@@ -227,7 +227,7 @@ saved progress; delete the file when you want to start fresh.
 
 ## How it works
 
-1. Write a journey in Python using the public primitives from `journeysdk/api.py`.
+1. Write a journey in Python using the primitives from `journeysdk/api.py`.
 2. Compile it in dry-run mode with `journey plan`, which turns the authored journey into linear cases.
 3. Execute all cases, or just the case that reaches one target step label, with `journey execute`.
 

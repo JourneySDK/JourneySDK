@@ -10,7 +10,7 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 
 ## Key files
 
-- `journeysdk/api.py`: public API that QA can use to write journeys
+- `journeysdk/api.py`: SDK API that QA can use to write journeys
 - `journeysdk/tools/email.py`: official email tool entrypoint
 - `journeysdk/tools/webhook.py`: official webhook tool entrypoint
 - `journeysdk/planner.py`: journey compilation (aka planning)
@@ -50,7 +50,7 @@ flow that reaches a target step label.
 - The first API key to reserve a cloud resource should own it from then on.
 - That first-key-wins rule should be consistent across cloud tools, whether the reserved identifier is a webhook path,
   a mail inbox, or another cloud-managed handle.
-- Public callback URLs may remain unauthenticated when the generated URL itself is the capability used by the system
+- Callback URLs may remain unauthenticated when the generated URL itself is the capability used by the system
   under test.
 
 ## Change guidance
@@ -58,10 +58,10 @@ flow that reaches a target step label.
 - Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
 - Keep the shared cloud auth and reservation pattern documented anywhere an official cloud tool is introduced.
-- Keep docstrings in `journeysdk/api.py` up to date (it is the public API).
+- Keep docstrings in `journeysdk/api.py` up to date (it is the SDK API).
 - Prefer adding or updating tests before changing planner, executor, or validator semantics.
 - When changing step-label behavior, check both full execution and targeted `--step` execution.
 - When changing branch behavior, verify case counts, label paths, ambiguity handling, and replay-anchor reporting.
 - Showcase every user-facing feature with runnable and documented examples in `docs/`.
 - Follow strict typing.
-- Do not reference non-public service implementation details in public docs, tests, or code.
+- Do not reference private service implementation details in docs, tests, or code.
