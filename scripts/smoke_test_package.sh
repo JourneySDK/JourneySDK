@@ -13,6 +13,8 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
+rm -rf "$ROOT_DIR/build"
+
 echo "Building wheel and sdist..."
 uv build
 
