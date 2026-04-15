@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from journey import journey, step
+from journeysdk import journey, step
 
 
 def reset_demo_state(*, state_path: str | Path | None = None) -> None:

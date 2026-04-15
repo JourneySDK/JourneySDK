@@ -3,12 +3,12 @@ from __future__ import annotations
 import inspect
 import pickle
 
-import journey.errors as journey_errors
-import journey.executor as journey_executor
-import journey.models as journey_models
-import journey as journey_sdk
+import journeysdk.errors as journey_errors
+import journeysdk.executor as journey_executor
+import journeysdk.models as journey_models
+import journeysdk as journey_sdk
 import pytest
-from journey.errors import (
+from journeysdk.errors import (
     AmbiguousStepSelectionError,
     CallableExecutionError,
     CorruptExecutionStateError,
@@ -20,8 +20,8 @@ from journey.errors import (
     UnsupportedControlFlowError,
     UnsupportedLoopError,
 )
-from journey.models import BranchMarkerNode, CheckpointNode, StepNode, StepRetry
-from journey.state import ExecutionStateEnvelope, SelectedCaseState
+from journeysdk.models import BranchMarkerNode, CheckpointNode, StepNode, StepRetry
+from journeysdk.state import ExecutionStateEnvelope, SelectedCaseState
 
 
 def _labels(case_plan):
@@ -180,22 +180,22 @@ def _execute_with_observer(journey, observer, *, step=None, state=None):
 
 def test_legacy_result_objects_and_errors_are_not_public():
     for statement in (
-        "from journey.models import EvalResult",
-        "from journey.models import WaitResult",
-        "from journey.models import RunResult",
-        "from journey.models import RunContext",
-        "from journey.models import RetryPolicy",
-        "from journey import EvalResult",
-        "from journey import WaitResult",
-        "from journey import RunResult",
-        "from journey import RetryPolicy",
-        "from journey import retry",
-        "from journey.errors import DuplicateBranchKeyError",
-        "from journey import DuplicateBranchKeyError",
-        "from journey.errors import EvaluationFailedError",
-        "from journey.errors import WaitFailedError",
-        "from journey import EvaluationFailedError",
-        "from journey import WaitFailedError",
+        "from journeysdk.models import EvalResult",
+        "from journeysdk.models import WaitResult",
+        "from journeysdk.models import RunResult",
+        "from journeysdk.models import RunContext",
+        "from journeysdk.models import RetryPolicy",
+        "from journeysdk import EvalResult",
+        "from journeysdk import WaitResult",
+        "from journeysdk import RunResult",
+        "from journeysdk import RetryPolicy",
+        "from journeysdk import retry",
+        "from journeysdk.errors import DuplicateBranchKeyError",
+        "from journeysdk import DuplicateBranchKeyError",
+        "from journeysdk.errors import EvaluationFailedError",
+        "from journeysdk.errors import WaitFailedError",
+        "from journeysdk import EvaluationFailedError",
+        "from journeysdk import WaitFailedError",
     ):
         with pytest.raises(ImportError):
             exec(statement, {})

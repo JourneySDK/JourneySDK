@@ -11,6 +11,8 @@ Run every command in this handbook from the `public/` repository root.
 
 ## Before You Start
 
+- Start with [00 Installation and CLI](00-installation-and-cli.md) if you need to install the package, install the
+  persistent `journey` command, or work from a local checkout.
 - Use `uv run journey plan --file ...` when you want to see compiled cases without executing side effects.
 - Use `uv run journey execute --file ...` when you want to run those cases.
 - Install Playwright only for the browser chapter:
@@ -30,15 +32,18 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 
 ## Reading Order
 
-1. [01 Getting Started](01-getting-started.md)
-2. [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md)
-3. [03 Retries and Resume](03-retries-and-resume.md)
-4. [04 Browser and Local Integrations](04-browser-and-local-integrations.md)
-5. [05 Journey Cloud Integrations](05-journey-cloud-integrations.md)
-6. [06 Debugging and Failure Modes](06-debugging-and-failure-modes.md)
+1. [00 Installation and CLI](00-installation-and-cli.md)
+2. [01 Getting Started](01-getting-started.md)
+3. [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md)
+4. [03 Retries and Resume](03-retries-and-resume.md)
+5. [04 Browser and Local Integrations](04-browser-and-local-integrations.md)
+6. [05 Journey Cloud Integrations](05-journey-cloud-integrations.md)
+7. [06 Debugging and Failure Modes](06-debugging-and-failure-modes.md)
 
 ## Choose by Task
 
+- If you need install commands for `pip`, `uv`, `uvx`, or the persistent CLI, start with
+  [00 Installation and CLI](00-installation-and-cli.md).
 - If you want to write your first Journey function, start with [01 Getting Started](01-getting-started.md).
 - If you want one authored flow to become multiple executable paths, go to [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
 - If you need polling, replay, or resumable state, go to [03 Retries and Resume](03-retries-and-resume.md).

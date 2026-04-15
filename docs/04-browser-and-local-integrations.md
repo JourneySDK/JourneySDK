@@ -47,7 +47,7 @@ def local_file_is_written() -> dict[str, str]:
 And the journey that ties them together still reads like sequential Python:
 
 ```python
-from journey import branch, checkpoint, journey, step
+from journeysdk import branch, checkpoint, journey, step
 
 
 @journey
@@ -264,7 +264,7 @@ def continue_authenticated_dashboard(
 The journey is still small:
 
 ```python
-from journey import journey, step
+from journeysdk import journey, step
 
 
 @journey

@@ -6,8 +6,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-import journey
-from journey.models import StepNode
+import journeysdk as journey
+from journeysdk.models import StepNode
 
 INTERRUPT_PROMPT_PREFIX = "[tutorial] Press Ctrl-C during the next"
 

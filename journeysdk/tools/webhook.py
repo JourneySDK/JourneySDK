@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from journey.session import get_session
+from journeysdk.session import get_session
 from ._webhook_shared import build_step_label, normalize_path as normalize_cloud_path
 
 from ._webhook_cloud import create_webhook_endpoint, fetch_next_request

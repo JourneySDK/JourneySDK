@@ -3,11 +3,11 @@ from __future__ import annotations
 import importlib
 import urllib.request
 
-import journey
+import journeysdk as journey
 import pytest
-from journey.models import StepNode
+from journeysdk.models import StepNode
 
-from journey.tools._webhook_cloud import (
+from journeysdk.tools._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )

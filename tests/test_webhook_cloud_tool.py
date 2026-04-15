@@ -7,19 +7,19 @@ import time
 import urllib.request
 from pathlib import Path
 
-import journey as journey_sdk
+import journeysdk as journey_sdk
 import pytest
 
-from journey.tools._webhook_cloud import (
+from journeysdk.tools._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )
-from journey.tools._webhook_local import (
+from journeysdk.tools._webhook_local import (
     build_poll_url,
     ensure_local_host,
     reset_local_hosts,
 )
-from journey.tools.webhook import (
+from journeysdk.tools.webhook import (
     CloudWebhookEndpoint,
     get_webhook_endpoint,
     wait_for_webhook_request,

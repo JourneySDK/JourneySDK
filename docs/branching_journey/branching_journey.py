@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from journey import branch, checkpoint, journey, step
+from journeysdk import branch, checkpoint, journey, step
 
 EVENTS: list[str] = []
 

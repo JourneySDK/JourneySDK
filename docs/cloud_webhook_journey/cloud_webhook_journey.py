@@ -7,8 +7,8 @@ import threading
 import time
 import urllib.request
 
-from journey import journey, step
-from journey.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
+from journeysdk import journey, step
+from journeysdk.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 EVENTS: list[str] = []
 

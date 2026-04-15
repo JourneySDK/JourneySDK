@@ -14,10 +14,10 @@ dependencies = []
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-journey = "journey.cli:main"
+journey = "journeysdk.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["journey*"]
+include = ["journeysdk*"]
 exclude = ["tests*", "output*", "journey_cloud*"]
 
 [tool.pytest.ini_options]

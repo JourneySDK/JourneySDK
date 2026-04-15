@@ -39,7 +39,7 @@ def journey(fn: Callable[P, R]) -> Callable[P, R]:
 
     Example:
         ```python
-        from journey import journey, step
+        from journeysdk import journey, step
 
         @journey
         def signup_flow() -> None:
@@ -91,7 +91,7 @@ def branch(
 
     Example:
         ```python
-        from journey import branch, checkpoint, step
+        from journeysdk import branch, checkpoint, step
 
         after_login = checkpoint()
         if branch():
@@ -183,7 +183,7 @@ def step(
 
     Example:
         ```python
-        from journey import step
+        from journeysdk import step
 
         created = step(create_subscription)
         step(
@@ -237,7 +237,7 @@ def checkpoint(
 
     Example:
         ```python
-        from journey import branch, checkpoint, step
+        from journeysdk import branch, checkpoint, step
 
         after_signup = checkpoint(
             request_context,

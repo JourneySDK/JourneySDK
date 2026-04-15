@@ -10,12 +10,12 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 
 ## Key files
 
-- `journey/api.py`: public API that QA can use to write journeys
-- `journey/tools/email.py`: official email tool entrypoint
-- `journey/tools/webhook.py`: official webhook tool entrypoint
-- `journey/planner.py`: journey compilation (aka planning)
-- `journey/executor.py`: execution of a compiled journey
-- `journey/cli.py`: CLI implementation
+- `journeysdk/api.py`: public API that QA can use to write journeys
+- `journeysdk/tools/email.py`: official email tool entrypoint
+- `journeysdk/tools/webhook.py`: official webhook tool entrypoint
+- `journeysdk/planner.py`: journey compilation (aka planning)
+- `journeysdk/executor.py`: execution of a compiled journey
+- `journeysdk/cli.py`: CLI implementation
 - `docs/`: runnable tutorial journeys plus the handbook pages that explain them
 
 ## Preferred commands
@@ -61,7 +61,7 @@ flow that reaches a target step label.
 - When changes affect cloud email/webhook compatibility or shared service contracts in the combined workspace, also run
   `cd ../private && uv run --with ../public --extra dev pytest`.
 - Keep the shared cloud auth and reservation pattern documented anywhere an official cloud tool is introduced.
-- Keep docstrings in `journey/api.py` up to date (it is the public API).
+- Keep docstrings in `journeysdk/api.py` up to date (it is the public API).
 - Prefer adding or updating tests before changing planner, executor, or validator semantics.
 - When changing step-label behavior, check both full execution and targeted `--step` execution.
 - When changing branch behavior, verify case counts, label paths, ambiguity handling, and replay-anchor reporting.

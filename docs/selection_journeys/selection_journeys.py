@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from journey import journey, step
+from journeysdk import journey, step
 
 EVENTS: list[str] = []
 

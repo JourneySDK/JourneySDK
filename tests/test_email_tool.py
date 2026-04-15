@@ -5,14 +5,14 @@ import os
 import smtplib
 from email.message import EmailMessage
 
-import journey as journey_sdk
+import journeysdk as journey_sdk
 import pytest
 
-from journey.tools._email_cloud import (
+from journeysdk.tools._email_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )
-from journey.tools.email import (
+from journeysdk.tools.email import (
     JOURNEY_EMAIL_ADDRESS_ENV,
     JOURNEY_EMAIL_IMAP_HOST_ENV,
     JOURNEY_EMAIL_SMTP_HOST_ENV,

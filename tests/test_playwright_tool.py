@@ -6,10 +6,10 @@ import json
 import sys
 import types
 
-import journey as journey_sdk
+import journeysdk as journey_sdk
 import pytest
 
-from journey.tools import playwright as journey_playwright
+from journeysdk.tools import playwright as journey_playwright
 
 
 def test_playwright_page_state_round_trips_json():
@@ -190,7 +190,7 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
 
 
 def test_playwright_tool_import_is_lazy(monkeypatch):
-    module = importlib.import_module("journey.tools.playwright")
+    module = importlib.import_module("journeysdk.tools.playwright")
     original_import = builtins.__import__
 
     def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):

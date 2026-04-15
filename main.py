@@ -1,4 +1,4 @@
-from journey.cli import main
+from journeysdk.cli import main
 
 
 if __name__ == "__main__":

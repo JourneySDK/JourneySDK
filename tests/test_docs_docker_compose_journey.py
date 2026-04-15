@@ -5,10 +5,10 @@ import json
 from types import SimpleNamespace
 import urllib.request
 
-import journey
+import journeysdk as journey
 import pytest
-from journey.models import StepNode
-from journey.tools import docker as journey_docker
+from journeysdk.models import StepNode
+from journeysdk.tools import docker as journey_docker
 
 docker_compose_module = importlib.import_module(
     "docs.docker_compose_journey.docker_compose_journey"

@@ -27,6 +27,8 @@ _SKIP_DIR_NAMES = {
     "output",
 }
 
+_SUPPORTED_IMPORT_MODULES = {"journey", "journeysdk"}
+
 
 @dataclass(frozen=True)
 class DiscoveredJourney:
@@ -154,12 +156,12 @@ def _candidate_journey_names(path: Path) -> list[str]:
     for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "journey":
+                if alias.name in _SUPPORTED_IMPORT_MODULES:
                     module_aliases.add(alias.asname or alias.name)
             continue
 
         if isinstance(node, ast.ImportFrom):
-            if node.module != "journey":
+            if node.module not in _SUPPORTED_IMPORT_MODULES:
                 continue
             for alias in node.names:
                 if alias.name == "journey":

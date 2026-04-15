@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from journey.cli import build_parser, main
+from journeysdk.cli import build_parser, main
 
 
 def _write(path: Path, content: str) -> None:
@@ -90,7 +90,7 @@ def test_plan_discovers_decorated_journeys_recursively_and_via_aliases(
     _write(
         tmp_path / "pkg" / "module_alias.py",
         """
-        import journey as j
+        import journeysdk as j
 
         def alpha_step():
             return True
@@ -103,8 +103,8 @@ def test_plan_discovers_decorated_journeys_recursively_and_via_aliases(
     _write(
         tmp_path / "pkg" / "decorator_alias.py",
         """
-        import journey
-        from journey import journey as workflow
+        import journeysdk as journey
+        from journeysdk import journey as workflow
 
         def beta_step():
             return True
@@ -132,8 +132,7 @@ def test_plan_file_and_journey_filters_limit_selection(
     _write(
         tmp_path / "pkg" / "first.py",
         """
-        import journey
-
+        import journeysdk as journey
         def alpha_step():
             return True
 
@@ -145,8 +144,7 @@ def test_plan_file_and_journey_filters_limit_selection(
     _write(
         tmp_path / "pkg" / "second.py",
         """
-        import journey
-
+        import journeysdk as journey
         def beta_step():
             return True
 
@@ -172,8 +170,7 @@ def test_plan_errors_when_journey_name_is_ambiguous(
     capsys: pytest.CaptureFixture[str],
 ):
     content = """
-        import journey
-
+        import journeysdk as journey
         def shared_step():
             return True
 
@@ -239,8 +236,7 @@ def test_execute_step_runs_only_the_unique_matching_journey(
     _write(
         tmp_path / "alpha.py",
         """
-        import journey
-
+        import journeysdk as journey
         def target():
             return True
 
@@ -252,8 +248,7 @@ def test_execute_step_runs_only_the_unique_matching_journey(
     _write(
         tmp_path / "beta.py",
         """
-        import journey
-
+        import journeysdk as journey
         def other():
             return True
 
@@ -279,8 +274,7 @@ def test_execute_step_errors_when_label_is_ambiguous_across_journeys(
     capsys: pytest.CaptureFixture[str],
 ):
     content = """
-        import journey
-
+        import journeysdk as journey
         def shared():
             return True
 
@@ -309,8 +303,7 @@ def test_execute_json_errors_include_hint_for_missing_step(
     _write(
         tmp_path / "alpha.py",
         """
-        import journey
-
+        import journeysdk as journey
         def publish():
             return True
 
@@ -340,8 +333,7 @@ def test_execute_streams_live_case_progress_for_all_branches(
     _write(
         tmp_path / "flow.py",
         """
-        import journey
-
+        import journeysdk as journey
         def prepare():
             return True
 
@@ -387,8 +379,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
     _write(
         tmp_path / "flow.py",
         """
-        import journey
-
+        import journeysdk as journey
         def prepare():
             return True
 
@@ -435,8 +426,7 @@ def test_execute_develop_step_steps_forward_with_continue(
     _write(
         tmp_path / "flow.py",
         """
-        import journey
-
+        import journeysdk as journey
         def prepare():
             return True
 
@@ -483,8 +473,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
     _write(
         tmp_path / "flow.py",
         """
-        import journey
-
+        import journeysdk as journey
         def prepare():
             return True
 
@@ -557,8 +546,7 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
     _write(
         tmp_path / "flow.py",
         """
-        import journey
-
+        import journeysdk as journey
         ATTEMPTS = {"poll": 0}
 
         def prepare():
@@ -612,8 +600,7 @@ def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
     _write(
         tmp_path / "flow.py",
         """
-        import journey
-
+        import journeysdk as journey
         ATTEMPTS = {"poll": 0}
 
         def poll():
@@ -653,8 +640,7 @@ def test_execute_streams_retry_events_in_text_mode(
     _write(
         tmp_path / "flow.py",
         """
-        import journey
-
+        import journeysdk as journey
         ATTEMPTS = {"poll": 0}
 
         def poll():
@@ -690,8 +676,7 @@ def test_plan_continues_and_summarizes_failures_by_default(
     _write(
         tmp_path / "good.py",
         """
-        import journey
-
+        import journeysdk as journey
         def finish():
             return True
 
@@ -703,8 +688,7 @@ def test_plan_continues_and_summarizes_failures_by_default(
     _write(
         tmp_path / "broken.py",
         """
-        import journey
-
+        import journeysdk as journey
         def branch_a_step():
             return True
 
@@ -738,8 +722,7 @@ def test_execute_continues_and_summarizes_failures_by_default(
     _write(
         tmp_path / "good.py",
         """
-        import journey
-
+        import journeysdk as journey
         def finish():
             return True
 
@@ -751,8 +734,7 @@ def test_execute_continues_and_summarizes_failures_by_default(
     _write(
         tmp_path / "broken.py",
         """
-        import journey
-
+        import journeysdk as journey
         def explode():
             raise RuntimeError("boom")
 
@@ -782,8 +764,7 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
     _write(
         tmp_path / "a_broken.py",
         """
-        import journey
-
+        import journeysdk as journey
         def explode():
             raise RuntimeError("boom")
 
@@ -795,8 +776,7 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
     _write(
         tmp_path / "b_good.py",
         """
-        import journey
-
+        import journeysdk as journey
         def finish():
             return True
 
@@ -823,8 +803,7 @@ def test_execute_state_requires_exactly_one_journey(
     _write(
         tmp_path / "a.py",
         """
-        import journey
-
+        import journeysdk as journey
         def first():
             return True
 
@@ -836,8 +815,7 @@ def test_execute_state_requires_exactly_one_journey(
     _write(
         tmp_path / "b.py",
         """
-        import journey
-
+        import journeysdk as journey
         def second():
             return True
 
@@ -866,7 +844,7 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     _write(
         tmp_path / "flow.py",
         f"""
-        import journey
+        import journeysdk as journey
         from pathlib import Path
 
         MARKER = Path({str(marker_file)!r})
@@ -916,7 +894,7 @@ def test_execute_state_resume_streams_case_resume_in_text_mode(
     _write(
         tmp_path / "flow.py",
         f"""
-        import journey
+        import journeysdk as journey
         from pathlib import Path
 
         MARKER = Path({str(marker_file)!r})
@@ -964,7 +942,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
     _write(
         tmp_path / "flow.py",
         f"""
-        import journey
+        import journeysdk as journey
         from pathlib import Path
 
         SEED_COUNTER = Path({str(seed_counter_file)!r})

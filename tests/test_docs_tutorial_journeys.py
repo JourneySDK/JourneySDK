@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import journey
+import journeysdk as journey
 import pytest
-from journey.errors import CallableExecutionError
-from journey.models import StepNode
+from journeysdk.errors import CallableExecutionError
+from journeysdk.models import StepNode
 
 import docs.branching_journey as branching_docs
 import docs.cloud_webhook_journey as cloud_webhook_docs
@@ -14,7 +14,7 @@ import docs.first_journey as first_docs
 import docs.resume_journey as resume_docs
 import docs.retry_journey as retry_docs
 import docs.selection_journeys as selection_docs
-from journey.tools._webhook_cloud import (
+from journeysdk.tools._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )

@@ -4,9 +4,9 @@ import builtins
 import importlib
 from pathlib import Path
 
-import journey
+import journeysdk as journey
 import pytest
-from journey.models import StepNode
+from journeysdk.models import StepNode
 
 playwright_resume_module = importlib.import_module(
     "docs.playwright_resume_journey.playwright_resume_journey"

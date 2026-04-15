@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from journey import journey, step
-from journey.tools.playwright import (
+from journeysdk import journey, step
+from journeysdk.tools.playwright import (
     PlaywrightPageState,
     capture_page_state,
     open_page,

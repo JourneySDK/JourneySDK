@@ -4,8 +4,8 @@ import builtins
 import importlib
 from pathlib import Path
 
-import journey
-from journey.models import StepNode
+import journeysdk as journey
+from journeysdk.models import StepNode
 
 simple_journey = importlib.import_module("docs.simple_journey.simple_journey")
 

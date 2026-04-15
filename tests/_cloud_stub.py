@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterator
 from urllib.parse import urlsplit
 
-from journey.tools._webhook_shared import build_request_payload, normalize_path
+from journeysdk.tools._webhook_shared import build_request_payload, normalize_path
 
 _CONTROL_CREATE_PATH = "/v1/webhook-endpoints"
 _CONTROL_NEXT_SUFFIX = "/requests/next"

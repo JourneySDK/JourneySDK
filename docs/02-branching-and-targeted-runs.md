@@ -13,7 +13,7 @@ This chapter covers three related ideas:
 Read `docs/branching_journey/branching_journey.py`.
 
 ```python
-from journey import branch, checkpoint, journey, step
+from journeysdk import branch, checkpoint, journey, step
 
 
 @journey
@@ -109,7 +109,7 @@ Use `--develop-step` when you are actively editing one branch and want Journey t
 Read `docs/rehydration_journey/rehydration_journey.py`.
 
 ```python
-from journey import branch, checkpoint, journey, step
+from journeysdk import branch, checkpoint, journey, step
 
 
 @journey

@@ -5,8 +5,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from journey import branch, checkpoint, journey, step
-from journey.tools.webhook import host_webhook_endpoint
+from journeysdk import branch, checkpoint, journey, step
+from journeysdk.tools.webhook import host_webhook_endpoint
 
 _DEMO_PAGE_URL = Path(__file__).with_name("demo_site.html").resolve().as_uri()
 _STORED_FILE_NAME = "stored-message.txt"

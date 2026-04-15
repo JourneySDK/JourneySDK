@@ -12,7 +12,7 @@ This chapter covers both cases:
 Read `docs/retry_journey/retry_journey.py`.
 
 ```python
-from journey import checkpoint, journey, step
+from journeysdk import checkpoint, journey, step
 
 
 @journey
@@ -154,7 +154,7 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 Read `docs/resume_journey/resume_journey.py`.
 
 ```python
-from journey import journey, step
+from journeysdk import journey, step
 
 
 def wait_for_resume_signal(

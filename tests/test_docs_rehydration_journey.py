@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import journey
+import journeysdk as journey
 import docs.rehydration_journey as rehydration_docs
-from journey.models import StepNode
+from journeysdk.models import StepNode
 
 
 def _case_labels(plan: journey.JourneyPlan) -> list[list[str]]:

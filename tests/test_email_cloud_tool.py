@@ -4,14 +4,14 @@ import os
 from pathlib import Path
 import urllib.request
 
-import journey as journey_sdk
+import journeysdk as journey_sdk
 import pytest
 
-from journey.tools._email_cloud import (
+from journeysdk.tools._email_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )
-from journey.tools.email import EmailInbox, get_email_inbox, send_email, wait_for_email
+from journeysdk.tools.email import EmailInbox, get_email_inbox, send_email, wait_for_email
 from tests._cloud_stub import serve_in_background
 
 

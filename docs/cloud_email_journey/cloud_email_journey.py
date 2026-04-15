@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from journey import journey, step
-from journey.tools.email import get_email_inbox, send_email, wait_for_email
+from journeysdk import journey, step
+from journeysdk.tools.email import get_email_inbox, send_email, wait_for_email
 
 EVENTS: list[str] = []
 

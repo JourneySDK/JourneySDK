@@ -21,7 +21,7 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 Read `docs/cloud_webhook_journey/cloud_webhook_journey.py`.
 
 ```python
-from journey import journey, step
+from journeysdk import journey, step
 
 
 @journey
@@ -86,7 +86,7 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 Read `docs/cloud_email_journey/cloud_email_journey.py`.
 
 ```python
-from journey import journey, step
+from journeysdk import journey, step
 
 
 @journey

@@ -5,11 +5,11 @@ import os
 import pickle
 from pathlib import Path
 
-import journey as journey_sdk
+import journeysdk as journey_sdk
 import pytest
 
-from journey.models import StepNode
-from journey.tools import docker as journey_docker
+from journeysdk.models import StepNode
+from journeysdk.tools import docker as journey_docker
 
 
 def _write_compose_file(tmp_path: Path) -> Path:

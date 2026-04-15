@@ -84,7 +84,7 @@ def _load_sync_playwright() -> Any:
         if exc.name not in {"playwright", "playwright.sync_api"}:
             raise
         raise ImportError(
-            "journey.tools.playwright requires the optional 'playwright' package. "
+            "journeysdk.tools.playwright requires the optional 'playwright' package. "
             "Install it with `uv run --with playwright ...` or `pip install playwright`."
         ) from exc
     return getattr(module, "sync_playwright")

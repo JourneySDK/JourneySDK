@@ -8,8 +8,8 @@ from collections.abc import Mapping
 from pathlib import Path
 import urllib.request
 
-from journey import branch, checkpoint, journey, step
-from journey.tools.docker import (
+from journeysdk import branch, checkpoint, journey, step
+from journeysdk.tools.docker import (
     DockerComposeStack,
     DockerContainerStatus,
     restore_docker,

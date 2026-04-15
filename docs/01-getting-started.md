@@ -6,7 +6,7 @@ The goal is simple: understand what a journey looks like in Python, what `journe
 
 ## The Mental Model
 
-- Import the Journey primitives you use directly with `from journey import ...`.
+- Import the Journey primitives you use directly with `from journeysdk import ...`.
 - Mark one top-level function with `@journey`.
 - Add steps with `step(...)`.
 - Pass step results explicitly into later steps.
@@ -20,7 +20,7 @@ If you remember only one thing, remember this: Journey does not ask you to stop 
 Read `docs/first_journey/first_journey.py`.
 
 ```python
-from journey import journey, step
+from journeysdk import journey, step
 
 
 @journey
@@ -83,7 +83,7 @@ The important part is not the formatting. The important part is that Journey sho
 Read `docs/selection_journeys/selection_journeys.py`.
 
 ```python
-from journey import journey, step
+from journeysdk import journey, step
 
 
 @journey

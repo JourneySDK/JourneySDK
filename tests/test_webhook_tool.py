@@ -7,16 +7,16 @@ import time
 import urllib.request
 from pathlib import Path
 
-import journey as journey_sdk
+import journeysdk as journey_sdk
 import pytest
 
-from journey.tools._webhook_local import (
+from journeysdk.tools._webhook_local import (
     build_poll_url,
     ensure_local_host,
     is_port_open,
     reset_local_hosts,
 )
-from journey.tools.webhook import host_webhook_endpoint
+from journeysdk.tools.webhook import host_webhook_endpoint
 
 
 @pytest.fixture(autouse=True)

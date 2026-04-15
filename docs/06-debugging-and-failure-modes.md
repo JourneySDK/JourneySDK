@@ -9,7 +9,7 @@ This chapter explains what Journey's failure output means and when `--fail-fast`
 Read `docs/fail_fast_journeys/fail_fast_journeys.py`.
 
 ```python
-from journey import journey, step
+from journeysdk import journey, step
 
 
 def raise_expected_failure() -> bool:
