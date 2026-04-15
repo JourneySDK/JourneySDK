@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import Any, ParamSpec, TypeVar, cast
+from typing import ParamSpec, TypeVar, cast
 
 from .errors import InvalidBranchUsageError
 from .models import (
@@ -14,7 +14,6 @@ from .models import (
     StepRetryFrom,
 )
 from .session import get_session
-from .utils import validate_checkpoint_call
 
 _JOURNEY_MARKER_ATTR = "__journey_marker__"
 P = ParamSpec("P")
@@ -152,14 +151,15 @@ def step(
     When a run uses retries, ``journey execute --state ...``, or branches that
     start from an earlier checkpoint, journey may need to save and restore step
     inputs and outputs. Any value that may be replayed that way must be
-    pickle-serializable.
+    pickle-serializable or implement the Journey rehydration protocol.
 
     Outside an active planning or execution session, ``step()`` is invalid.
 
     Args:
         fn: Step callable to plan or execute.
         *args: Positional arguments forwarded to ``fn``. Values that may need
-            to be replayed later must be pickle-serializable.
+            to be replayed later must be pickle-serializable or implement the
+            Journey rehydration protocol.
         retry: Optional number of extra retries after the initial attempt.
             Retries run only when this value is greater than 0. The default is
             0 extra retries.
@@ -169,7 +169,8 @@ def step(
             ``checkpoint()`` reference, or ``None``. When retries are enabled,
             ``None`` retries the current step. The default is ``None``.
         **kwargs: Keyword arguments forwarded to ``fn``. Values that may need
-            to be replayed later must be pickle-serializable.
+            to be replayed later must be pickle-serializable or implement the
+            Journey rehydration protocol.
 
     Returns:
         During planning, a placeholder object that can be passed into later
@@ -214,36 +215,20 @@ def step(
     )
 
 
-def checkpoint(
-    *args: Any,
-    store: Callable[..., object] | None = None,
-    restore: Callable[..., object] | None = None,
-    **kwargs: Any,
-) -> CheckpointRef:
+def checkpoint() -> CheckpointRef:
     """Mark a checkpoint that later steps or branches can refer to.
-
-    Plain ``checkpoint()`` keeps the current marker-only behavior. When both
-    ``store`` and ``restore`` are provided, Journey binds the checkpoint
-    arguments once, calls ``store(*args, **kwargs)`` the first time the
-    checkpoint is hit, and later calls ``restore(*args, **kwargs)`` whenever
-    execution rewinds back to that checkpoint.
 
     Returns:
         A ``CheckpointRef`` anchor that later steps or branches can reuse.
 
     Raises:
-        TypeError: If checkpoint hooks are provided in an unsupported shape.
         InvalidBranchUsageError: If called outside planning or execution.
 
     Example:
         ```python
         from journeysdk import branch, checkpoint, step
 
-        after_signup = checkpoint(
-            request_context,
-            store=save_browser_state,
-            restore=load_browser_state,
-        )
+        after_signup = checkpoint()
         if branch():
             step(finish_instant)
         elif branch(start_from=after_signup):
@@ -256,18 +241,4 @@ def checkpoint(
             "checkpoint() can only be used while a journey is being planned or executed.",
             hint="Call checkpoint() inside a function decorated with @journey.",
         )
-    validate_checkpoint_call(
-        args=tuple(args),
-        kwargs=dict(kwargs),
-        store=store,
-        restore=restore,
-    )
-    return cast(
-        CheckpointRef,
-        session.checkpoint(
-            *args,
-            store=store,
-            restore=restore,
-            **kwargs,
-        ),
-    )
+    return cast(CheckpointRef, session.checkpoint())

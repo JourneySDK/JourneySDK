@@ -28,6 +28,11 @@ from .models import (
     StepRetry,
 )
 from .planner import compile_journey
+from .rehydration import (
+    JourneyRestoreContext,
+    JourneyStoreContext,
+    RehydratableValue,
+)
 
 __all__ = [
     "AmbiguousStepSelectionError",
@@ -43,9 +48,12 @@ __all__ = [
     "JourneyDiscoveryError",
     "JourneyPlan",
     "JourneySelectionError",
+    "JourneyRestoreContext",
+    "JourneyStoreContext",
     "NodeExecutionRecord",
     "NoJourneysFoundError",
     "PlannedValue",
+    "RehydratableValue",
     "StepNotFoundError",
     "StepRetry",
     "UnknownCheckpointError",

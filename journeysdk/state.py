@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import os
 import pickle
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from .errors import (
     CorruptExecutionStateError,
@@ -17,8 +17,9 @@ from .models import (
     CaseExecutionReport,
     NodeExecutionRecord,
 )
+from .rehydration import StoredValue
 
-STATE_FORMAT_VERSION = 8
+STATE_FORMAT_VERSION = 9
 
 
 @dataclass
@@ -29,16 +30,10 @@ class SelectedCaseState:
 
 @dataclass
 class StepBindingState:
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
+    args: tuple[StoredValue, ...]
+    kwargs: dict[str, StoredValue]
     has_result: bool
-    result: Any = None
-
-
-@dataclass
-class CheckpointBindingState:
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
+    result: StoredValue | None = None
 
 
 @dataclass
@@ -47,7 +42,6 @@ class RuntimeSnapshotState:
     records: list[NodeExecutionRecord]
     step_bindings: dict[str, StepBindingState]
     retry_remaining: dict[str, int]
-    checkpoint_bindings: dict[str, CheckpointBindingState] = field(default_factory=dict)
     step_attempts: dict[str, int] = field(default_factory=dict)
 
 
@@ -89,13 +83,16 @@ class ExecutionStateEnvelope:
     checkpoint_snapshots: dict[str, RuntimeSnapshotState] = field(default_factory=dict)
 
 
-def clone_rehydratable_value(value: Any, *, description: str) -> Any:
-    try:
-        return pickle.loads(pickle.dumps(value))
-    except Exception as exc:
-        raise ExecutionStateSerializationError(
-            f"Could not store {description}: {exc}"
-        ) from exc
+def artifact_root_for_state(path: Path | None) -> tuple[Path, bool]:
+    """Return the artifact root for this run and whether it is temporary."""
+
+    if path is None:
+        return Path(tempfile.mkdtemp(prefix="journey-artifacts.")), True
+    return path.parent / f"{path.name}.artifacts", False
+
+
+def delete_artifact_root(path: Path) -> None:
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def load_execution_state(path: Path) -> ExecutionStateEnvelope | None:

@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
+
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
 _SUPPORTED_CONTAINER_STATES = {"running", "created", "exited"}
 _UNSUPPORTED_CONTAINER_STATES = {"paused", "restarting", "removing", "dead"}
@@ -55,6 +57,41 @@ class DockerComposeStack:
         """Return live combined logs grouped by Compose service."""
 
         return _load_live_logs(self)
+
+    def __store__(self, context: JourneyStoreContext) -> object:
+        snapshot_name = _snapshot_name_for_context(context)
+        _store_docker_snapshot(
+            stack=self,
+            snapshot_name=snapshot_name,
+            snapshot_root=context.artifact_root,
+        )
+        return {
+            "compose_file": self.compose_file,
+            "resolved_compose_file": self.resolved_compose_file,
+            "project_name": self.project_name,
+            "cache_root": self.cache_root,
+            "snapshot_name": snapshot_name,
+        }
+
+    @classmethod
+    def __restore__(
+        cls,
+        payload: object,
+        context: JourneyRestoreContext,
+    ) -> "DockerComposeStack":
+        data = _require_stack_payload(payload, owner="DockerComposeStack.__restore__")
+        stack = cls(
+            compose_file=data["compose_file"],
+            resolved_compose_file=data["resolved_compose_file"],
+            project_name=data["project_name"],
+            cache_root=data["cache_root"],
+        )
+        _restore_docker_snapshot(
+            stack=stack,
+            snapshot_name=data["snapshot_name"],
+            snapshot_root=context.artifact_root,
+        )
+        return stack
 
 
 @dataclass(frozen=True)
@@ -145,6 +182,19 @@ def store_docker(
 ) -> None:
     """Store one Docker Compose snapshot for checkpoint replay."""
 
+    _store_docker_snapshot(
+        stack=stack,
+        snapshot_name=snapshot_name,
+        snapshot_root=None,
+    )
+
+
+def _store_docker_snapshot(
+    *,
+    stack: DockerComposeStack,
+    snapshot_name: str,
+    snapshot_root: Path | None,
+) -> None:
     validated_stack = _require_stack(stack=stack, owner="store_docker")
     normalized_snapshot_name = _normalize_snapshot_name(
         owner="store_docker",
@@ -153,6 +203,7 @@ def store_docker(
     snapshot_dir = _snapshot_dir(
         stack=validated_stack,
         snapshot_name=normalized_snapshot_name,
+        snapshot_root=snapshot_root,
     )
     if snapshot_dir.exists():
         shutil.rmtree(snapshot_dir)
@@ -251,6 +302,19 @@ def restore_docker(
 ) -> None:
     """Restore one stored Docker Compose snapshot for checkpoint replay."""
 
+    _restore_docker_snapshot(
+        stack=stack,
+        snapshot_name=snapshot_name,
+        snapshot_root=None,
+    )
+
+
+def _restore_docker_snapshot(
+    *,
+    stack: DockerComposeStack,
+    snapshot_name: str,
+    snapshot_root: Path | None,
+) -> None:
     validated_stack = _require_stack(stack=stack, owner="restore_docker")
     normalized_snapshot_name = _normalize_snapshot_name(
         owner="restore_docker",
@@ -259,6 +323,7 @@ def restore_docker(
     snapshot_dir = _snapshot_dir(
         stack=validated_stack,
         snapshot_name=normalized_snapshot_name,
+        snapshot_root=snapshot_root,
     )
     manifest_path = snapshot_dir / "manifest.json"
     if not manifest_path.exists():
@@ -499,11 +564,51 @@ def _project_cache_dir(*, cache_root: Path, project_name: str) -> Path:
     return cache_root / project_name
 
 
-def _snapshot_dir(*, stack: DockerComposeStack, snapshot_name: str) -> Path:
+def _snapshot_dir(
+    *,
+    stack: DockerComposeStack,
+    snapshot_name: str,
+    snapshot_root: Path | None = None,
+) -> Path:
+    if snapshot_root is not None:
+        return snapshot_root
     return _project_cache_dir(
         cache_root=Path(stack.cache_root),
         project_name=stack.project_name,
     ) / snapshot_name
+
+
+def _snapshot_name_for_context(context: JourneyStoreContext) -> str:
+    if context.checkpoint_name is not None:
+        return _normalize_snapshot_name(
+            owner="DockerComposeStack.__store__",
+            value=context.checkpoint_name,
+        )
+    return _slugify(f"{context.boundary_kind}-{context.boundary_id}")
+
+
+def _require_stack_payload(
+    payload: object,
+    *,
+    owner: str,
+) -> dict[str, str]:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{owner}(...) expects a mapping payload.")
+    data = dict(payload)
+    required = [
+        "compose_file",
+        "resolved_compose_file",
+        "project_name",
+        "cache_root",
+        "snapshot_name",
+    ]
+    result: dict[str, str] = {}
+    for key in required:
+        value = data.get(key)
+        if not isinstance(value, str) or not value:
+            raise TypeError(f"{owner}(...) received invalid payload field {key!r}.")
+        result[key] = value
+    return result
 
 
 def _load_compose_config(stack: DockerComposeStack, *, owner: str) -> dict[str, Any]:

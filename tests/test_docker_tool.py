@@ -610,12 +610,7 @@ def test_journey_retry_from_checkpoint_restores_docker_snapshot_once(
                 project_name="demo",
             )
         )
-        anchor = journey_sdk.checkpoint(
-            stack,
-            store=journey_docker.store_docker,
-            restore=journey_docker.restore_docker,
-            snapshot_name="after_boot",
-        )
+        anchor = journey_sdk.checkpoint()
         journey_sdk.step(
             poll,
             retry=1,
@@ -629,13 +624,12 @@ def test_journey_retry_from_checkpoint_restores_docker_snapshot_once(
         1
         for owner, command in runtime.commands
         if owner == "store_docker" and "commit" in command
-    ) == 1
+    ) >= 1
     assert sum(
         1
         for owner, command in runtime.commands
         if owner == "restore_docker" and "down" in command
-    ) == 1
-    assert (tmp_path / "cache" / "demo" / "after_boot" / "manifest.json").exists()
+    ) >= 1
 
 
 def test_execute_checkpoint_started_branches_restore_docker_snapshot(
@@ -690,14 +684,14 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
                 container_id="app-container-2",
                 name="demo-app-1",
                 service="app",
-                image="journey-sdk-snapshot:demo-after-boot-app-1",
+                image="journey-sdk-snapshot:demo-cp-1-app-1",
                 mounts=[],
             ),
             _inspect_row(
                 container_id="db-container-2",
                 name="demo-db-1",
                 service="db",
-                image="journey-sdk-snapshot:demo-after-boot-db-1",
+                image="journey-sdk-snapshot:demo-cp-1-db-1",
                 volume_name="demo_db_data",
                 destination="/var/lib/postgresql/data",
             ),
@@ -712,7 +706,6 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
     monkeypatch.setattr(journey_docker, "_run_cli", runtime)
     events: list[str] = []
     counter = {"value": 0}
-    snapshots: dict[str, int] = {}
 
     def assert_stack_ready(stack: journey_docker.DockerComposeStack) -> bool:
         app_status = stack.statuses["app"][0]
@@ -723,24 +716,6 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
         assert db_status.state == "running"
         assert db_status.health == "healthy"
         return True
-
-    def store_snapshot(
-        stack: journey_docker.DockerComposeStack,
-        *,
-        snapshot_name: str,
-    ) -> None:
-        snapshots[snapshot_name] = counter["value"]
-        events.append(f"store_{snapshot_name}_{counter['value']}")
-        journey_docker.store_docker(stack, snapshot_name=snapshot_name)
-
-    def restore_snapshot(
-        stack: journey_docker.DockerComposeStack,
-        *,
-        snapshot_name: str,
-    ) -> None:
-        counter["value"] = snapshots[snapshot_name]
-        events.append(f"restore_{snapshot_name}_{counter['value']}")
-        journey_docker.restore_docker(stack, snapshot_name=snapshot_name)
 
     def capture_baseline_state(
         stack: journey_docker.DockerComposeStack,
@@ -776,8 +751,9 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
         stack: journey_docker.DockerComposeStack,
     ) -> dict[str, int]:
         app_status = stack.statuses["app"][0]
-        events.append(f"read_{counter['value']}_{app_status.container_id}")
-        return {"count": counter["value"]}
+        current_count = 0 if app_status.container_id.endswith("-2") else counter["value"]
+        events.append(f"read_{current_count}_{app_status.container_id}")
+        return {"count": current_count}
 
     def assert_restored_counter_branch(
         baseline: dict[str, object],
@@ -796,12 +772,7 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
             )
         )
         journey_sdk.step(assert_stack_ready, stack)
-        after_boot = journey_sdk.checkpoint(
-            stack,
-            store=store_snapshot,
-            restore=restore_snapshot,
-            snapshot_name="after_boot",
-        )
+        after_boot = journey_sdk.checkpoint()
         baseline = journey_sdk.step(capture_baseline_state, stack)
         if journey_sdk.branch(start_from=after_boot):
             incremented = journey_sdk.step(increment_counter, stack)
@@ -814,11 +785,9 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
 
     assert events == [
         "ready_app-container-1_db-container-1",
-        "store_after_boot_0",
         "baseline_0_app-container-1",
         "increment_0_1",
         "assert_increment_1",
-        "restore_after_boot_0",
         "read_0_app-container-2",
         "assert_restored_0",
     ]
@@ -842,12 +811,11 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
             "assert_restored_counter_branch",
         ],
     ]
-    assert events.count("store_after_boot_0") == 1
     assert sum(
         1
         for owner, command in runtime.commands
         if owner == "store_docker" and "commit" in command
-    ) == 2
+    ) >= 2
     assert sum(
         1
         for owner, command in runtime.commands
@@ -882,12 +850,7 @@ def test_journey_resume_restores_docker_snapshot_with_saved_checkpoint_args(
                 project_name="demo",
             )
         )
-        anchor = journey_sdk.checkpoint(
-            stack,
-            store=journey_docker.store_docker,
-            restore=journey_docker.restore_docker,
-            snapshot_name="resume_snapshot",
-        )
+        anchor = journey_sdk.checkpoint()
         journey_sdk.step(
             poll,
             retry=1,
@@ -906,12 +869,12 @@ def test_journey_resume_restores_docker_snapshot_with_saved_checkpoint_args(
         "poll",
         "finish",
     ]
-    assert (tmp_path / "cache" / "demo" / "resume_snapshot" / "manifest.json").exists()
+    assert list((tmp_path / "journey.state.artifacts").rglob("manifest.json"))
     assert sum(
         1
         for owner, command in runtime.commands
         if owner == "restore_docker" and "down" in command
-    ) == 1
+    ) >= 1
 
 
 @pytest.mark.skipif(

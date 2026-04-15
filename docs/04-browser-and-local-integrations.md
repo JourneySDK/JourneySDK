@@ -145,15 +145,11 @@ stack = step(
 step(assert_stack_ready, stack)
 ```
 
-The checkpoint stays explicit about what gets stored and restored:
+The checkpoint stays marker-only. The interesting state lives on the `stack`
+value, and `DockerComposeStack` implements Journey's rehydration protocol:
 
 ```python
-after_boot = checkpoint(
-    stack,
-    store=store_docker,
-    restore=restore_docker,
-    snapshot_name="after_boot",
-)
+after_boot = checkpoint()
 ```
 
 The interesting part is the branch structure. One shared step captures the baseline counter before either
@@ -219,9 +215,9 @@ uv run journey execute --file docs/docker_compose_journey/docker_compose_journey
 That targeted run still reports `replay_anchor=cp_1`, so you can focus on the restore branch without changing the
 checkpoint behavior.
 
-`store_docker(...)` and `restore_docker(...)` are strict on purpose. In v1 they aim for exact rollback of container
-filesystems plus Docker-managed volume contents, so they reject bind mounts, external volumes, read-only mounts, and
-multi-container services.
+Docker snapshotting is strict on purpose. In v1 it aims for exact rollback of
+container filesystems plus Docker-managed volume contents, so it rejects bind
+mounts, external volumes, read-only mounts, and multi-container services.
 
 ## Capture and Resume a Browser Session
 

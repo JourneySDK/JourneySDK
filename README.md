@@ -120,9 +120,10 @@ workflows without duplicating test code. Step functions are plain callables: pas
 arguments, and return any value that later steps or resumed runs must reuse.
 
 When retries, persisted state, or checkpoint-started branches need to replay a
-step, journey rehydrates that step from pickle-backed saved inputs and outputs.
-Any step argument or return value that may be replayed that way must be
-pickle-serializable.
+step, Journey rehydrates that step from SDK-managed saved inputs and outputs.
+Any step argument or return value that may be replayed that way must be either
+pickle-serializable or implement the Journey rehydration protocol with
+`__store__(context)` and `__restore__(payload, context)`.
 
 Retryable steps can poll for async effects, rerun from the step itself, or replay from an earlier step/checkpoint.
 They are retried when they raise an exception and `retry` is greater than 0. The explicit defaults are `retry=0`,
@@ -173,19 +174,15 @@ message = step(
 ```
 
 The Docker tool can start a local Compose app as a step value and pair a checkpoint with exact rollback of container
-filesystems plus Docker-managed volume contents:
+filesystems plus Docker-managed volume contents. `DockerComposeStack` already implements the rehydration protocol, so
+plain `checkpoint()` is enough:
 
 ```python
 from journeysdk import checkpoint, step
-from journeysdk.tools.docker import restore_docker, run_docker, store_docker
+from journeysdk.tools.docker import run_docker
 
 stack = step(run_docker(compose_file="docker-compose.yml"))
-checkpoint(
-    stack,
-    store=store_docker,
-    restore=restore_docker,
-    snapshot_name="after_boot",
-)
+after_boot = checkpoint()
 step(assert_compose_logs, stack)
 ```
 

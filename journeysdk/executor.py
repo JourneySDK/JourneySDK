@@ -14,6 +14,7 @@ from typing import Any, ParamSpec, TypeVar, cast
 from .errors import (
     AmbiguousStepSelectionError,
     CallableExecutionError,
+    ExecutionStateSerializationError,
     ExecutionStateMismatchError,
     InvalidBranchUsageError,
     StepNotFoundError,
@@ -37,18 +38,27 @@ from .session import use_session
 from .state import (
     STATE_FORMAT_VERSION,
     ActiveCaseState,
-    CheckpointBindingState,
     ExecutionStateEnvelope,
     PausedStepState,
     RuntimeSnapshotState,
     SelectedCaseState,
     StepBindingState,
-    clone_rehydratable_value,
+    artifact_root_for_state,
+    delete_artifact_root,
     delete_execution_state,
     load_execution_state,
     save_execution_state,
 )
-from .utils import callable_ref, validate_checkpoint_call
+from .rehydration import (
+    JourneyRestoreContext,
+    JourneyStoreContext,
+    StoredValue,
+    StoredValueRestoreError,
+    StoredValueSerializationError,
+    restore_value,
+    store_value,
+)
+from .utils import callable_ref
 from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
 
@@ -206,13 +216,6 @@ def _copy_binding(binding: StepBindingState) -> StepBindingState:
     )
 
 
-def _copy_checkpoint_binding(binding: CheckpointBindingState) -> CheckpointBindingState:
-    return CheckpointBindingState(
-        args=tuple(binding.args),
-        kwargs=dict(binding.kwargs),
-    )
-
-
 def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotState:
     return RuntimeSnapshotState(
         record_indices=list(snapshot.record_indices),
@@ -222,10 +225,6 @@ def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotSta
             for key, binding in snapshot.step_bindings.items()
         },
         retry_remaining=dict(snapshot.retry_remaining),
-        checkpoint_bindings={
-            key: _copy_checkpoint_binding(binding)
-            for key, binding in snapshot.checkpoint_bindings.items()
-        },
         step_attempts=dict(snapshot.step_attempts),
     )
 
@@ -288,21 +287,6 @@ def _callable_execution_error_for_step(
     return CallableExecutionError(message, hint=hint)
 
 
-def _callable_execution_error_for_checkpoint(
-    node: CheckpointNode,
-    *,
-    phase: str,
-    exc: Exception,
-) -> CallableExecutionError:
-    return CallableExecutionError(
-        (
-            f"Checkpoint '{node.name}' failed while running its {phase} hook: "
-            f"{type(exc).__name__}: {exc}"
-        ),
-        hint="Inspect the checkpoint hook implementation or rerun after fixing the underlying failure.",
-    )
-
-
 class _StateController:
     def __init__(
         self,
@@ -318,6 +302,7 @@ class _StateController:
         self.step = step
         self.develop_step = develop_step
         self.selected_cases = list(selected_cases)
+        self.artifact_root, self._artifact_root_is_temporary = artifact_root_for_state(path)
         self.plan_signature = _plan_signature(
             journey_plan,
             self.selected_cases,
@@ -354,6 +339,72 @@ class _StateController:
     @property
     def current_case_index(self) -> int:
         return self._state.current_case_index
+
+    def binding_store_context(self, binding_key: str) -> JourneyStoreContext:
+        return JourneyStoreContext(
+            artifact_root=self._artifact_dir("binding", binding_key),
+            boundary_kind="binding",
+            boundary_id=binding_key,
+        )
+
+    def binding_restore_context(self, binding_key: str) -> JourneyRestoreContext:
+        return JourneyRestoreContext(
+            artifact_root=self._artifact_dir("binding", binding_key),
+            boundary_kind="binding",
+            boundary_id=binding_key,
+        )
+
+    def checkpoint_store_context(
+        self,
+        *,
+        checkpoint_key: str,
+        checkpoint_name: str,
+        binding_key: str,
+    ) -> JourneyStoreContext:
+        return JourneyStoreContext(
+            artifact_root=self._artifact_dir("checkpoint", checkpoint_key, binding_key),
+            boundary_kind="checkpoint",
+            boundary_id=checkpoint_key,
+            checkpoint_name=checkpoint_name,
+        )
+
+    def checkpoint_restore_context(
+        self,
+        *,
+        checkpoint_key: str,
+        checkpoint_name: str,
+        binding_key: str,
+    ) -> JourneyRestoreContext:
+        return JourneyRestoreContext(
+            artifact_root=self._artifact_dir("checkpoint", checkpoint_key, binding_key),
+            boundary_kind="checkpoint",
+            boundary_id=checkpoint_key,
+            checkpoint_name=checkpoint_name,
+        )
+
+    def active_state_store_context(
+        self,
+        *,
+        case_id: str,
+        binding_key: str,
+    ) -> JourneyStoreContext:
+        return JourneyStoreContext(
+            artifact_root=self._artifact_dir("active-state", case_id, binding_key),
+            boundary_kind="state",
+            boundary_id=case_id,
+        )
+
+    def active_state_restore_context(
+        self,
+        *,
+        case_id: str,
+        binding_key: str,
+    ) -> JourneyRestoreContext:
+        return JourneyRestoreContext(
+            artifact_root=self._artifact_dir("active-state", case_id, binding_key),
+            boundary_kind="state",
+            boundary_id=case_id,
+        )
 
     def active_case_for(
         self,
@@ -434,9 +485,13 @@ class _StateController:
         self._write_state()
 
     def clear(self) -> None:
-        if self.path is None:
-            return
-        delete_execution_state(self.path)
+        if self.path is not None:
+            delete_execution_state(self.path)
+        delete_artifact_root(self.artifact_root)
+
+    def cleanup(self) -> None:
+        if self._artifact_root_is_temporary:
+            delete_artifact_root(self.artifact_root)
 
     def _write_state(self) -> None:
         if self.path is None:
@@ -550,7 +605,6 @@ class _StateController:
             for node in expected_case.nodes
             if isinstance(node, StepNode)
         }
-        checkpoint_keys = set(_case_rehydration_maps(expected_case)[1].values())
         if active_case.dirty_node_id is not None and active_case.dirty_node_id not in node_ids:
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' points at missing step "
@@ -610,12 +664,6 @@ class _StateController:
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' has invalid attempt state for step '{node_id}'."
                 )
-        for checkpoint_key in active_case.snapshot.checkpoint_bindings:
-            if checkpoint_key not in checkpoint_keys:
-                raise ExecutionStateMismatchError(
-                    f"The journey state file '{self.path}' points at missing checkpoint binding "
-                    f"'{checkpoint_key}'."
-                )
 
     def _validate_runtime_snapshot(
         self,
@@ -642,10 +690,6 @@ class _StateController:
                     f"The journey state file '{self.path}' has invalid attempt data in {label}."
                 )
         self._validate_step_bindings(snapshot.step_bindings, label=f"{label} step bindings")
-        self._validate_checkpoint_bindings(
-            snapshot.checkpoint_bindings,
-            label=f"{label} checkpoint bindings",
-        )
 
     def _validate_step_bindings(
         self,
@@ -662,22 +706,30 @@ class _StateController:
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' has invalid {label}."
                 )
-
-    def _validate_checkpoint_bindings(
-        self,
-        bindings: dict[str, CheckpointBindingState],
-        *,
-        label: str,
-    ) -> None:
-        if not isinstance(bindings, dict):
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' has invalid {label}."
-            )
-        for key, binding in bindings.items():
-            if not isinstance(key, str) or not isinstance(binding, CheckpointBindingState):
+            if binding.result is not None and not isinstance(binding.result, StoredValue):
                 raise ExecutionStateMismatchError(
-                    f"The journey state file '{self.path}' has invalid {label}."
+                    f"The journey state file '{self.path}' has invalid stored result data in {label}."
                 )
+            for stored in binding.args:
+                if not isinstance(stored, StoredValue):
+                    raise ExecutionStateMismatchError(
+                        f"The journey state file '{self.path}' has invalid stored args in {label}."
+                    )
+            for stored in binding.kwargs.values():
+                if not isinstance(stored, StoredValue):
+                    raise ExecutionStateMismatchError(
+                        f"The journey state file '{self.path}' has invalid stored kwargs in {label}."
+                    )
+
+    def _artifact_dir(self, *parts: str) -> Path:
+        path = self.artifact_root
+        for part in parts:
+            path = path / _artifact_segment(part)
+        return path
+
+
+def _artifact_segment(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 class _RunSession:
@@ -711,7 +763,9 @@ class _RunSession:
         self.records: list[NodeExecutionRecord] = []
         self._record_indices: list[int] = []
         self._step_bindings: dict[str, StepBindingState] = {}
-        self._checkpoint_bindings: dict[str, CheckpointBindingState] = {}
+        self._step_input_cache: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
+        self._step_result_cache: dict[str, Any] = {}
+        self._step_binding_contexts: dict[str, JourneyRestoreContext] = {}
         self._retry_remaining: dict[str, int] = {}
         self._step_attempts: dict[str, int] = {}
         self.replay_from_index = 0
@@ -725,6 +779,10 @@ class _RunSession:
             self._checkpoint_key_by_name,
             _,
         ) = _case_rehydration_maps(case_plan)
+        self._checkpoint_name_by_key = {
+            key: name
+            for name, key in self._checkpoint_key_by_name.items()
+        }
         self._step_index_by_id = {
             node.node_id: index
             for index, node in enumerate(case_plan.nodes)
@@ -737,12 +795,15 @@ class _RunSession:
         }
 
         if successful_bindings is not None:
-            self._step_bindings = {
-                key: _copy_binding(binding)
-                for key, binding in successful_bindings.items()
-            }
+            for key, binding in successful_bindings.items():
+                self._step_bindings[key] = _copy_binding(binding)
+                self._step_binding_contexts[key] = self._binding_restore_context(key)
         if checkpoint_seed is not None:
-            self._restore_checkpoint_seed(checkpoint_seed)
+            self._restore_checkpoint_seed(
+                checkpoint_seed,
+                checkpoint_name=checkpoint_restore_name,
+            )
+            self._pending_checkpoint_restore_name = None
         if restored_state is not None:
             self._restore_state(restored_state)
 
@@ -751,18 +812,26 @@ class _RunSession:
         return f"bg_{self._group_counter}"
 
     def _runtime_snapshot(self) -> RuntimeSnapshotState:
+        if self._rehydration_enabled:
+            step_bindings = {
+                key: self._freeze_binding(
+                    key,
+                    binding,
+                    context=self._active_state_store_context(key),
+                    description_prefix=f"active state for case '{self.case_plan.case_id}'",
+                )
+                for key, binding in self._step_bindings.items()
+            }
+        else:
+            step_bindings = {
+                key: _copy_binding(binding)
+                for key, binding in self._step_bindings.items()
+            }
         return RuntimeSnapshotState(
             record_indices=list(self._record_indices),
             records=list(self.records),
-            step_bindings={
-                key: _copy_binding(binding)
-                for key, binding in self._step_bindings.items()
-            },
+            step_bindings=step_bindings,
             retry_remaining=dict(self._retry_remaining),
-            checkpoint_bindings={
-                key: _copy_checkpoint_binding(binding)
-                for key, binding in self._checkpoint_bindings.items()
-            },
             step_attempts=dict(self._step_attempts),
         )
 
@@ -781,15 +850,51 @@ class _RunSession:
             return
         self._state_controller.update_active_case(self.snapshot_state())
 
-    def _restore_checkpoint_seed(self, snapshot: RuntimeSnapshotState) -> None:
+    def _restore_checkpoint_seed(
+        self,
+        snapshot: RuntimeSnapshotState,
+        *,
+        checkpoint_name: str | None,
+    ) -> None:
         restored = _copy_runtime_snapshot(snapshot)
         self._record_indices = restored.record_indices
         self.records = restored.records
-        self._step_bindings.update(restored.step_bindings)
-        self._checkpoint_bindings.update(restored.checkpoint_bindings)
+        checkpoint_key = None
+        if checkpoint_name is not None:
+            checkpoint_key = self._checkpoint_key_by_name[checkpoint_name]
+        for key, binding in restored.step_bindings.items():
+            self._step_bindings[key] = binding
+            self._step_binding_contexts[key] = self._checkpoint_restore_context(
+                binding_key=key,
+                checkpoint_key=checkpoint_key,
+            )
+            self._step_input_cache.pop(key, None)
+            self._step_result_cache.pop(key, None)
         self._retry_remaining = restored.retry_remaining
         self._step_attempts = restored.step_attempts
         self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
+        self._restore_snapshot_results(restored.step_bindings)
+
+    def _apply_checkpoint_restore(
+        self,
+        snapshot: RuntimeSnapshotState,
+        *,
+        checkpoint_name: str,
+    ) -> None:
+        restored = _copy_runtime_snapshot(snapshot)
+        checkpoint_key = self._checkpoint_key_by_name[checkpoint_name]
+        self._record_indices = restored.record_indices
+        self.records = restored.records
+        for key, binding in restored.step_bindings.items():
+            self._step_bindings[key] = binding
+            self._step_binding_contexts[key] = self._checkpoint_restore_context(
+                binding_key=key,
+                checkpoint_key=checkpoint_key,
+            )
+            self._step_input_cache.pop(key, None)
+            self._step_result_cache.pop(key, None)
+        self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
+        self._restore_snapshot_results(restored.step_bindings)
 
     def _restore_state(self, restored_state: ActiveCaseState) -> None:
         if restored_state.case_id != self.case_plan.case_id:
@@ -802,13 +907,19 @@ class _RunSession:
         self._record_indices = restored.record_indices
         self.records = restored.records
         self._step_bindings = restored.step_bindings
-        self._checkpoint_bindings = restored.checkpoint_bindings
+        self._step_binding_contexts = {
+            key: self._active_state_restore_context(key)
+            for key in restored.step_bindings
+        }
+        self._step_input_cache = {}
+        self._step_result_cache = {}
         self._retry_remaining = restored.retry_remaining
         self.replay_from_index = restored_state.replay_from_index
         self._dirty_node_id = restored_state.dirty_node_id
         self._step_attempts = restored.step_attempts
         self.stop_after_index = restored_state.stop_after_index
         self._paused_step = restored_state.paused_step
+        self._restore_snapshot_results(restored.step_bindings)
 
     @property
     def paused_step(self) -> PausedStepState | None:
@@ -957,6 +1068,8 @@ class _RunSession:
             if binding is not None:
                 binding.has_result = False
                 binding.result = None
+            self._step_input_cache.pop(binding_key, None)
+            self._step_result_cache.pop(binding_key, None)
             if node.node_id != preserve_retry_for:
                 self._retry_remaining.pop(node.node_id, None)
 
@@ -1027,11 +1140,6 @@ class _RunSession:
         self._persist_state()
         raise _PauseRequested(paused_step)
 
-    def _capture_value(self, value: Any, *, description: str) -> Any:
-        if not self._rehydration_enabled:
-            return value
-        return clone_rehydratable_value(value, description=description)
-
     def _store_step_inputs(
         self,
         node: StepNode,
@@ -1039,42 +1147,31 @@ class _RunSession:
         kwargs: dict[str, Any],
     ) -> StepBindingState:
         binding_key = self._step_key_by_id[node.node_id]
-        stored_args = self._capture_value(
-            tuple(args),
-            description=f"step inputs for '{node.label or node.node_id}'",
-        )
-        stored_kwargs = self._capture_value(
-            dict(kwargs),
-            description=f"step inputs for '{node.label or node.node_id}'",
-        )
-        binding = StepBindingState(
-            args=tuple(stored_args),
-            kwargs=dict(stored_kwargs),
-            has_result=False,
-        )
+        binding = StepBindingState(args=(), kwargs={}, has_result=False)
+        if self._rehydration_enabled:
+            base_context = self._binding_store_context(binding_key)
+            binding = StepBindingState(
+                args=tuple(
+                    self._store_runtime_value(
+                        value,
+                        context=base_context.child(f"arg-{index}"),
+                        description=f"step input {index + 1} for '{node.label or node.node_id}'",
+                    )
+                    for index, value in enumerate(args)
+                ),
+                kwargs={
+                    key: self._store_runtime_value(
+                        value,
+                        context=base_context.child(f"kw-{key}"),
+                        description=f"step kwarg {key!r} for '{node.label or node.node_id}'",
+                    )
+                    for key, value in kwargs.items()
+                },
+                has_result=False,
+            )
+            self._step_binding_contexts[binding_key] = self._binding_restore_context(binding_key)
+        self._step_input_cache[binding_key] = (tuple(args), dict(kwargs))
         self._step_bindings[binding_key] = binding
-        return binding
-
-    def _store_checkpoint_inputs(
-        self,
-        node: CheckpointNode,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> CheckpointBindingState:
-        binding_key = self._checkpoint_key_by_name[node.name]
-        stored_args = self._capture_value(
-            tuple(args),
-            description=f"checkpoint inputs for '{node.name}'",
-        )
-        stored_kwargs = self._capture_value(
-            dict(kwargs),
-            description=f"checkpoint inputs for '{node.name}'",
-        )
-        binding = CheckpointBindingState(
-            args=tuple(stored_args),
-            kwargs=dict(stored_kwargs),
-        )
-        self._checkpoint_bindings[binding_key] = binding
         return binding
 
     def _set_step_result(self, node: StepNode, output: Any) -> StepBindingState:
@@ -1082,16 +1179,20 @@ class _RunSession:
         binding = self._step_bindings.get(binding_key)
         if binding is None:
             binding = self._store_step_inputs(node, (), {})
+        self._step_result_cache[binding_key] = output
         binding.has_result = True
-        binding.result = self._capture_value(
-            output,
-            description=f"step result for '{node.label or node.node_id}'",
-        )
-        if self._state_controller is not None:
+        if self._rehydration_enabled:
+            base_context = self._binding_store_context(binding_key)
+            binding.result = self._store_runtime_value(
+                output,
+                context=base_context.child("result"),
+                description=f"step result for '{node.label or node.node_id}'",
+            )
+        if self._state_controller is not None and self._rehydration_enabled:
             self._state_controller.promote_successful_binding(binding_key, binding)
         return binding
 
-    def _resolve_binding_value(self, template: Any, stored_value: Any) -> Any:
+    def _resolve_binding_value(self, template: Any, restored_value: Any) -> Any:
         if isinstance(template, PlannedValue) and template.kind == "step":
             binding_key = self._step_key_by_id.get(template.node_id)
             binding = self._step_bindings.get(binding_key) if binding_key is not None else None
@@ -1100,7 +1201,11 @@ class _RunSession:
                     f"Replay is missing the saved result for step reference '{template.node_id}'.",
                     hint="This usually means the journey changed after the run started. Start over or use a new state file.",
                 )
-            resolved = binding.result
+            resolved = self._materialize_step_result(
+                binding_key,
+                binding,
+                description=f"saved result for step '{template.node_id}'",
+            )
             for attribute in template.access_path:
                 if not hasattr(resolved, attribute):
                     raise InvalidBranchUsageError(
@@ -1109,59 +1214,226 @@ class _RunSession:
                     )
                 resolved = getattr(resolved, attribute)
             return resolved
-        if isinstance(template, tuple) and isinstance(stored_value, tuple) and len(template) == len(stored_value):
+        if isinstance(template, tuple) and isinstance(restored_value, tuple) and len(template) == len(restored_value):
             return tuple(
                 self._resolve_binding_value(item_template, item_value)
-                for item_template, item_value in zip(template, stored_value)
+                for item_template, item_value in zip(template, restored_value)
             )
-        if isinstance(template, list) and isinstance(stored_value, list) and len(template) == len(stored_value):
+        if isinstance(template, list) and isinstance(restored_value, list) and len(template) == len(restored_value):
             return [
                 self._resolve_binding_value(item_template, item_value)
-                for item_template, item_value in zip(template, stored_value)
+                for item_template, item_value in zip(template, restored_value)
             ]
-        if isinstance(template, dict) and isinstance(stored_value, dict):
+        if isinstance(template, dict) and isinstance(restored_value, dict):
             return {
-                key: self._resolve_binding_value(template[key], stored_value[key])
+                key: self._resolve_binding_value(template[key], restored_value[key])
                 if key in template
-                else stored_value[key]
-                for key in stored_value
+                else restored_value[key]
+                for key in restored_value
             }
-        return stored_value
+        return restored_value
 
     def _resolve_step_inputs(self, node: StepNode, binding: StepBindingState) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        binding_key = self._step_key_by_id[node.node_id]
+        cached = self._step_input_cache.get(binding_key)
+        if cached is not None:
+            return cached
+
+        base_context = self._step_binding_contexts.get(binding_key)
+        if base_context is None:
+            base_context = self._binding_restore_context(binding_key)
+            self._step_binding_contexts[binding_key] = base_context
+
         resolved_args = tuple(
-            self._resolve_binding_value(template, stored_value)
-            for template, stored_value in zip(node.args, binding.args)
+            self._materialize_input_value(
+                template=node.args[index],
+                stored=binding.args[index],
+                context=base_context.child(f"arg-{index}"),
+                description=f"step input {index + 1} for '{node.label or node.node_id}'",
+            )
+            for index in range(len(binding.args))
         )
         resolved_kwargs = {
-            key: self._resolve_binding_value(node.kwargs.get(key), binding.kwargs[key])
+            key: self._materialize_input_value(
+                template=node.kwargs.get(key),
+                stored=binding.kwargs[key],
+                context=base_context.child(f"kw-{key}"),
+                description=f"step kwarg {key!r} for '{node.label or node.node_id}'",
+            )
             for key in binding.kwargs
         }
+        self._step_input_cache[binding_key] = (resolved_args, resolved_kwargs)
         return resolved_args, resolved_kwargs
 
-    def _resolve_checkpoint_inputs(
+    def _materialize_input_value(
         self,
-        node: CheckpointNode,
-        binding: CheckpointBindingState,
-    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
-        resolved_args = tuple(
-            self._resolve_binding_value(template, stored_value)
-            for template, stored_value in zip(node.args, binding.args)
+        *,
+        template: Any,
+        stored: StoredValue,
+        context: JourneyRestoreContext,
+        description: str,
+    ) -> Any:
+        if isinstance(template, PlannedValue) and template.kind == "step":
+            return self._resolve_binding_value(template, None)
+        restored_value = self._restore_stored_value(
+            stored,
+            context=context,
+            description=description,
         )
-        resolved_kwargs = {
-            key: self._resolve_binding_value(node.kwargs.get(key), binding.kwargs[key])
-            for key in binding.kwargs
-        }
-        return resolved_args, resolved_kwargs
+        return self._resolve_binding_value(template, restored_value)
 
-    def _checkpoint_phase_for(self, node: CheckpointNode) -> str | None:
-        if not node.has_hooks:
-            return None
-        if self._pending_checkpoint_restore_name == node.name:
-            return "restore"
-        if self.cursor - 1 >= self.replay_from_index:
-            return "store"
-        return None
+    def _materialize_step_result(
+        self,
+        binding_key: str,
+        binding: StepBindingState,
+        *,
+        description: str,
+    ) -> Any:
+        cached = self._step_result_cache.get(binding_key)
+        if cached is not None:
+            return cached
+        if not binding.has_result or binding.result is None:
+            raise InvalidBranchUsageError(
+                f"Replay is missing the saved result for step binding '{binding_key}'.",
+                hint="This usually means the journey changed after the run started. Start over or use a new state file.",
+            )
+        context = self._step_binding_contexts.get(binding_key)
+        if context is None:
+            context = self._binding_restore_context(binding_key)
+            self._step_binding_contexts[binding_key] = context
+        restored = self._restore_stored_value(
+            binding.result,
+            context=context.child("result"),
+            description=description,
+        )
+        self._step_result_cache[binding_key] = restored
+        return restored
+
+    def _restore_snapshot_results(self, bindings: dict[str, StepBindingState]) -> None:
+        for key, binding in bindings.items():
+            if binding.has_result and binding.result is not None:
+                self._materialize_step_result(
+                    key,
+                    binding,
+                    description=f"saved step result '{key}'",
+                )
+
+    def _store_runtime_value(
+        self,
+        value: Any,
+        *,
+        context: JourneyStoreContext,
+        description: str,
+    ) -> StoredValue:
+        try:
+            return store_value(value, context=context, description=description)
+        except StoredValueSerializationError as exc:
+            raise ExecutionStateSerializationError(str(exc)) from exc
+
+    def _restore_stored_value(
+        self,
+        stored: StoredValue,
+        *,
+        context: JourneyRestoreContext,
+        description: str,
+    ) -> Any:
+        try:
+            return restore_value(stored, context=context, description=description)
+        except StoredValueRestoreError as exc:
+            raise CallableExecutionError(
+                str(exc),
+                hint="Inspect the custom __restore__ implementation or restart the run after fixing the underlying issue.",
+            ) from exc
+
+    def _freeze_binding(
+        self,
+        binding_key: str,
+        binding: StepBindingState,
+        *,
+        context: JourneyStoreContext,
+        description_prefix: str,
+    ) -> StepBindingState:
+        frozen = _copy_binding(binding)
+        cached_inputs = self._step_input_cache.get(binding_key)
+        if cached_inputs is not None:
+            cached_args, cached_kwargs = cached_inputs
+            frozen.args = tuple(
+                self._store_runtime_value(
+                    value,
+                    context=context.child(f"arg-{index}"),
+                    description=f"{description_prefix} input {index + 1}",
+                )
+                for index, value in enumerate(cached_args)
+            )
+            frozen.kwargs = {
+                key: self._store_runtime_value(
+                    value,
+                    context=context.child(f"kw-{key}"),
+                    description=f"{description_prefix} kwarg {key!r}",
+                )
+                for key, value in cached_kwargs.items()
+            }
+        if binding.has_result:
+            cached_result = self._step_result_cache.get(binding_key)
+            if cached_result is not None:
+                frozen.result = self._store_runtime_value(
+                    cached_result,
+                    context=context.child("result"),
+                    description=f"{description_prefix} result",
+                )
+        return frozen
+
+    def _binding_store_context(self, binding_key: str) -> JourneyStoreContext:
+        return self._require_state_controller().binding_store_context(binding_key)
+
+    def _binding_restore_context(self, binding_key: str) -> JourneyRestoreContext:
+        return self._require_state_controller().binding_restore_context(binding_key)
+
+    def _checkpoint_store_context(
+        self,
+        checkpoint_name: str,
+        binding_key: str,
+    ) -> JourneyStoreContext:
+        checkpoint_key = self._checkpoint_key_by_name[checkpoint_name]
+        return self._require_state_controller().checkpoint_store_context(
+            checkpoint_key=checkpoint_key,
+            checkpoint_name=checkpoint_name,
+            binding_key=binding_key,
+        )
+
+    def _checkpoint_restore_context(
+        self,
+        *,
+        binding_key: str,
+        checkpoint_key: str | None,
+    ) -> JourneyRestoreContext:
+        if checkpoint_key is None:
+            return self._binding_restore_context(binding_key)
+        checkpoint_name = self._checkpoint_name_by_key[checkpoint_key]
+        return self._require_state_controller().checkpoint_restore_context(
+            checkpoint_key=checkpoint_key,
+            checkpoint_name=checkpoint_name,
+            binding_key=binding_key,
+        )
+
+    def _active_state_store_context(self, binding_key: str) -> JourneyStoreContext:
+        return self._require_state_controller().active_state_store_context(
+            case_id=self.case_plan.case_id,
+            binding_key=binding_key,
+        )
+
+    def _active_state_restore_context(self, binding_key: str) -> JourneyRestoreContext:
+        return self._require_state_controller().active_state_restore_context(
+            case_id=self.case_plan.case_id,
+            binding_key=binding_key,
+        )
+
+    def _require_state_controller(self) -> _StateController:
+        if self._state_controller is None:
+            raise ExecutionStateMismatchError(
+                "Replay state is unavailable for this run."
+            )
+        return self._state_controller
 
     def step(
         self,
@@ -1189,10 +1461,22 @@ class _RunSession:
                     f"Retry replay is missing the saved result for step '{node.label or node.node_id}'.",
                     hint="This usually means the journey changed after the run started. Start over or use a new state file.",
                 )
-            return cast(R, binding.result)
+            return cast(
+                R,
+                self._materialize_step_result(
+                    binding_key,
+                    binding,
+                    description=f"saved result for step '{node.label or node.node_id}'",
+                ),
+            )
 
         if binding is not None and binding.has_result and not self._has_record_for(node_index):
-            should_stop = self._record(node_index, node, ok=True, result=binding.result)
+            result = self._materialize_step_result(
+                binding_key,
+                binding,
+                description=f"saved result for step '{node.label or node.node_id}'",
+            )
+            should_stop = self._record(node_index, node, ok=True, result=result)
             if should_stop:
                 if self._develop_step_enabled:
                     self._pause_after_step(
@@ -1202,7 +1486,7 @@ class _RunSession:
                         ok=True,
                     )
                 raise _StopCase()
-            return cast(R, binding.result)
+            return cast(R, result)
 
         bound_args: tuple[Any, ...]
         bound_kwargs: dict[str, Any]
@@ -1279,7 +1563,7 @@ class _RunSession:
         binding = self._set_step_result(node, output)
         self._retry_remaining.pop(node.node_id, None)
         self._dirty_node_id = None
-        should_stop = self._record(node_index, node, ok=True, result=binding.result)
+        should_stop = self._record(node_index, node, ok=True, result=output)
         self._observer.on_step_success(
             case_plan=self.case_plan,
             node=node,
@@ -1296,66 +1580,25 @@ class _RunSession:
                     ok=True,
                 )
             raise _StopCase()
-        return cast(R, binding.result)
+        return cast(R, output)
 
-    def checkpoint(
-        self,
-        *args: Any,
-        store: Callable[..., object] | None = None,
-        restore: Callable[..., object] | None = None,
-        **kwargs: Any,
-    ) -> CheckpointRef:
-        validate_checkpoint_call(
-            args=tuple(args),
-            kwargs=dict(kwargs),
-            store=store,
-            restore=restore,
-        )
+    def checkpoint(self) -> CheckpointRef:
         checkpoint_index = self.cursor
         checkpoint_node = self._consume(CheckpointNode)
-        expected_store_ref = checkpoint_node.store_fn_ref
-        expected_restore_ref = checkpoint_node.restore_fn_ref
-        actual_store_ref = callable_ref(store) if store is not None else None
-        actual_restore_ref = callable_ref(restore) if restore is not None else None
-        if actual_store_ref != expected_store_ref or actual_restore_ref != expected_restore_ref:
-            raise InvalidBranchUsageError(
-                "checkpoint() was called with hook callables that do not match the compiled plan.",
-                hint="Make sure the journey calls checkpoint(..., store=..., restore=...) the same way during execution that it used during planning.",
-            )
-
         checkpoint_key = self._checkpoint_key_by_name[checkpoint_node.name]
-        if checkpoint_node.has_hooks:
-            binding = self._checkpoint_bindings.get(checkpoint_key)
-            if binding is None:
-                binding = self._store_checkpoint_inputs(
-                    checkpoint_node,
-                    tuple(args),
-                    dict(kwargs),
+        if self._pending_checkpoint_restore_name == checkpoint_node.name:
+            snapshot = self._require_state_controller().checkpoint_snapshot_for(checkpoint_key)
+            if snapshot is None:
+                raise InvalidBranchUsageError(
+                    f"Replay is missing the saved checkpoint snapshot for '{checkpoint_node.name}'.",
+                    hint="This usually means the journey changed after the run started. Start over or use a new state file.",
                 )
-            bound_args, bound_kwargs = self._resolve_checkpoint_inputs(
-                checkpoint_node,
-                binding,
+            self._apply_checkpoint_restore(
+                snapshot,
+                checkpoint_name=checkpoint_node.name,
             )
-            phase = self._checkpoint_phase_for(checkpoint_node)
-            if phase == "restore":
-                try:
-                    cast(Callable[..., object], restore)(*bound_args, **bound_kwargs)
-                except Exception as exc:
-                    raise _callable_execution_error_for_checkpoint(
-                        checkpoint_node,
-                        phase="restore",
-                        exc=exc,
-                    ) from exc
-                self._pending_checkpoint_restore_name = None
-            elif phase == "store":
-                try:
-                    cast(Callable[..., object], store)(*bound_args, **bound_kwargs)
-                except Exception as exc:
-                    raise _callable_execution_error_for_checkpoint(
-                        checkpoint_node,
-                        phase="store",
-                        exc=exc,
-                    ) from exc
+            self._pending_checkpoint_restore_name = None
+            return CheckpointRef(name=checkpoint_node.name)
 
         if checkpoint_index >= self.replay_from_index:
             should_stop = self._record(
@@ -1366,10 +1609,25 @@ class _RunSession:
             )
             if should_stop:
                 raise _StopCase()
-            if self._state_controller is not None:
+            if self._state_controller is not None and self._rehydration_enabled:
+                snapshot = RuntimeSnapshotState(
+                    record_indices=list(self._record_indices),
+                    records=list(self.records),
+                    step_bindings={
+                        key: self._freeze_binding(
+                            key,
+                            binding,
+                            context=self._checkpoint_store_context(checkpoint_node.name, key),
+                            description_prefix=f"checkpoint '{checkpoint_node.name}'",
+                        )
+                        for key, binding in self._step_bindings.items()
+                    },
+                    retry_remaining=dict(self._retry_remaining),
+                    step_attempts=dict(self._step_attempts),
+                )
                 self._state_controller.store_checkpoint_snapshot(
                     checkpoint_key,
-                    self._runtime_snapshot(),
+                    snapshot,
                 )
 
         return CheckpointRef(name=checkpoint_node.name)
@@ -1593,10 +1851,6 @@ def _stable_node_payload(node: Any) -> Any:
         return {
             "node_id": node.node_id,
             "name": node.name,
-            "store_fn_ref": node.store_fn_ref,
-            "restore_fn_ref": node.restore_fn_ref,
-            "args": _stable_arg_template(node.args),
-            "kwargs": _stable_arg_template(node.kwargs),
         }
     return _stable_value(asdict(node))
 
@@ -1792,6 +2046,8 @@ def _execute_plan(
     except Exception:
         state_controller.clear()
         raise
+    finally:
+        state_controller.cleanup()
 
     return result
 

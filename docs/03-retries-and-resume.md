@@ -56,34 +56,39 @@ Those three journeys represent the three most common retry strategies:
 - retry from an earlier step result
 - retry from a checkpoint and replay everything after it
 
-Hooked checkpoints follow the same replay rule. If you write
-`checkpoint(..., store=..., restore=...)`, Journey calls `store(...)` on the
-first forward hit and `restore(...)` only when execution rewinds back to that
-checkpoint.
+Checkpoint replay follows the same rule as `--state`: Journey reuses the stored
+step inputs and outputs that cross the replay boundary. If one of those values
+needs custom side effects, put that logic on the value itself with
+`__store__` / `__restore__`.
 
-That matters when checkpoint arguments come from plain Python helpers instead of
-earlier `step()` results:
+That matters when the replayable value wraps external state instead of being a
+plain pickleable object:
 
 ```python
-def next_context() -> dict[str, str]:
+class ExternalState:
+    def __store__(self, context):
+        ...
+
+    @classmethod
+    def __restore__(cls, payload, context):
+        ...
+
+
+def next_context() -> ExternalState:
     ...
 
 
 @journey
 def retry_with_external_state() -> None:
-    context = next_context()
-    anchor = checkpoint(
-        context,
-        store=save_external_state,
-        restore=load_external_state,
-    )
+    context = step(next_context)
+    anchor = checkpoint()
     step(refresh_after_checkpoint, context)
     step(wait_until_ready, context, retry=1, retry_delay=0, retry_from=anchor)
 ```
 
-Journey saves those checkpoint arguments the first time the checkpoint runs and
-reuses them on retries and resume, even though `next_context()` itself is plain
-Python outside `step()`.
+Journey stores that step result at the replay boundary and reuses it on retries
+and resume, so the same external-state logic works for checkpoint rewinds and
+`--state` restores.
 
 ### Retry the Current Step
 

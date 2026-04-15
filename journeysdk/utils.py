@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 from typing import Any
 
@@ -14,28 +15,16 @@ def callable_ref(fn: Callable[..., object]) -> str:
     return f"{module}:{qualname}"
 
 
-def validate_checkpoint_call(
-    *,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    store: Callable[..., object] | None,
-    restore: Callable[..., object] | None,
-) -> None:
-    """Validate the public checkpoint(...) hook contract."""
+def resolve_ref(ref: str) -> Any:
+    """Resolve one ``module:qualname`` reference."""
 
-    if store is None and restore is None:
-        if args or kwargs:
-            raise TypeError(
-                "checkpoint() only accepts positional and keyword arguments when both store=... and restore=... are provided."
-            )
-        return
-
-    if store is None or restore is None:
-        raise TypeError(
-            "checkpoint() requires both store=... and restore=... together."
-        )
-
-    if not callable(store):
-        raise TypeError("checkpoint(store=...) needs a callable.")
-    if not callable(restore):
-        raise TypeError("checkpoint(restore=...) needs a callable.")
+    module_name, separator, qualname = ref.partition(":")
+    if not separator or not module_name or not qualname:
+        raise ValueError(f"Invalid reference {ref!r}.")
+    module = importlib.import_module(module_name)
+    current: Any = module
+    for part in qualname.split("."):
+        if part == "<locals>":
+            raise ValueError(f"Reference {ref!r} points to a non-importable local object.")
+        current = getattr(current, part)
+    return current

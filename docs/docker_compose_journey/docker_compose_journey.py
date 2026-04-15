@@ -12,9 +12,7 @@ from journeysdk import branch, checkpoint, journey, step
 from journeysdk.tools.docker import (
     DockerComposeStack,
     DockerContainerStatus,
-    restore_docker,
     run_docker,
-    store_docker,
 )
 
 _COMPOSE_FILE = Path(__file__).with_name("docker-compose.yml")
@@ -252,12 +250,7 @@ def docker_compose_journey() -> None:
         )
     )
     step(assert_stack_ready, stack)
-    after_boot = checkpoint(
-        stack,
-        store=store_docker,
-        restore=restore_docker,
-        snapshot_name="after_boot",
-    )
+    after_boot = checkpoint()
     baseline = step(capture_baseline_state, stack)
     if branch(start_from=after_boot):
         incremented = step(increment_counter, stack)

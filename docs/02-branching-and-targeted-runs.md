@@ -34,22 +34,27 @@ Why this shape matters:
 - the checkpoint gives later execution a replay anchor
 - each `branch(...)` arm becomes its own case
 
-`checkpoint()` can also manage external system state. Plain `checkpoint()` is a
-marker only. A hooked checkpoint uses paired store and restore hooks:
+`checkpoint()` is marker-only. External system state belongs on the values that
+cross that boundary, not on the checkpoint itself. If a step result needs
+custom replay behavior, make that value implement the Journey rehydration
+protocol:
 
 ```python
-session = open_browser_session()
+class BrowserSession:
+    def __store__(self, context):
+        ...
 
-after_login = checkpoint(
-    session,
-    store=save_browser_session,
-    restore=load_browser_session,
-)
+    @classmethod
+    def __restore__(cls, payload, context):
+        ...
+
+
+session = step(open_browser_session)
+after_login = checkpoint()
 ```
 
-Journey calls `store(...)` the first time it hits that checkpoint and later
-calls `restore(...)` only when execution truly rewinds back to it, such as a
-checkpoint-started later branch.
+Journey stores and restores replayable step values whenever execution truly
+rewinds to that boundary, such as a checkpoint-started later branch.
 
 ### Plan the Branches
 
@@ -128,8 +133,9 @@ def rehydration_journey() -> None:
 
 This example is intentionally small. It exists to show one idea clearly: later branches can restart from saved checkpoint state instead of rerunning shared setup.
 
-If the checkpoint also has `store=` / `restore=` hooks, Journey restores that
-external state before the later branch continues from the checkpoint anchor.
+If a value created before the checkpoint implements `__store__` /
+`__restore__`, Journey restores that external state before the later branch
+continues from the checkpoint anchor.
 
 ### Target the Second Branch
 
@@ -154,7 +160,8 @@ The `replay_anchor=cp_1` part is what matters. It tells you which checkpoint Jou
 ## What To Notice
 
 - Authoring stays sequential, even when execution becomes multi-case.
-- `checkpoint()` is not just a marker for humans. It is a replay anchor for targeted runs and later branch execution, and it can optionally store and restore external system state on rewinds.
+- `checkpoint()` is not just a marker for humans. It is a replay anchor for targeted runs and later branch execution.
+- External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, checkpoint rewinds, and `--state` all use the same rehydration path.
 - `--step` picks one case. `--develop-step` picks one case and then pauses so you can iterate faster.
 - Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.
 
