@@ -1,6 +1,6 @@
 # Contributing
 
-Run all commands in this file from `/Users/piotrsliwa/jny/public`.
+Run all commands in this file from the root.
 
 ## Local Setup
 
@@ -16,7 +16,7 @@ uv run pytest
 Install the library in editable mode with `pip`:
 
 ```bash
-pip install -e .
+uv pip install -e .
 ```
 
 Add the local checkout to a `uv` project in editable mode:
