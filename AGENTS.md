@@ -21,7 +21,6 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 ## Preferred commands
 
 - `uv run pytest`
-- `cd ../private && uv run --with ../public --extra dev pytest`
 - `uv run journey plan`
 - `uv run journey plan --file docs/first_journey/first_journey.py`
 - `uv run journey execute`
@@ -58,8 +57,6 @@ flow that reaches a target step label.
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
-- When changes affect cloud email/webhook compatibility or shared service contracts in the combined workspace, also run
-  `cd ../private && uv run --with ../public --extra dev pytest`.
 - Keep the shared cloud auth and reservation pattern documented anywhere an official cloud tool is introduced.
 - Keep docstrings in `journeysdk/api.py` up to date (it is the public API).
 - Prefer adding or updating tests before changing planner, executor, or validator semantics.
@@ -67,4 +64,4 @@ flow that reaches a target step label.
 - When changing branch behavior, verify case counts, label paths, ambiguity handling, and replay-anchor reporting.
 - Showcase every user-facing feature with runnable and documented examples in `docs/`.
 - Follow strict typing.
-- Do not import from `../private` or reference private service implementation details in public docs, tests, or code.
+- Do not reference non-public service implementation details in public docs, tests, or code.

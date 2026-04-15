@@ -26,6 +26,7 @@ def test_public_tree_does_not_reference_private_modules_or_paths():
         "python -m journey_cloud",
         "journey_cloud/",
         "private/",
+        "../private",
     ]
 
     for path in _tracked_text_files(root):

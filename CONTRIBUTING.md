@@ -11,13 +11,6 @@ uv sync --extra dev
 uv run pytest
 ```
 
-If your change touches shared Journey Cloud behavior, also run the private compatibility suite:
-
-```bash
-cd ../private
-uv run --with ../public --extra dev pytest
-```
-
 ## Editable Installs
 
 Install the library in editable mode with `pip`:
@@ -57,7 +50,6 @@ That script:
 
 1. Update the package version in `pyproject.toml`.
 2. Run `uv run pytest`.
-3. Run `cd ../private && uv run --with ../public --extra dev pytest`.
-4. Run `./scripts/smoke_test_package.sh`.
-5. Build the release artifacts with `uv build`.
-6. Publish them with `uv publish`.
+3. Run `./scripts/smoke_test_package.sh`.
+4. Build the release artifacts with `uv build`.
+5. Publish them with `uv publish`.

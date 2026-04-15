@@ -103,9 +103,6 @@ editable installs, and local wheel smoke testing.
 ```bash
 uv sync --extra dev
 uv run pytest
-
-cd ../private
-uv run --with ../public --extra dev pytest
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for editable-install workflows, the local package smoke test, and the manual
@@ -332,14 +329,6 @@ Smoke test the built package and CLI locally:
 
 ```bash
 ./scripts/smoke_test_package.sh
-```
-
-If you are working in the combined workspace and changed shared cloud email or webhook behavior, also run the sibling
-service suite with this framework package injected:
-
-```bash
-cd ../private
-uv run --with ../public --extra dev pytest
 ```
 
 See [`docs/README.md`](docs/README.md) for the runnable handbook. It starts with getting oriented in Journey's
