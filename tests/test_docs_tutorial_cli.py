@@ -37,15 +37,10 @@ def test_first_journey_readme_commands(
 ):
     monkeypatch.chdir(_repo_root())
 
-    plan_exit = main(["plan", "--file", "docs/first_journey/first_journey.py"])
-    plan_output = capsys.readouterr().out
-    assert plan_exit == 0
-    assert "Journey docs/first_journey/first_journey.py:first_journey" in plan_output
-    assert "Summary: 1 journey planned, 1 case planned, 0 failed" in plan_output
-
-    execute_exit = main(["execute", "--file", "docs/first_journey/first_journey.py"])
+    execute_exit = main(["--file", "docs/first_journey/first_journey.py"])
     execute_output = capsys.readouterr().out
     assert execute_exit == 0
+    assert "Journey docs/first_journey/first_journey.py:first_journey" in execute_output
     assert "  step create_customer_profile attempt=1 ok duration=" in execute_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
@@ -58,7 +53,6 @@ def test_selection_readme_commands_use_journey_and_json(
 
     exit_code = main(
         [
-            "plan",
             "--file",
             "docs/selection_journeys/selection_journeys.py",
             "--journey",
@@ -74,7 +68,6 @@ def test_selection_readme_commands_use_journey_and_json(
 
     exit_code = main(
         [
-            "execute",
             "--file",
             "docs/selection_journeys/selection_journeys.py",
             "--journey",
@@ -98,7 +91,6 @@ def test_branching_readme_target_command_reports_replay_anchor(
 
     exit_code = main(
         [
-            "execute",
             "--file",
             "docs/branching_journey/branching_journey.py",
             "--step",
@@ -127,7 +119,6 @@ def test_branching_readme_develop_step_command_pauses_then_completes(
 
     exit_code = main(
         [
-            "execute",
             "--file",
             "docs/branching_journey/branching_journey.py",
             "--develop-step",
@@ -149,7 +140,6 @@ def test_retry_readme_commands_show_retry_behavior(
 
     exit_code = main(
         [
-            "execute",
             "--file",
             "docs/retry_journey/retry_journey.py",
             "--journey",
@@ -163,7 +153,6 @@ def test_retry_readme_commands_show_retry_behavior(
 
     exit_code = main(
         [
-            "execute",
             "--file",
             "docs/retry_journey/retry_journey.py",
             "--journey",
@@ -177,7 +166,6 @@ def test_retry_readme_commands_show_retry_behavior(
 
     exit_code = main(
         [
-            "execute",
             "--file",
             "docs/retry_journey/retry_journey.py",
             "--journey",
@@ -211,7 +199,6 @@ def test_resume_readme_commands_interrupt_then_resume(
     try:
         first_exit = main(
             [
-                "execute",
                 "--file",
                 "docs/resume_journey/resume_journey.py",
                 "--state",
@@ -235,7 +222,6 @@ def test_resume_readme_commands_interrupt_then_resume(
 
     second_exit = main(
         [
-            "execute",
             "--file",
             "docs/resume_journey/resume_journey.py",
             "--state",
@@ -263,18 +249,16 @@ def test_cloud_webhook_readme_commands(
         monkeypatch.setenv(JOURNEY_CLOUD_BASE_URL_ENV, cloud.base_url)
         cloud_webhook_docs.reset_demo_state()
 
-        plan_exit = main(["plan", "--file", "docs/cloud_webhook_journey/cloud_webhook_journey.py"])
-        plan_output = capsys.readouterr().out
-        assert plan_exit == 0
-        assert "Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in plan_output
-        assert "Summary: 1 journey planned, 1 case planned, 0 failed" in plan_output
-
         execute_exit = main(
-            ["execute", "--file", "docs/cloud_webhook_journey/cloud_webhook_journey.py"]
+            [
+                "--file",
+                "docs/cloud_webhook_journey/cloud_webhook_journey.py",
+            ]
         )
         execute_output = capsys.readouterr().out
 
     assert execute_exit == 0
+    assert "Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in execute_output
     assert "step get_webhook_invoice_paid attempt=1 ok duration=" in execute_output
     assert "step receive_webhook_invoice_paid attempt=1" in execute_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
@@ -310,7 +294,6 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         try:
             first_exit = main(
                 [
-                    "execute",
                     "--file",
                     "docs/playwright_resume_journey/playwright_resume_journey.py",
                     "--state",
@@ -334,7 +317,6 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
 
         second_exit = main(
             [
-                "execute",
                 "--file",
                 "docs/playwright_resume_journey/playwright_resume_journey.py",
                 "--state",
@@ -362,7 +344,6 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
 
     default_exit = main(
         [
-            "execute",
             "--file",
             "docs/fail_fast_journeys/fail_fast_journeys.py",
         ]
@@ -375,7 +356,6 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
 
     fail_fast_exit = main(
         [
-            "execute",
             "--file",
             "docs/fail_fast_journeys/fail_fast_journeys.py",
             "--fail-fast",

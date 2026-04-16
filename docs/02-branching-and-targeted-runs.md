@@ -56,27 +56,13 @@ after_login = checkpoint()
 Journey stores and restores replayable step values whenever execution truly
 rewinds to that boundary, such as a checkpoint-started later branch.
 
-### Plan the Branches
-
-```bash
-uv run journey plan --file docs/branching_journey/branching_journey.py
-```
-
-```console
-Journey docs/branching_journey/branching_journey.py:branching_journey
-journey_id=branching_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['load_signup_request', 'classify_signup_request', 'assert_fast_track_path']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['load_signup_request', 'classify_signup_request', 'assert_manual_review_path']
-
-Summary: 1 journey planned, 2 cases planned, 0 failed
-```
-
-Planning is where Journey makes the branching visible. You can see both linear cases before you execute either of them.
+Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
+targeted run uses the compiled labels to choose one path.
 
 ### Run Only the Branch That Reaches One Step
 
 ```bash
-uv run journey execute --file docs/branching_journey/branching_journey.py --step assert_manual_review_path
+uv run journey --file docs/branching_journey/branching_journey.py --step assert_manual_review_path
 ```
 
 ```console
@@ -99,7 +85,7 @@ That output is the reason `--step` is so useful during development: Journey choo
 ### Pause After the Target Step While You Iterate
 
 ```bash
-uv run journey execute --file docs/branching_journey/branching_journey.py --develop-step assert_manual_review_path
+uv run journey --file docs/branching_journey/branching_journey.py --develop-step assert_manual_review_path
 ```
 
 ```console
@@ -140,7 +126,7 @@ continues from the checkpoint anchor.
 ### Target the Second Branch
 
 ```bash
-uv run journey execute --file docs/rehydration_journey/rehydration_journey.py --step assert_branch_b
+uv run journey --file docs/rehydration_journey/rehydration_journey.py --step assert_branch_b
 ```
 
 ```console

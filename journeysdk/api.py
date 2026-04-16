@@ -24,8 +24,8 @@ def journey(fn: Callable[P, R]) -> Callable[P, R]:
     """Mark a top-level authoring function so the CLI can discover it.
 
     Decorate the function that defines one complete QA journey. The decorated
-    callable remains unchanged, but ``journey plan`` and ``journey execute``
-    can now discover it as an entrypoint.
+    callable remains unchanged, but the ``journey`` CLI can now discover it as
+    an entrypoint.
 
     Args:
         fn: Callable to expose as a journey entrypoint.
@@ -148,8 +148,8 @@ def step(
     or polling steps configured with retry settings. Retries apply when a step
     raises an exception and ``retry`` is greater than 0.
 
-    When a run uses retries, ``journey execute --state ...``, or branches that
-    start from an earlier checkpoint, journey may need to save and restore step
+    When a run uses retries, ``journey --state ...``, or branches that start
+    from an earlier checkpoint, journey may need to save and restore step
     inputs and outputs. Any value that may be replayed that way must be
     pickle-serializable or implement the Journey rehydration protocol.
 

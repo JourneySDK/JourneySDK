@@ -41,7 +41,7 @@ class _CommandError:
 
 
 @dataclass(frozen=True)
-class _PlannedJourney:
+class _CompiledJourney:
     file_path: Path
     journey_name: str
     function: Callable[..., Any]
@@ -54,14 +54,6 @@ class _ExecutedJourney:
     journey_name: str
     plan: JourneyPlan
     report: ExecutionReport
-
-
-def _labels_for_case(case: CasePlan) -> list[str]:
-    return [
-        node.label
-        for node in case.nodes
-        if hasattr(node, "label") and getattr(node, "label") is not None
-    ]
 
 
 def _display_path(root: Path, path: Path) -> str:
@@ -333,12 +325,12 @@ def _discover_targets(
     return root, discovered, errors
 
 
-def _plan_targets(
+def _compile_targets(
     targets: list[DiscoveredJourney],
     *,
     fail_fast: bool,
-) -> tuple[list[_PlannedJourney], list[_CommandError]]:
-    planned: list[_PlannedJourney] = []
+) -> tuple[list[_CompiledJourney], list[_CommandError]]:
+    compiled: list[_CompiledJourney] = []
     errors: list[_CommandError] = []
 
     for target in targets:
@@ -348,7 +340,7 @@ def _plan_targets(
             errors.append(
                 _error_from_exception(
                     exc,
-                    phase="plan",
+                    phase="execute",
                     file_path=str(target.file_path),
                     journey_name=target.journey_name,
                 )
@@ -357,8 +349,8 @@ def _plan_targets(
                 break
             continue
 
-        planned.append(
-            _PlannedJourney(
+        compiled.append(
+            _CompiledJourney(
                 file_path=target.file_path,
                 journey_name=target.journey_name,
                 function=target.function,
@@ -366,7 +358,7 @@ def _plan_targets(
             )
         )
 
-    return planned, errors
+    return compiled, errors
 
 
 def _locate_step_matches(plan: JourneyPlan, step: str) -> list[tuple[CasePlan, int]]:
@@ -379,13 +371,13 @@ def _locate_step_matches(plan: JourneyPlan, step: str) -> list[tuple[CasePlan, i
 
 
 def _select_targeted_journey(
-    planned: list[_PlannedJourney],
+    compiled: list[_CompiledJourney],
     *,
     step: str,
-) -> tuple[_PlannedJourney | None, list[_CommandError]]:
-    flow_matches: dict[str, _PlannedJourney] = {}
+) -> tuple[_CompiledJourney | None, list[_CommandError]]:
+    flow_matches: dict[str, _CompiledJourney] = {}
 
-    for item in planned:
+    for item in compiled:
         matches = _locate_step_matches(item.plan, step)
         for case, _ in matches:
             flow_key = f"{item.file_path}:{item.journey_name}:{case.case_id}"
@@ -432,7 +424,7 @@ def _prompt_for_pause_action(paused: _PausedExecution) -> str:
 
 
 def _paused_failure_error(
-    selected: _PlannedJourney,
+    selected: _CompiledJourney,
     paused: _PausedExecution,
 ) -> _CommandError:
     message = paused.paused_step.failure_message
@@ -530,14 +522,14 @@ def _execute_all_targets(
 
 
 def _execute_target_step(
-    planned: list[_PlannedJourney],
+    compiled: list[_CompiledJourney],
     *,
     root: Path,
     step: str,
     state: str | None = None,
     stream_live: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
-    selected, errors = _select_targeted_journey(planned, step=step)
+    selected, errors = _select_targeted_journey(compiled, step=step)
     if selected is None:
         return [], errors
 
@@ -580,14 +572,14 @@ def _execute_target_step(
 
 
 def _execute_target_pause(
-    planned: list[_PlannedJourney],
+    compiled: list[_CompiledJourney],
     *,
     root: Path,
     develop_step: str,
     state: str | None = None,
     stream_live: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
-    selected, errors = _select_targeted_journey(planned, step=develop_step)
+    selected, errors = _select_targeted_journey(compiled, step=develop_step)
     if selected is None:
         return [], errors
 
@@ -647,52 +639,6 @@ def _execute_target_pause(
     finally:
         if cleanup_state:
             managed_state.unlink(missing_ok=True)
-
-
-def _emit_plan_output(
-    root: Path,
-    planned: list[_PlannedJourney],
-    errors: list[_CommandError],
-    *,
-    as_json: bool,
-) -> None:
-    if as_json:
-        payload = {
-            "journeys": [
-                {
-                    "file": str(item.file_path),
-                    "journey_name": item.journey_name,
-                    "plan": asdict(item.plan),
-                }
-                for item in planned
-            ],
-            "errors": [asdict(error) for error in errors],
-        }
-        print(json.dumps(payload, default=str, indent=2))
-        return
-
-    for item in planned:
-        display = _display_path(root, item.file_path)
-        print(f"Journey {display}:{item.journey_name}")
-        print(
-            f"journey_id={item.plan.journey_id} function_ref={item.plan.function_ref}"
-        )
-        for case in item.plan.case_plans:
-            print(
-                f"- {case.case_id} branch_env={case.branch_env} "
-                f"labels={_labels_for_case(case)}"
-            )
-        print()
-
-    _emit_errors(errors)
-
-    total_cases = sum(len(item.plan.case_plans) for item in planned)
-    print(
-        "Summary: "
-        f"{_count(len(planned), 'journey')} planned, "
-        f"{_count(total_cases, 'case')} planned, "
-        f"{len(errors)} failed"
-    )
 
 
 def _emit_execute_output(
@@ -755,24 +701,6 @@ def _emit_interrupt_output(*, state: str | None, as_json: bool) -> None:
     print(f"Try this: Run the same command again with --state {state} to resume.")
 
 
-def _cmd_plan(args: argparse.Namespace) -> int:
-    try:
-        root, targets, errors = _discover_targets(args)
-    except JourneySelectionError as exc:
-        _emit_plan_output(
-            Path.cwd().resolve(),
-            [],
-            [_error_from_exception(exc, phase="discover")],
-            as_json=args.json,
-        )
-        return 1
-
-    planned, plan_errors = _plan_targets(targets, fail_fast=args.fail_fast)
-    errors.extend(plan_errors)
-    _emit_plan_output(root, planned, errors, as_json=args.json)
-    return 0 if not errors else 1
-
-
 def _cmd_execute(args: argparse.Namespace) -> int:
     try:
         root, targets, errors = _discover_targets(args)
@@ -799,12 +727,15 @@ def _cmd_execute(args: argparse.Namespace) -> int:
             executed.extend(run_results)
             errors.extend(run_errors)
         else:
-            planned, plan_errors = _plan_targets(targets, fail_fast=args.fail_fast)
-            errors.extend(plan_errors)
+            compiled, compile_errors = _compile_targets(
+                targets,
+                fail_fast=args.fail_fast,
+            )
+            errors.extend(compile_errors)
             if not errors:
                 if args.develop_step is not None:
                     run_results, run_errors = _execute_target_pause(
-                        planned,
+                        compiled,
                         root=root,
                         develop_step=args.develop_step,
                         state=args.state,
@@ -812,7 +743,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     )
                 else:
                     run_results, run_errors = _execute_target_step(
-                        planned,
+                        compiled,
                         root=root,
                         step=args.step,
                         state=args.state,
@@ -829,37 +760,31 @@ def _cmd_execute(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="journey", description="journey workflow test compiler")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    plan_cmd = sub.add_parser("plan", help="Compile decorated journeys and print case plans")
-    plan_cmd.add_argument("--file", help="Plan journeys defined in one Python file")
-    plan_cmd.add_argument("--journey", help="Plan one decorated journey by function name")
-    plan_cmd.add_argument("--json", action="store_true", help="Emit JSON")
-    plan_cmd.add_argument(
-        "--fail-fast",
-        action="store_true",
-        help="Stop at the first discovery or planning failure",
+    parser = argparse.ArgumentParser(
+        prog="journey",
+        description="execute decorated journey workflows",
     )
-    plan_cmd.set_defaults(func=_cmd_plan)
-
-    execute_cmd = sub.add_parser("execute", help="Compile and execute decorated journeys")
-    execute_cmd.add_argument("--file", help="Execute journeys defined in one Python file")
-    execute_cmd.add_argument("--journey", help="Execute one decorated journey by function name")
-    target_group = execute_cmd.add_mutually_exclusive_group()
-    target_group.add_argument("--step", help="Execute only the flow that reaches one step label")
+    parser.add_argument("--file", help="Execute journeys defined in one Python file")
+    parser.add_argument(
+        "--journey",
+        help="Execute one decorated journey by function name",
+    )
+    target_group = parser.add_mutually_exclusive_group()
+    target_group.add_argument(
+        "--step",
+        help="Execute only the flow that reaches one step label",
+    )
     target_group.add_argument(
         "--develop-step",
         help="Interactively pause after one target step label and each later step in that case",
     )
-    execute_cmd.add_argument("--state", help="Persist and resume execution state in one file")
-    execute_cmd.add_argument("--json", action="store_true", help="Emit JSON")
-    execute_cmd.add_argument(
+    parser.add_argument("--state", help="Persist and resume execution state in one file")
+    parser.add_argument("--json", action="store_true", help="Emit execution JSON")
+    parser.add_argument(
         "--fail-fast",
         action="store_true",
-        help="Stop at the first discovery, planning, or execution failure",
+        help="Stop at the first discovery, compilation, or execution failure",
     )
-    execute_cmd.set_defaults(func=_cmd_execute)
 
     return parser
 
@@ -867,13 +792,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if (
-        args.command == "execute"
-        and getattr(args, "develop_step", None) is not None
-        and args.json
-    ):
+    if getattr(args, "develop_step", None) is not None and args.json:
         parser.error("--develop-step cannot be used with --json")
-    return args.func(args)
+    return _cmd_execute(args)
 
 
 if __name__ == "__main__":  # pragma: no cover

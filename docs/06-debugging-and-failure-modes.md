@@ -35,7 +35,7 @@ This file exists to answer a practical question: when one discovered journey fai
 ## Default Behavior: Keep Going
 
 ```bash
-uv run journey execute --file docs/fail_fast_journeys/fail_fast_journeys.py
+uv run journey --file docs/fail_fast_journeys/fail_fast_journeys.py
 ```
 
 ```console
@@ -63,7 +63,7 @@ Default mode is good when you want the broadest picture from one command. Even t
 ## Fail Fast: Stop Immediately
 
 ```bash
-uv run journey execute --file docs/fail_fast_journeys/fail_fast_journeys.py --fail-fast
+uv run journey --file docs/fail_fast_journeys/fail_fast_journeys.py --fail-fast
 ```
 
 ```console

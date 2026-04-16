@@ -2,7 +2,7 @@
 
 This chapter is for the first ten minutes with Journey.
 
-The goal is simple: understand what a journey looks like in Python, what `journey plan` gives you before a run, and how to narrow a file down to one journey when you need script-friendly JSON output.
+The goal is simple: understand what a journey looks like in Python, how to run it, and how to narrow a file down to one journey when you need script-friendly JSON output.
 
 ## The Mental Model
 
@@ -10,8 +10,8 @@ The goal is simple: understand what a journey looks like in Python, what `journe
 - Mark one top-level function with `@journey`.
 - Add steps with `step(...)`.
 - Pass step results explicitly into later steps.
-- Use `journey plan` to compile the authored flow into linear executable cases.
-- Use `journey execute` to run those cases and stream progress live.
+- Use `journey` to compile and run the authored flow as linear executable cases.
+- Use selection flags when you want one file, one journey, or one target path.
 
 If you remember only one thing, remember this: Journey does not ask you to stop writing Python. It compiles ordinary Python step calls into a runnable plan.
 
@@ -36,30 +36,10 @@ That is the whole authored flow. The helper functions in the same file do the re
 - `send_welcome_message(profile)` uses that payload
 - `assert_welcome_message_sent(message)` validates the result
 
-### Plan It First
+### Run It
 
 ```bash
-uv run journey plan --file docs/first_journey/first_journey.py
-```
-
-```console
-Journey docs/first_journey/first_journey.py:first_journey
-journey_id=first_journey function_ref=...
-- case_1 branch_env={} labels=['create_customer_profile', 'send_welcome_message', 'assert_welcome_message_sent']
-
-Summary: 1 journey planned, 1 case planned, 0 failed
-```
-
-What that tells you:
-
-- Journey found one entrypoint called `first_journey`
-- the file plans to one case
-- the steps will run in the same order as the Python function
-
-### Execute It
-
-```bash
-uv run journey execute --file docs/first_journey/first_journey.py
+uv run journey --file docs/first_journey/first_journey.py
 ```
 
 ```console
@@ -103,57 +83,10 @@ This is the first time Journey's CLI selection flags matter:
 - `--journey` narrows discovery to one decorated function
 - `--json` switches the CLI into machine-readable output
 
-### Plan One Journey as JSON
+### Execute One Journey as JSON
 
 ```bash
-uv run journey plan --file docs/selection_journeys/selection_journeys.py --journey welcome_email_journey --json
-```
-
-```json
-{
-  "journeys": [
-    {
-      "file": ".../docs/selection_journeys/selection_journeys.py",
-      "journey_name": "welcome_email_journey",
-      "plan": {
-        "journey_id": "welcome_email_journey",
-        "function_ref": "...",
-        "case_plans": [
-          {
-            "case_id": "case_1",
-            "branch_env": {},
-            "nodes": [
-              {
-                "label": "load_welcome_email_job",
-                "args": [],
-                "kwargs": {},
-                "retry": null
-              },
-              {
-                "label": "assert_welcome_email_job",
-                "args": [
-                  {
-                    "kind": "step",
-                    "node_id": "n_1"
-                  }
-                ],
-                "kwargs": {},
-                "retry": null
-              }
-            ]
-          }
-        ]
-      }
-    }
-  ],
-  "errors": []
-}
-```
-
-### Execute a Different Journey as JSON
-
-```bash
-uv run journey execute --file docs/selection_journeys/selection_journeys.py --journey invoice_reminder_journey --json
+uv run journey --file docs/selection_journeys/selection_journeys.py --journey invoice_reminder_journey --json
 ```
 
 ```json
@@ -197,7 +130,6 @@ uv run journey execute --file docs/selection_journeys/selection_journeys.py --jo
 
 ## What To Notice
 
-- `journey plan` is the safest way to inspect a file before you touch browsers, webhooks, or cloud tools.
 - Step outputs stay explicit. The second step receives the first step's return value directly.
 - `--journey` is the easiest way to work in a file that holds several flows.
 - `--json` is for tooling and CI. The default text output is better for humans during local development.

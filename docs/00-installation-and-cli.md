@@ -68,7 +68,7 @@ uv tool install journey-sdk --with playwright
 Run the CLI once with Playwright available:
 
 ```bash
-uvx --from journey-sdk --with playwright journey execute --help
+uvx --from journey-sdk --with playwright journey --help
 ```
 
 Install the browser binaries when you need them:

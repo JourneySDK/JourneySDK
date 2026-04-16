@@ -13,8 +13,7 @@ Run every command in this handbook from the repository root.
 
 - Start with [00 Installation and CLI](00-installation-and-cli.md) if you need to install the package, install the
   persistent `journey` command, or work from a local checkout.
-- Use `uv run journey plan --file ...` when you want to see compiled cases without executing side effects.
-- Use `uv run journey execute --file ...` when you want to run those cases.
+- Use `uv run journey --file ...` when you want to run one journey file.
 - Install Playwright only for the browser chapter:
 
 ```bash
@@ -71,21 +70,27 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 If you only want the shape of a Journey run, start here:
 
 ```bash
-uv run journey plan --file docs/first_journey/first_journey.py
+uv run journey --file docs/first_journey/first_journey.py
 ```
 
 ```console
 Journey docs/first_journey/first_journey.py:first_journey
 journey_id=first_journey function_ref=...
-- case_1 branch_env={} labels=['create_customer_profile', 'send_welcome_message', 'assert_welcome_message_sent']
-
-Summary: 1 journey planned, 1 case planned, 0 failed
+- case_1 start branches={}
+  step create_customer_profile attempt=1 start
+  step create_customer_profile attempt=1 ok duration=...
+  step send_welcome_message attempt=1 start
+  step send_welcome_message attempt=1 ok duration=...
+  step assert_welcome_message_sent attempt=1 start
+  step assert_welcome_message_sent attempt=1 ok duration=...
+- case_1 ok steps=3 duration=...
+Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
 That output shows the core Journey model:
 
 - one top-level function becomes one or more executable cases
 - each case is still plain Python steps in order
-- the CLI tells you exactly which labels will run before you execute anything
+- the CLI streams each step boundary as it runs
 
 Continue with [01 Getting Started](01-getting-started.md) if Journey is new to you.

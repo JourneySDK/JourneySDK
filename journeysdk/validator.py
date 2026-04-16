@@ -336,7 +336,7 @@ class _JourneyValidator(ast.NodeVisitor):
             self._add_issue(
                 UnsupportedControlFlowError,
                 "Direct resume(...) calls are not supported in journey v1.",
-                hint="Use `journey execute --state ...` to resume a run instead.",
+                hint="Use `journey --state ...` to resume a run instead.",
             )
 
         if self._is_branch_selector_call(node):

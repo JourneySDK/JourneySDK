@@ -2015,7 +2015,7 @@ def _execute_plan(
                 ):
                     raise InvalidBranchUsageError(
                         "The journey finished before it reached the targeted step label.",
-                        hint="Run `journey plan` to confirm the step label exists on the path you selected.",
+                        hint="Check that the step label exists on the path you selected.",
                     )
                 break
 

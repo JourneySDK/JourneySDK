@@ -92,7 +92,7 @@ Install the CLI with Playwright support when you need browser steps:
 
 ```bash
 uv tool install journey-sdk --with playwright
-uvx --from journey-sdk --with playwright journey execute --help
+uvx --from journey-sdk --with playwright journey --help
 ```
 
 See [`docs/00-installation-and-cli.md`](docs/00-installation-and-cli.md) for the full CLI installation guide, local
@@ -219,7 +219,7 @@ def assert_dashboard(session):
         assert page.url.endswith("/dashboard")
 ```
 
-Interrupted executions can also be resumed with `journey execute --state run.state`. When state persistence is
+Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
 enabled, journey stores the step inputs and outputs it may need to replay later, so those values must be
 pickle-serializable. The same rule applies to steps that may be replayed because of retries or
 `branch(start_from=...)`. The state file is kept after the run finishes, so rerunning the same command can reuse that
@@ -228,8 +228,8 @@ saved progress; delete the file when you want to start fresh.
 ## How it works
 
 1. Write a journey in Python using the primitives from `journeysdk/api.py`.
-2. Compile it in dry-run mode with `journey plan`, which turns the authored journey into linear cases.
-3. Execute all cases, or just the case that reaches one target step label, with `journey execute`.
+2. Run `journey`, which compiles the authored journey into linear cases and executes them.
+3. Use `--step` when you only want the case that reaches one target step label.
 
 The default human-readable CLI output streams progress in real time: it prints each case start, branch selection,
 step attempt, retry, step status, and case completion as execution happens.
@@ -250,16 +250,10 @@ after the target step and each later step so you can continue or retry while ite
 
 ## Quick start
 
-Plan a journey without executing it:
-
-```bash
-uv run journey plan
-```
-
 Execute all compiled cases:
 
 ```bash
-uv run journey execute
+uv run journey
 ```
 
 The default output streams one append-only log line per execution event, including retries and per-case durations.
@@ -267,23 +261,23 @@ The default output streams one append-only log line per execution event, includi
 Execute with persisted state so Ctrl-C can be resumed later:
 
 ```bash
-uv run journey execute --state run.state
+uv run journey --state run.state
 ```
 
 Execute only the path that reaches a target step label:
 
 ```bash
-uv run journey execute --step assert_local_file_contents
+uv run journey --step assert_local_file_contents
 ```
 
 Execute one target path interactively and pause after that step and each later step:
 
 ```bash
-uv run journey execute --develop-step assert_local_file_contents
+uv run journey --develop-step assert_local_file_contents
 ```
 
-The cloud webhook helpers use `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL` at execution time only, so planning
-stays side-effect free. Point those variables at your hosted cloud control plane or any compatible service:
+The cloud webhook helpers use `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL` at execution time. Point those
+variables at your hosted cloud control plane or any compatible service:
 
 ```bash
 export JOURNEY_CLOUD_API_KEY=journey-demo-key

@@ -6,7 +6,7 @@ That is where Journey Cloud integrations fit.
 
 Two rules matter before anything else:
 
-- planning stays side-effect free
+- cloud resources are acquired while journey steps execute
 - execution uses `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL`
 
 Set those variables before you execute the cloud examples:
@@ -48,24 +48,10 @@ The shape is familiar:
 - then wait until the external effect arrives
 - finally assert on the payload
 
-### Plan It Without Touching the Network
-
-```bash
-uv run journey plan --file docs/cloud_webhook_journey/cloud_webhook_journey.py
-```
-
-```console
-Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey
-journey_id=cloud_webhook_journey function_ref=...
-- case_1 branch_env={} labels=['get_webhook_invoice_paid', 'send_invoice_paid_webhook_later', 'receive_webhook_invoice_paid', 'assert_invoice_paid_webhook']
-
-Summary: 1 journey planned, 1 case planned, 0 failed
-```
-
 ### Execute It Against Journey Cloud
 
 ```bash
-uv run journey execute --file docs/cloud_webhook_journey/cloud_webhook_journey.py
+uv run journey --file docs/cloud_webhook_journey/cloud_webhook_journey.py
 ```
 
 ```console
@@ -116,24 +102,10 @@ This flow uses the same pattern as the webhook example:
 - wait for the result
 - assert on the received payload
 
-### Plan It First
-
-```bash
-uv run journey plan --file docs/cloud_email_journey/cloud_email_journey.py
-```
-
-```console
-Journey docs/cloud_email_journey/cloud_email_journey.py:cloud_email_journey
-journey_id=cloud_email_journey function_ref=...
-- case_1 branch_env={} labels=['get_email_inbox', 'send_email', 'receive_email', 'assert_welcome_email']
-
-Summary: 1 journey planned, 1 case planned, 0 failed
-```
-
 ### Execute It Against Journey Cloud
 
 ```bash
-uv run journey execute --file docs/cloud_email_journey/cloud_email_journey.py
+uv run journey --file docs/cloud_email_journey/cloud_email_journey.py
 ```
 
 ```console
@@ -151,7 +123,7 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 
 ## Ownership and Execution Semantics
 
-- Journey Cloud authentication is execution-time only. `journey plan` does not need to talk to the cloud service.
+- Journey Cloud authentication happens while the journey runs.
 - The same API key is used consistently across cloud helpers in one run.
 - The first API key that claims a cloud resource should own it from then on. Treat webhook paths, inboxes, and similar identifiers as cloud-managed resources, not anonymous shared names.
 - The SDK side of the code stays small because Journey Cloud owns the hosted endpoint or inbox details.

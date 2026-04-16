@@ -21,10 +21,9 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 ## Preferred commands
 
 - `uv run pytest`
-- `uv run journey plan`
-- `uv run journey plan --file docs/first_journey/first_journey.py`
-- `uv run journey execute`
-- `uv run journey execute --file docs/simple_journey/simple_journey.py --step assert_local_file_contents`
+- `uv run journey`
+- `uv run journey --file docs/first_journey/first_journey.py`
+- `uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents`
 - `uv build`
 
 CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
@@ -46,7 +45,7 @@ flow that reaches a target step label.
 
 - Journey SDK cloud tools authenticate control-plane calls with `JOURNEY_CLOUD_API_KEY` against a Journey Cloud base
   URL.
-- Planning must stay side-effect free; authentication happens only at execution time.
+- Compilation should stay side-effect free; authentication happens only at execution time.
 - The first API key to reserve a cloud resource should own it from then on.
 - That first-key-wins rule should be consistent across cloud tools, whether the reserved identifier is a webhook path,
   a mail inbox, or another cloud-managed handle.

@@ -63,8 +63,8 @@ class NoJourneysFoundError(JourneySelectionError):
             hint = "Check that the file contains at least one function decorated with @journey."
         elif journey_name is not None:
             hint = (
-                "Run `journey plan` to list available journeys, or pass `--file` to "
-                "narrow the search."
+                "Pass `--file` to narrow the search, or check that the journey "
+                "function name matches exactly."
             )
         else:
             hint = (
@@ -154,7 +154,7 @@ class StepNotFoundError(ExecutionError):
         super().__init__(
             f"Step label '{step}' was not found in the selected journey.",
             hint=(
-                "Run `journey plan` to list available step labels, or pass `--file` / "
+                "Check that the target step label exists, or pass `--file` / "
                 "`--journey` to narrow the selection."
             ),
         )

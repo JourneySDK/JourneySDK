@@ -73,25 +73,10 @@ def simple_journey() -> None:
 uv run --with playwright python -m playwright install chromium
 ```
 
-### Plan the Browser Journey
-
-```bash
-uv run journey plan --file docs/simple_journey/simple_journey.py
-```
-
-```console
-Journey docs/simple_journey/simple_journey.py:simple_journey
-journey_id=simple_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['assert_demo_homepage', 'click_store_local_file', 'local_file_is_written', 'assert_local_file_contents']
-
-Summary: 1 journey planned, 2 cases planned, 0 failed
-```
-
 ### Execute Only the File Branch
 
 ```bash
-uv run --with playwright journey execute --file docs/simple_journey/simple_journey.py --step assert_local_file_contents
+uv run --with playwright journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents
 ```
 
 ```console
@@ -165,25 +150,10 @@ elif branch(start_from=after_boot):
     step(assert_restored_counter_branch, baseline, restored)
 ```
 
-### Plan the Docker Journey
-
-```bash
-uv run journey plan --file docs/docker_compose_journey/docker_compose_journey.py
-```
-
-```console
-Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
-journey_id=docker_compose_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['run_docker', 'assert_stack_ready', 'capture_baseline_state', 'increment_counter', 'assert_increment_branch']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['run_docker', 'assert_stack_ready', 'capture_baseline_state', 'read_counter_state', 'assert_restored_counter_branch']
-
-Summary: 1 journey planned, 2 cases planned, 0 failed
-```
-
 ### Execute Both Docker Branches
 
 ```bash
-uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py
+uv run journey --file docs/docker_compose_journey/docker_compose_journey.py
 ```
 
 ```console
@@ -209,7 +179,7 @@ because Journey restored the `after_boot` Docker snapshot before `read_counter_s
 ### Target the Restore Branch While Iterating
 
 ```bash
-uv run journey execute --file docs/docker_compose_journey/docker_compose_journey.py --step assert_restored_counter_branch
+uv run journey --file docs/docker_compose_journey/docker_compose_journey.py --step assert_restored_counter_branch
 ```
 
 That targeted run still reports `replay_anchor=cp_1`, so you can focus on the restore branch without changing the
@@ -280,7 +250,7 @@ uv run python -c "from docs.playwright_resume_journey import reset_demo_state; r
 ### First Run: Interrupt After the Session Is Saved
 
 ```bash
-uv run --with playwright journey execute --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
+uv run --with playwright journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
 ```
 
 Press `Ctrl-C` when the tutorial note tells you to.
@@ -308,7 +278,7 @@ Expected stderr:
 ### Second Run: Reopen the Same Saved Session
 
 ```bash
-uv run --with playwright journey execute --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
+uv run --with playwright journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
 ```
 
 Expected stdout:

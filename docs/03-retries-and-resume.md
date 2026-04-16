@@ -93,7 +93,7 @@ and resume, so the same external-state logic works for checkpoint rewinds and
 ### Retry the Current Step
 
 ```bash
-uv run journey execute --file docs/retry_journey/retry_journey.py --journey retry_current_step_journey
+uv run journey --file docs/retry_journey/retry_journey.py --journey retry_current_step_journey
 ```
 
 ```console
@@ -113,7 +113,7 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 ### Retry from an Earlier Step Result
 
 ```bash
-uv run journey execute --file docs/retry_journey/retry_journey.py --journey retry_from_step_result_journey
+uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_step_result_journey
 ```
 
 ```console
@@ -136,7 +136,7 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 ### Retry from a Checkpoint
 
 ```bash
-uv run journey execute --file docs/retry_journey/retry_journey.py --journey retry_from_checkpoint_journey
+uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_checkpoint_journey
 ```
 
 ```console
@@ -199,7 +199,7 @@ uv run python -c "from docs.resume_journey import reset_demo_state; reset_demo_s
 ### First Run: Interrupt It
 
 ```bash
-uv run journey execute --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
+uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
 ```
 
 Press `Ctrl-C` when the tutorial note tells you to.
@@ -228,7 +228,7 @@ Expected stderr:
 ### Second Run: Resume It
 
 ```bash
-uv run journey execute --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
+uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
 ```
 
 Expected stdout:

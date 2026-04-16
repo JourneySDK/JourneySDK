@@ -17,17 +17,8 @@ def _write(path: Path, content: str) -> None:
 def test_parser_accepts_new_flags_and_rejects_removed_forms():
     parser = build_parser()
 
-    plan_args = parser.parse_args(
-        ["plan", "--file", "journeys.py", "--journey", "alpha", "--json", "--fail-fast"]
-    )
-    assert plan_args.file == "journeys.py"
-    assert plan_args.journey == "alpha"
-    assert plan_args.json is True
-    assert plan_args.fail_fast is True
-
     execute_args = parser.parse_args(
         [
-            "execute",
             "--file",
             "journeys.py",
             "--journey",
@@ -49,7 +40,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
 
     pause_args = parser.parse_args(
         [
-            "execute",
             "--file",
             "journeys.py",
             "--develop-step",
@@ -60,29 +50,33 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert pause_args.step is None
 
     with pytest.raises(SystemExit):
-        parser.parse_args(["plan", "journeys.py:alpha"])
+        parser.parse_args(["plan"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["plan", "--step", "target"])
+        parser.parse_args(["plan", "--file", "journeys.py"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["execute", "--only-step", "target"])
+        parser.parse_args(["execute"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["execute", "--case-id", "case_1"])
+        parser.parse_args(["execute", "--file", "journeys.py"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["execute", "--step", "target", "--develop-step", "target"])
+        parser.parse_args(["--only-step", "target"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--case-id", "case_1"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--step", "target", "--develop-step", "target"])
 
 
 def test_execute_develop_step_rejects_json_mode(
     capsys: pytest.CaptureFixture[str],
 ):
     with pytest.raises(SystemExit) as exc_info:
-        main(["execute", "--develop-step", "target", "--json"])
+        main(["--develop-step", "target", "--json"])
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
     assert "--develop-step cannot be used with --json" in captured.err
 
 
-def test_plan_discovers_decorated_journeys_recursively_and_via_aliases(
+def test_execute_discovers_decorated_journeys_recursively_and_via_aliases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -116,7 +110,7 @@ def test_plan_discovers_decorated_journeys_recursively_and_via_aliases(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["plan", "--json"])
+    exit_code = main(["--json"])
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
@@ -124,7 +118,7 @@ def test_plan_discovers_decorated_journeys_recursively_and_via_aliases(
     assert payload["errors"] == []
 
 
-def test_plan_file_and_journey_filters_limit_selection(
+def test_execute_file_and_journey_filters_limit_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -155,7 +149,7 @@ def test_plan_file_and_journey_filters_limit_selection(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["plan", "--file", "pkg/first.py", "--journey", "alpha", "--json"])
+    exit_code = main(["--file", "pkg/first.py", "--journey", "alpha", "--json"])
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
@@ -164,7 +158,7 @@ def test_plan_file_and_journey_filters_limit_selection(
     assert payload["errors"] == []
 
 
-def test_plan_errors_when_journey_name_is_ambiguous(
+def test_execute_errors_when_journey_name_is_ambiguous(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -182,7 +176,7 @@ def test_plan_errors_when_journey_name_is_ambiguous(
     _write(tmp_path / "nested" / "b.py", content)
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["plan", "--journey", "shared"])
+    exit_code = main(["--journey", "shared"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -191,7 +185,7 @@ def test_plan_errors_when_journey_name_is_ambiguous(
     assert "nested/b.py" in output or "nested\\b.py" in output
 
 
-def test_plan_errors_when_no_decorated_journeys_are_found(
+def test_execute_errors_when_no_decorated_journeys_are_found(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -205,7 +199,7 @@ def test_plan_errors_when_no_decorated_journeys_are_found(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["plan"])
+    exit_code = main([])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -219,7 +213,7 @@ def test_cli_renders_user_friendly_missing_file_error(
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--file", "missing.py"])
+    exit_code = main(["--file", "missing.py"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -259,7 +253,7 @@ def test_execute_step_runs_only_the_unique_matching_journey(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--step", "target", "--json"])
+    exit_code = main(["--step", "target", "--json"])
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
@@ -286,7 +280,7 @@ def test_execute_step_errors_when_label_is_ambiguous_across_journeys(
     _write(tmp_path / "b.py", content.replace("def flow()", "def other_flow()"))
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--step", "shared"])
+    exit_code = main(["--step", "shared"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -314,7 +308,7 @@ def test_execute_json_errors_include_hint_for_missing_step(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--file", "alpha.py", "--step", "missing", "--json"])
+    exit_code = main(["--file", "alpha.py", "--step", "missing", "--json"])
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 1
@@ -322,7 +316,7 @@ def test_execute_json_errors_include_hint_for_missing_step(
     assert payload["errors"][0]["message"] == (
         "Step label 'missing' was not found in the selected journey."
     )
-    assert "Run `journey plan`" in payload["errors"][0]["hint"]
+    assert "Check that the target step label exists" in payload["errors"][0]["hint"]
 
 
 def test_execute_streams_live_case_progress_for_all_branches(
@@ -354,7 +348,7 @@ def test_execute_streams_live_case_progress_for_all_branches(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--file", "flow.py"])
+    exit_code = main(["--file", "flow.py"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -401,7 +395,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--file", "flow.py", "--step", "finish_manual"])
+    exit_code = main(["--file", "flow.py", "--step", "finish_manual"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -452,7 +446,7 @@ def test_execute_develop_step_steps_forward_with_continue(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["execute", "--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -502,7 +496,6 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
 
     first_exit = main(
         [
-            "execute",
             "--file",
             "flow.py",
             "--develop-step",
@@ -521,7 +514,6 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
     monkeypatch.setattr("builtins.input", resume_input)
     second_exit = main(
         [
-            "execute",
             "--file",
             "flow.py",
             "--develop-step",
@@ -578,7 +570,7 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["execute", "--file", "flow.py", "--develop-step", "poll"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "poll"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -621,7 +613,7 @@ def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["execute", "--file", "flow.py", "--develop-step", "poll"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "poll"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -656,7 +648,7 @@ def test_execute_streams_retry_events_in_text_mode(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--file", "flow.py"])
+    exit_code = main(["--file", "flow.py"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -668,7 +660,7 @@ def test_execute_streams_retry_events_in_text_mode(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
-def test_plan_continues_and_summarizes_failures_by_default(
+def test_execute_continues_and_summarizes_compile_failures_by_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -705,13 +697,13 @@ def test_plan_continues_and_summarizes_failures_by_default(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["plan"])
+    exit_code = main([])
 
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "Journey good.py:good" in output
-    assert "ERROR [plan]" in output
-    assert "Summary: 1 journey planned, 1 case planned, 1 failed" in output
+    assert "ERROR [execute]" in output
+    assert "Summary: 1 journey executed, 1 case executed, 1 failed" in output
 
 
 def test_execute_continues_and_summarizes_failures_by_default(
@@ -745,7 +737,7 @@ def test_execute_continues_and_summarizes_failures_by_default(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute"])
+    exit_code = main([])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -787,7 +779,7 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--fail-fast"])
+    exit_code = main(["--fail-fast"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -826,7 +818,7 @@ def test_execute_state_requires_exactly_one_journey(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["execute", "--state", "resume.state"])
+    exit_code = main(["--state", "resume.state"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -863,7 +855,7 @@ def test_execute_state_interrupts_and_resumes_via_cli(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["execute", "--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
     first_output = capsys.readouterr().out
 
     assert first_exit == 130
@@ -873,7 +865,8 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     assert state_file.exists()
 
     second_exit = main(
-        ["execute", "--file", "flow.py", "--state", str(state_file), "--json"]
+        [
+            "--file", "flow.py", "--state", str(state_file), "--json"]
     )
     payload = json.loads(capsys.readouterr().out)
 
@@ -913,13 +906,13 @@ def test_execute_state_resume_streams_case_resume_in_text_mode(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["execute", "--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
     first_output = capsys.readouterr().out
 
     assert first_exit == 130
     assert "  step maybe_interrupt attempt=1 interrupted duration=" in first_output
 
-    second_exit = main(["execute", "--file", "flow.py", "--state", str(state_file)])
+    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
     second_output = capsys.readouterr().out
 
     assert second_exit == 0
@@ -985,14 +978,14 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["execute", "--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
     first_output = capsys.readouterr().out
 
     assert first_exit == 130
     assert "  step poll attempt=1 interrupted duration=" in first_output
     assert state_file.exists()
 
-    second_exit = main(["execute", "--file", "flow.py", "--state", str(state_file)])
+    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
     second_output = capsys.readouterr().out
 
     assert second_exit == 0
