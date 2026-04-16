@@ -14,6 +14,14 @@ def _write(path: Path, content: str) -> None:
     path.write_text(textwrap.dedent(content), encoding="utf-8")
 
 
+def _assert_ordered(output: str, *needles: str) -> None:
+    position = -1
+    for needle in needles:
+        next_position = output.index(needle)
+        assert next_position > position
+        position = next_position
+
+
 def test_parser_accepts_new_flags_and_rejects_removed_forms():
     parser = build_parser()
 
@@ -115,7 +123,56 @@ def test_execute_discovers_decorated_journeys_recursively_and_via_aliases(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert sorted(item["journey_name"] for item in payload["journeys"]) == ["alpha", "beta"]
+    assert all("plan" not in item for item in payload["journeys"])
     assert payload["errors"] == []
+
+
+def test_execute_prints_all_selected_plans_before_any_journey_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "a.py",
+        """
+        import journeysdk as journey
+
+        def alpha_step():
+            return True
+
+        @journey.journey
+        def alpha():
+            journey.step(alpha_step)
+        """,
+    )
+    _write(
+        tmp_path / "b.py",
+        """
+        import journeysdk as journey
+
+        def beta_step():
+            return True
+
+        @journey.journey
+        def beta():
+            journey.step(beta_step)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    exit_code = main([])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    _assert_ordered(
+        output,
+        "Plan",
+        "Journey a.py:alpha",
+        "Journey b.py:beta",
+        "Summary: 2 journeys planned, 2 cases planned, 0 failed",
+        "Execution",
+        "  step alpha_step attempt=1 start",
+    )
 
 
 def test_execute_file_and_journey_filters_limit_selection(
@@ -155,6 +212,7 @@ def test_execute_file_and_journey_filters_limit_selection(
     assert exit_code == 0
     assert [item["journey_name"] for item in payload["journeys"]] == ["alpha"]
     assert payload["journeys"][0]["file"].endswith("pkg/first.py")
+    assert "plan" not in payload["journeys"][0]
     assert payload["errors"] == []
 
 
@@ -217,7 +275,7 @@ def test_cli_renders_user_friendly_missing_file_error(
 
     output = capsys.readouterr().out
     assert exit_code == 1
-    assert "ERROR [discover] <selection> (JourneySelectionError)" in output
+    assert "ERROR [plan] <selection> (JourneySelectionError)" in output
     assert "What happened: Python file 'missing.py' was not found." in output
     assert "Try this: Check the path or run the command from the directory" in output
 
@@ -352,6 +410,11 @@ def test_execute_streams_live_case_progress_for_all_branches(
 
     output = capsys.readouterr().out
     assert exit_code == 0
+    assert "Plan" in output
+    assert "- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare', 'finish_fast']" in output
+    assert "- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare', 'finish_manual']" in output
+    assert "Summary: 1 journey planned, 2 cases planned, 0 failed" in output
+    assert "Execution" in output
     assert "- case_1 start branches={bg_1=branch_1}" in output
     assert "- case_1 ok steps=2 duration=" in output
     assert "- case_2 start branches={bg_1=branch_2}" in output
@@ -363,6 +426,14 @@ def test_execute_streams_live_case_progress_for_all_branches(
     assert "  branch bg_1=branch_2" in output
     assert "  step finish_manual attempt=1 ok duration=" in output
     assert "Summary: 1 journey executed, 2 cases executed, 0 failed" in output
+    _assert_ordered(
+        output,
+        "Plan",
+        "Summary: 1 journey planned, 2 cases planned, 0 failed",
+        "Execution",
+        "- case_1 start branches={bg_1=branch_1}",
+        "Summary: 1 journey executed, 2 cases executed, 0 failed",
+    )
 
 
 def test_execute_step_streams_live_target_progress_and_replay_anchor(
@@ -399,7 +470,10 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "case_1" not in output
+    assert "- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare', 'finish_fast']" in output
+    assert "- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare', 'finish_manual']" in output
+    assert "Summary: 1 journey planned, 2 cases planned, 0 failed" in output
+    assert "- case_1 start" not in output
     assert "- case_2 start branches={bg_1=branch_2}" in output
     assert (
         "- case_2 ok steps=2 duration="
@@ -410,6 +484,13 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
     assert "  branch bg_1=branch_2" in output
     assert "  step finish_manual attempt=1 ok duration=" in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+    _assert_ordered(
+        output,
+        "Plan",
+        "Summary: 1 journey planned, 2 cases planned, 0 failed",
+        "Execution",
+        "- case_2 start branches={bg_1=branch_2}",
+    )
 
 
 def test_execute_develop_step_steps_forward_with_continue(
@@ -450,6 +531,12 @@ def test_execute_develop_step_steps_forward_with_continue(
 
     output = capsys.readouterr().out
     assert exit_code == 0
+    _assert_ordered(
+        output,
+        "Plan",
+        "Execution",
+        "Paused after step publish attempt=1 ok.",
+    )
     assert "  step prepare attempt=1 ok duration=" in output
     assert "  step publish attempt=1 ok duration=" in output
     assert "Paused after step publish attempt=1 ok." in output
@@ -702,8 +789,18 @@ def test_execute_continues_and_summarizes_compile_failures_by_default(
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "Journey good.py:good" in output
-    assert "ERROR [execute]" in output
+    assert "ERROR [plan]" in output
+    assert "Summary: 1 journey planned, 1 case planned, 1 failed" in output
+    assert "Execution" in output
     assert "Summary: 1 journey executed, 1 case executed, 1 failed" in output
+    _assert_ordered(
+        output,
+        "Plan",
+        "ERROR [plan]",
+        "Summary: 1 journey planned, 1 case planned, 1 failed",
+        "Execution",
+        "Summary: 1 journey executed, 1 case executed, 1 failed",
+    )
 
 
 def test_execute_continues_and_summarizes_failures_by_default(
@@ -783,7 +880,8 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
 
     output = capsys.readouterr().out
     assert exit_code == 1
-    assert "Journey b_good.py:good" not in output
+    assert "Journey b_good.py:good" in output
+    assert "  step finish attempt=" not in output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in output
 
 
@@ -866,12 +964,18 @@ def test_execute_state_interrupts_and_resumes_via_cli(
 
     second_exit = main(
         [
-            "--file", "flow.py", "--state", str(state_file), "--json"]
+            "--file",
+            "flow.py",
+            "--state",
+            str(state_file),
+            "--json",
+        ]
     )
     payload = json.loads(capsys.readouterr().out)
 
     assert second_exit == 0
     assert [item["journey_name"] for item in payload["journeys"]] == ["flow"]
+    assert "plan" not in payload["journeys"][0]
     assert payload["errors"] == []
     assert state_file.exists()
 

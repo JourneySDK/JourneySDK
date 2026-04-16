@@ -40,6 +40,9 @@ def test_first_journey_readme_commands(
     execute_exit = main(["--file", "docs/first_journey/first_journey.py"])
     execute_output = capsys.readouterr().out
     assert execute_exit == 0
+    assert "Plan" in execute_output
+    assert "Summary: 1 journey planned, 1 case planned, 0 failed" in execute_output
+    assert "Execution" in execute_output
     assert "Journey docs/first_journey/first_journey.py:first_journey" in execute_output
     assert "  step create_customer_profile attempt=1 ok duration=" in execute_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
@@ -364,5 +367,6 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
     fail_fast_output = capsys.readouterr().out
 
     assert fail_fast_exit == 1
-    assert "Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" not in fail_fast_output
+    assert "Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in fail_fast_output
+    assert "step finish_successfully attempt=" not in fail_fast_output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in fail_fast_output

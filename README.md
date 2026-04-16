@@ -231,8 +231,8 @@ saved progress; delete the file when you want to start fresh.
 2. Run `journey`, which compiles the authored journey into linear cases and executes them.
 3. Use `--step` when you only want the case that reaches one target step label.
 
-The default human-readable CLI output streams progress in real time: it prints each case start, branch selection,
-step attempt, retry, step status, and case completion as execution happens.
+The default human-readable CLI output prints the compiled plan first, then streams progress in real time: it prints
+each case start, branch selection, step attempt, retry, step status, and case completion as execution happens.
 
 CLI commands discover functions annotated with `@journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
@@ -256,7 +256,8 @@ Execute all compiled cases:
 uv run journey
 ```
 
-The default output streams one append-only log line per execution event, including retries and per-case durations.
+The default output shows the compiled cases first, then streams one append-only log line per execution event, including
+retries and per-case durations.
 
 Execute with persisted state so Ctrl-C can be resumed later:
 

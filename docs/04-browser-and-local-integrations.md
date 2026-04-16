@@ -80,6 +80,14 @@ uv run --with playwright journey --file docs/simple_journey/simple_journey.py --
 ```
 
 ```console
+Plan
+Journey docs/simple_journey/simple_journey.py:simple_journey
+journey_id=simple_journey function_ref=...
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['assert_demo_homepage', 'click_store_local_file', 'local_file_is_written', 'assert_local_file_contents']
+Summary: 1 journey planned, 2 cases planned, 0 failed
+
+Execution
 Journey docs/simple_journey/simple_journey.py:simple_journey
 journey_id=simple_journey function_ref=...
 - case_2 start branches={bg_1=branch_2}
@@ -157,6 +165,14 @@ uv run journey --file docs/docker_compose_journey/docker_compose_journey.py
 ```
 
 ```console
+Plan
+Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
+journey_id=docker_compose_journey function_ref=...
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['run_docker', 'assert_stack_ready', 'capture_baseline_state', 'increment_counter', 'assert_increment_branch']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['run_docker', 'assert_stack_ready', 'capture_baseline_state', 'read_counter_state', 'assert_restored_counter_branch']
+Summary: 1 journey planned, 2 cases planned, 0 failed
+
+Execution
 Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
 journey_id=docker_compose_journey function_ref=...
 - case_1 start branches={bg_1=branch_1}
@@ -258,6 +274,13 @@ Press `Ctrl-C` when the tutorial note tells you to.
 Expected stdout:
 
 ```console
+Plan
+Journey docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey
+journey_id=playwright_resume_journey function_ref=...
+- case_1 branch_env={} labels=['login_and_capture_session', 'continue_authenticated_dashboard', 'assert_protected_action_complete']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey
 journey_id=playwright_resume_journey function_ref=...
 - case_1 start branches={}
@@ -284,6 +307,13 @@ uv run --with playwright journey --file docs/playwright_resume_journey/playwrigh
 Expected stdout:
 
 ```console
+Plan
+Journey docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey
+journey_id=playwright_resume_journey function_ref=...
+- case_1 branch_env={} labels=['login_and_capture_session', 'continue_authenticated_dashboard', 'assert_protected_action_complete']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey
 journey_id=playwright_resume_journey function_ref=...
 - case_1 resume branches={}

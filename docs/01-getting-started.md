@@ -43,6 +43,13 @@ uv run journey --file docs/first_journey/first_journey.py
 ```
 
 ```console
+Plan
+Journey docs/first_journey/first_journey.py:first_journey
+journey_id=first_journey function_ref=...
+- case_1 branch_env={} labels=['create_customer_profile', 'send_welcome_message', 'assert_welcome_message_sent']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/first_journey/first_journey.py:first_journey
 journey_id=first_journey function_ref=...
 - case_1 start branches={}

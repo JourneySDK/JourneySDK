@@ -56,6 +56,14 @@ class _ExecutedJourney:
     report: ExecutionReport
 
 
+def _labels_for_case(case: CasePlan) -> list[str]:
+    return [
+        node.label
+        for node in case.nodes
+        if hasattr(node, "label") and getattr(node, "label") is not None
+    ]
+
+
 def _display_path(root: Path, path: Path) -> str:
     try:
         return str(path.relative_to(root))
@@ -309,7 +317,7 @@ def _discover_targets(
     errors = [
         _error_from_exception(
             error,
-            phase="discover",
+            phase="plan",
             file_path=error.file_path,
         )
         for error in discovery_errors
@@ -340,7 +348,7 @@ def _compile_targets(
             errors.append(
                 _error_from_exception(
                     exc,
-                    phase="execute",
+                    phase="plan",
                     file_path=str(target.file_path),
                     journey_name=target.journey_name,
                 )
@@ -359,6 +367,27 @@ def _compile_targets(
         )
 
     return compiled, errors
+
+
+def _state_selection_errors(
+    args: argparse.Namespace,
+    targets: list[DiscoveredJourney],
+) -> list[_CommandError]:
+    if args.state is None or len(targets) == 1:
+        return []
+
+    return [
+        _error_from_exception(
+            JourneySelectionError(
+                "Resuming with --state requires exactly one selected journey.",
+                hint=(
+                    "Pass `--file`, `--journey`, `--step`, or `--develop-step` "
+                    "to narrow the selection to one journey."
+                ),
+            ),
+            phase="plan",
+        )
+    ]
 
 
 def _locate_step_matches(plan: JourneyPlan, step: str) -> list[tuple[CasePlan, int]]:
@@ -453,7 +482,7 @@ def _temporary_pause_state_path() -> Path:
 
 
 def _execute_all_targets(
-    targets: list[DiscoveredJourney],
+    compiled: list[_CompiledJourney],
     *,
     root: Path,
     fail_fast: bool,
@@ -463,36 +492,21 @@ def _execute_all_targets(
     executed: list[_ExecutedJourney] = []
     errors: list[_CommandError] = []
 
-    if state is not None and len(targets) != 1:
-        return [], [
-            _error_from_exception(
-                JourneySelectionError(
-                    "Resuming with --state requires exactly one selected journey.",
-                    hint=(
-                        "Pass `--file`, `--journey`, `--step`, or `--develop-step` "
-                        "to narrow the selection to one journey."
-                    ),
-                ),
-                phase="execute",
-            )
-        ]
-
-    for index, target in enumerate(targets):
+    for index, item in enumerate(compiled):
         try:
-            plan = compile_journey(target.function)
             observer = (
                 _LiveTextReporter(
                     root=root,
-                    file_path=target.file_path,
-                    journey_name=target.journey_name,
+                    file_path=item.file_path,
+                    journey_name=item.journey_name,
                     needs_separator=index > 0,
                 )
                 if stream_live
                 else None
             )
             report = _execute_plan(
-                target.function,
-                plan=plan,
+                item.function,
+                plan=item.plan,
                 state=state,
                 observer=observer,
             )
@@ -501,8 +515,8 @@ def _execute_all_targets(
                 _error_from_exception(
                     exc,
                     phase="execute",
-                    file_path=str(target.file_path),
-                    journey_name=target.journey_name,
+                    file_path=str(item.file_path),
+                    journey_name=item.journey_name,
                 )
             )
             if fail_fast:
@@ -511,9 +525,9 @@ def _execute_all_targets(
 
         executed.append(
             _ExecutedJourney(
-                file_path=target.file_path,
-                journey_name=target.journey_name,
-                plan=plan,
+                file_path=item.file_path,
+                journey_name=item.journey_name,
+                plan=item.plan,
                 report=report,
             )
         )
@@ -641,12 +655,48 @@ def _execute_target_pause(
             managed_state.unlink(missing_ok=True)
 
 
+def _emit_plan_output(
+    root: Path,
+    compiled: list[_CompiledJourney],
+    errors: list[_CommandError],
+) -> None:
+    print("Plan")
+
+    for index, item in enumerate(compiled):
+        if index > 0:
+            print()
+        display = _display_path(root, item.file_path)
+        print(f"Journey {display}:{item.journey_name}")
+        print(
+            f"journey_id={item.plan.journey_id} function_ref={item.plan.function_ref}"
+        )
+        for case in item.plan.case_plans:
+            print(
+                f"- {case.case_id} branch_env={case.branch_env} "
+                f"labels={_labels_for_case(case)}"
+            )
+
+    if compiled and errors:
+        print()
+
+    _emit_errors(errors)
+
+    total_cases = sum(len(item.plan.case_plans) for item in compiled)
+    print(
+        "Summary: "
+        f"{_count(len(compiled), 'journey')} planned, "
+        f"{_count(total_cases, 'case')} planned, "
+        f"{len(errors)} failed"
+    )
+
+
 def _emit_execute_output(
     root: Path,
     executed: list[_ExecutedJourney],
     errors: list[_CommandError],
     *,
     as_json: bool,
+    failure_count: int | None = None,
 ) -> None:
     if as_json:
         payload = {
@@ -666,11 +716,12 @@ def _emit_execute_output(
     _emit_errors(errors)
 
     total_cases = sum(len(item.report.case_reports) for item in executed)
+    failed = len(errors) if failure_count is None else failure_count
     print(
         "Summary: "
         f"{_count(len(executed), 'journey')} executed, "
         f"{_count(total_cases, 'case')} executed, "
-        f"{len(errors)} failed"
+        f"{failed} failed"
     )
 
 
@@ -705,58 +756,105 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     try:
         root, targets, errors = _discover_targets(args)
     except JourneySelectionError as exc:
+        error = _error_from_exception(exc, phase="plan")
+        if not args.json:
+            _emit_plan_output(Path.cwd().resolve(), [], [error])
+            print()
+            print("Execution")
+            _emit_execute_output(
+                Path.cwd().resolve(),
+                [],
+                [],
+                as_json=False,
+                failure_count=1,
+            )
+            return 1
         _emit_execute_output(
             Path.cwd().resolve(),
             [],
-            [_error_from_exception(exc, phase="discover")],
+            [error],
             as_json=args.json,
         )
         return 1
 
     executed: list[_ExecutedJourney] = []
+    run_errors: list[_CommandError] = []
+
+    if state_errors := _state_selection_errors(args, targets):
+        errors.extend(state_errors)
+        if not args.json:
+            _emit_plan_output(root, [], errors)
+            print()
+            print("Execution")
+            _emit_execute_output(
+                root,
+                [],
+                [],
+                as_json=False,
+                failure_count=len(errors),
+            )
+            return 1
+        _emit_execute_output(root, [], errors, as_json=True)
+        return 1
+
+    compiled, compile_errors = _compile_targets(
+        targets,
+        fail_fast=args.fail_fast,
+    )
+    errors.extend(compile_errors)
+
+    if not args.json:
+        _emit_plan_output(root, compiled, errors)
+        print()
+        print("Execution")
 
     try:
-        if args.step is None and args.develop_step is None:
+        should_execute = bool(compiled) and not (args.fail_fast and errors)
+        if not should_execute:
+            run_errors = []
+        elif args.step is None and args.develop_step is None:
             run_results, run_errors = _execute_all_targets(
-                targets,
+                compiled,
                 root=root,
                 fail_fast=args.fail_fast,
                 state=args.state,
                 stream_live=not args.json,
             )
             executed.extend(run_results)
-            errors.extend(run_errors)
         else:
-            compiled, compile_errors = _compile_targets(
-                targets,
-                fail_fast=args.fail_fast,
-            )
-            errors.extend(compile_errors)
-            if not errors:
-                if args.develop_step is not None:
-                    run_results, run_errors = _execute_target_pause(
-                        compiled,
-                        root=root,
-                        develop_step=args.develop_step,
-                        state=args.state,
-                        stream_live=not args.json,
-                    )
-                else:
-                    run_results, run_errors = _execute_target_step(
-                        compiled,
-                        root=root,
-                        step=args.step,
-                        state=args.state,
-                        stream_live=not args.json,
-                    )
-                executed.extend(run_results)
-                errors.extend(run_errors)
+            if args.develop_step is not None:
+                run_results, run_errors = _execute_target_pause(
+                    compiled,
+                    root=root,
+                    develop_step=args.develop_step,
+                    state=args.state,
+                    stream_live=not args.json,
+                )
+            else:
+                run_results, run_errors = _execute_target_step(
+                    compiled,
+                    root=root,
+                    step=args.step,
+                    state=args.state,
+                    stream_live=not args.json,
+                )
+            executed.extend(run_results)
     except KeyboardInterrupt:
         _emit_interrupt_output(state=args.state, as_json=args.json)
         return 130
 
-    _emit_execute_output(root, executed, errors, as_json=args.json)
-    return 0 if not errors else 1
+    all_errors = [*errors, *run_errors]
+    if args.json:
+        _emit_execute_output(root, executed, all_errors, as_json=True)
+    else:
+        _emit_execute_output(
+            root,
+            executed,
+            run_errors,
+            as_json=False,
+            failure_count=len(all_errors),
+        )
+    return 0 if not all_errors else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

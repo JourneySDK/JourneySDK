@@ -66,6 +66,14 @@ uv run journey --file docs/branching_journey/branching_journey.py --step assert_
 ```
 
 ```console
+Plan
+Journey docs/branching_journey/branching_journey.py:branching_journey
+journey_id=branching_journey function_ref=...
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['load_signup_request', 'classify_signup_request', 'assert_fast_track_path']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['load_signup_request', 'classify_signup_request', 'assert_manual_review_path']
+Summary: 1 journey planned, 2 cases planned, 0 failed
+
+Execution
 Journey docs/branching_journey/branching_journey.py:branching_journey
 journey_id=branching_journey function_ref=...
 - case_2 start branches={bg_1=branch_2}
@@ -89,6 +97,14 @@ uv run journey --file docs/branching_journey/branching_journey.py --develop-step
 ```
 
 ```console
+Plan
+Journey docs/branching_journey/branching_journey.py:branching_journey
+journey_id=branching_journey function_ref=...
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['load_signup_request', 'classify_signup_request', 'assert_fast_track_path']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['load_signup_request', 'classify_signup_request', 'assert_manual_review_path']
+Summary: 1 journey planned, 2 cases planned, 0 failed
+
+Execution
 Paused after step assert_manual_review_path attempt=1 ok.
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
@@ -130,6 +146,14 @@ uv run journey --file docs/rehydration_journey/rehydration_journey.py --step ass
 ```
 
 ```console
+Plan
+Journey docs/rehydration_journey/rehydration_journey.py:rehydration_journey
+journey_id=rehydration_journey function_ref=...
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare_context', 'shared_after_checkpoint', 'assert_branch_a']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare_context', 'shared_after_checkpoint', 'assert_branch_b']
+Summary: 1 journey planned, 2 cases planned, 0 failed
+
+Execution
 Journey docs/rehydration_journey/rehydration_journey.py:rehydration_journey
 journey_id=rehydration_journey function_ref=...
 - case_2 start branches={bg_1=branch_2}

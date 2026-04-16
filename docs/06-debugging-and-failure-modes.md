@@ -39,6 +39,17 @@ uv run journey --file docs/fail_fast_journeys/fail_fast_journeys.py
 ```
 
 ```console
+Plan
+Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
+journey_id=broken_demo_journey function_ref=...
+- case_1 branch_env={} labels=['raise_expected_failure']
+
+Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey
+journey_id=good_demo_journey function_ref=...
+- case_1 branch_env={} labels=['finish_successfully']
+Summary: 2 journeys planned, 2 cases planned, 0 failed
+
+Execution
 Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
 journey_id=broken_demo_journey function_ref=...
 - case_1 start branches={}
@@ -67,6 +78,17 @@ uv run journey --file docs/fail_fast_journeys/fail_fast_journeys.py --fail-fast
 ```
 
 ```console
+Plan
+Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
+journey_id=broken_demo_journey function_ref=...
+- case_1 branch_env={} labels=['raise_expected_failure']
+
+Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey
+journey_id=good_demo_journey function_ref=...
+- case_1 branch_env={} labels=['finish_successfully']
+Summary: 2 journeys planned, 2 cases planned, 0 failed
+
+Execution
 Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
 journey_id=broken_demo_journey function_ref=...
 - case_1 start branches={}

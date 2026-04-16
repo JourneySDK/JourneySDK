@@ -55,6 +55,13 @@ uv run journey --file docs/cloud_webhook_journey/cloud_webhook_journey.py
 ```
 
 ```console
+Plan
+Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey
+journey_id=cloud_webhook_journey function_ref=...
+- case_1 branch_env={} labels=['get_webhook_invoice_paid', 'send_invoice_paid_webhook_later', 'receive_webhook_invoice_paid', 'assert_invoice_paid_webhook']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey
 journey_id=cloud_webhook_journey function_ref=...
 - case_1 start branches={}
@@ -109,6 +116,13 @@ uv run journey --file docs/cloud_email_journey/cloud_email_journey.py
 ```
 
 ```console
+Plan
+Journey docs/cloud_email_journey/cloud_email_journey.py:cloud_email_journey
+journey_id=cloud_email_journey function_ref=...
+- case_1 branch_env={} labels=['get_email_inbox', 'send_email', 'receive_email', 'assert_welcome_email']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/cloud_email_journey/cloud_email_journey.py:cloud_email_journey
 journey_id=cloud_email_journey function_ref=...
 - case_1 start branches={}

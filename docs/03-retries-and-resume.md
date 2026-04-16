@@ -97,6 +97,13 @@ uv run journey --file docs/retry_journey/retry_journey.py --journey retry_curren
 ```
 
 ```console
+Plan
+Journey docs/retry_journey/retry_journey.py:retry_current_step_journey
+journey_id=retry_current_step_journey function_ref=...
+- case_1 branch_env={} labels=['prepare_same_step_demo', 'wait_for_same_step']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/retry_journey/retry_journey.py:retry_current_step_journey
 journey_id=retry_current_step_journey function_ref=...
 - case_1 start branches={}
@@ -117,6 +124,13 @@ uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_s
 ```
 
 ```console
+Plan
+Journey docs/retry_journey/retry_journey.py:retry_from_step_result_journey
+journey_id=retry_from_step_result_journey function_ref=...
+- case_1 branch_env={} labels=['issue_report_request', 'wait_for_report', 'assert_report_ready']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/retry_journey/retry_journey.py:retry_from_step_result_journey
 journey_id=retry_from_step_result_journey function_ref=...
 - case_1 start branches={}
@@ -140,6 +154,13 @@ uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_c
 ```
 
 ```console
+Plan
+Journey docs/retry_journey/retry_journey.py:retry_from_checkpoint_journey
+journey_id=retry_from_checkpoint_journey function_ref=...
+- case_1 branch_env={} labels=['load_status_request', 'refresh_status_cache', 'wait_for_checkpoint_retry', 'assert_checkpoint_retry_ready']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/retry_journey/retry_journey.py:retry_from_checkpoint_journey
 journey_id=retry_from_checkpoint_journey function_ref=...
 - case_1 start branches={}
@@ -207,6 +228,13 @@ Press `Ctrl-C` when the tutorial note tells you to.
 Expected stdout:
 
 ```console
+Plan
+Journey docs/resume_journey/resume_journey.py:resume_journey
+journey_id=resume_journey function_ref=...
+- case_1 branch_env={} labels=['load_support_ticket', 'wait_for_resume_signal', 'assert_resumed_ticket']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/resume_journey/resume_journey.py:resume_journey
 journey_id=resume_journey function_ref=...
 - case_1 start branches={}
@@ -234,6 +262,13 @@ uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey
 Expected stdout:
 
 ```console
+Plan
+Journey docs/resume_journey/resume_journey.py:resume_journey
+journey_id=resume_journey function_ref=...
+- case_1 branch_env={} labels=['load_support_ticket', 'wait_for_resume_signal', 'assert_resumed_ticket']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/resume_journey/resume_journey.py:resume_journey
 journey_id=resume_journey function_ref=...
 - case_1 resume branches={}

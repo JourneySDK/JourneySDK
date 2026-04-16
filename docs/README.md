@@ -74,6 +74,13 @@ uv run journey --file docs/first_journey/first_journey.py
 ```
 
 ```console
+Plan
+Journey docs/first_journey/first_journey.py:first_journey
+journey_id=first_journey function_ref=...
+- case_1 branch_env={} labels=['create_customer_profile', 'send_welcome_message', 'assert_welcome_message_sent']
+Summary: 1 journey planned, 1 case planned, 0 failed
+
+Execution
 Journey docs/first_journey/first_journey.py:first_journey
 journey_id=first_journey function_ref=...
 - case_1 start branches={}
@@ -91,6 +98,6 @@ That output shows the core Journey model:
 
 - one top-level function becomes one or more executable cases
 - each case is still plain Python steps in order
-- the CLI streams each step boundary as it runs
+- the CLI shows the compiled cases before streaming each step boundary as it runs
 
 Continue with [01 Getting Started](01-getting-started.md) if Journey is new to you.
