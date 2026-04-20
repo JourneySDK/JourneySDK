@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 from types import FrameType
 from typing import Any, ParamSpec, TypeVar, cast
@@ -80,6 +80,11 @@ class _PauseRequested(Exception):
 @dataclass(frozen=True)
 class _PausedExecution:
     paused_step: PausedStepState
+
+
+@dataclass(frozen=True)
+class _DevelopStateRefresh:
+    restarted_case_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -206,6 +211,9 @@ class _ExecutionObserver:
     def on_journey_complete(self, *, report: ExecutionReport) -> None:
         return
 
+    def on_develop_state_restart(self, *, case_id: str) -> None:
+        return
+
 
 def _copy_binding(binding: StepBindingState) -> StepBindingState:
     return StepBindingState(
@@ -213,6 +221,8 @@ def _copy_binding(binding: StepBindingState) -> StepBindingState:
         kwargs=dict(binding.kwargs),
         has_result=binding.has_result,
         result=binding.result,
+        fn_ref=binding.fn_ref,
+        source_fingerprint=binding.source_fingerprint,
     )
 
 
@@ -296,12 +306,14 @@ class _StateController:
         step: str | None,
         develop_step: str | None,
         selected_cases: list[_SelectedCase],
+        allow_stale_develop_pause: bool = False,
     ) -> None:
         self.path = path
         self.journey_plan = journey_plan
         self.step = step
         self.develop_step = develop_step
         self.selected_cases = list(selected_cases)
+        self._allow_stale_develop_pause = allow_stale_develop_pause
         self.artifact_root, self._artifact_root_is_temporary = artifact_root_for_state(path)
         self.plan_signature = _plan_signature(
             journey_plan,
@@ -529,6 +541,17 @@ class _StateController:
                 f"The journey state file '{self.path}' was created for develop_step "
                 f"{state.develop_step!r}, not {self.develop_step!r}."
             )
+        if (
+            self._allow_stale_develop_pause
+            and state.active_case is not None
+            and state.active_case.paused_step is not None
+            and (
+                state.plan_signature != self.plan_signature
+                or state.selected_cases != expected_cases
+            )
+        ):
+            self._validate_stale_develop_pause(state)
+            return
         if state.plan_signature != self.plan_signature:
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' no longer matches the current journey plan."
@@ -665,6 +688,37 @@ class _StateController:
                     f"The journey state file '{self.path}' has invalid attempt state for step '{node_id}'."
                 )
 
+    def _validate_stale_develop_pause(self, state: ExecutionStateEnvelope) -> None:
+        if state.active_case is None or state.active_case.paused_step is None:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' is not paused on a develop-step prompt."
+            )
+        if state.current_case_index < 0:
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has invalid case index {state.current_case_index}."
+            )
+        if state.current_case_index != len(state.completed_case_reports):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has inconsistent active-case progress."
+            )
+        paused_step = state.active_case.paused_step
+        if (
+            isinstance(paused_step.node_index, bool)
+            or not isinstance(paused_step.node_index, int)
+            or paused_step.node_index < 0
+        ):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has invalid paused-step index."
+            )
+        if isinstance(paused_step.attempt, bool) or not isinstance(paused_step.attempt, int):
+            raise ExecutionStateMismatchError(
+                f"The journey state file '{self.path}' has invalid paused-step attempt data."
+            )
+        self._validate_runtime_snapshot(
+            state.active_case.snapshot,
+            label=f"active case '{state.active_case.case_id}'",
+        )
+
     def _validate_runtime_snapshot(
         self,
         snapshot: RuntimeSnapshotState,
@@ -709,6 +763,14 @@ class _StateController:
             if binding.result is not None and not isinstance(binding.result, StoredValue):
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' has invalid stored result data in {label}."
+                )
+            if binding.fn_ref is not None and not isinstance(binding.fn_ref, str):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid callable data in {label}."
+                )
+            if binding.source_fingerprint is not None and not isinstance(binding.source_fingerprint, str):
+                raise ExecutionStateMismatchError(
+                    f"The journey state file '{self.path}' has invalid source fingerprint data in {label}."
                 )
             for stored in binding.args:
                 if not isinstance(stored, StoredValue):
@@ -1147,7 +1209,13 @@ class _RunSession:
         kwargs: dict[str, Any],
     ) -> StepBindingState:
         binding_key = self._step_key_by_id[node.node_id]
-        binding = StepBindingState(args=(), kwargs={}, has_result=False)
+        binding = StepBindingState(
+            args=(),
+            kwargs={},
+            has_result=False,
+            fn_ref=node.fn_ref,
+            source_fingerprint=node.source_fingerprint,
+        )
         if self._rehydration_enabled:
             base_context = self._binding_store_context(binding_key)
             binding = StepBindingState(
@@ -1168,6 +1236,8 @@ class _RunSession:
                     for key, value in kwargs.items()
                 },
                 has_result=False,
+                fn_ref=node.fn_ref,
+                source_fingerprint=node.source_fingerprint,
             )
             self._step_binding_contexts[binding_key] = self._binding_restore_context(binding_key)
         self._step_input_cache[binding_key] = (tuple(args), dict(kwargs))
@@ -1179,6 +1249,8 @@ class _RunSession:
         binding = self._step_bindings.get(binding_key)
         if binding is None:
             binding = self._store_step_inputs(node, (), {})
+        binding.fn_ref = node.fn_ref
+        binding.source_fingerprint = node.source_fingerprint
         self._step_result_cache[binding_key] = output
         binding.has_result = True
         if self._rehydration_enabled:
@@ -1846,6 +1918,7 @@ def _stable_node_payload(node: Any) -> Any:
             "args": _stable_arg_template(node.args),
             "kwargs": _stable_arg_template(node.kwargs),
             "retry": _stable_value(asdict(node.retry)) if node.retry is not None else None,
+            "source_fingerprint": node.source_fingerprint,
         }
     if isinstance(node, CheckpointNode):
         return {
@@ -1880,6 +1953,280 @@ def _plan_signature(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _find_paused_step_index(
+    case_plan: CasePlan,
+    paused_step: PausedStepState,
+) -> int | None:
+    if 0 <= paused_step.node_index < len(case_plan.nodes):
+        node = case_plan.nodes[paused_step.node_index]
+        if (
+            isinstance(node, StepNode)
+            and node.node_id == paused_step.node_id
+            and (paused_step.label is None or node.label == paused_step.label)
+        ):
+            return paused_step.node_index
+
+    for index, node in enumerate(case_plan.nodes):
+        if (
+            isinstance(node, StepNode)
+            and node.node_id == paused_step.node_id
+            and (paused_step.label is None or node.label == paused_step.label)
+        ):
+            return index
+
+    if paused_step.label is None:
+        return None
+    matches = [
+        index
+        for index, node in enumerate(case_plan.nodes)
+        if isinstance(node, StepNode) and node.label == paused_step.label
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _retry_anchor_index_for_case(
+    case_plan: CasePlan,
+    node: StepNode,
+    node_index: int,
+) -> int | None:
+    if node.retry is None:
+        return node_index
+
+    step_index_by_id = {
+        item.node_id: index
+        for index, item in enumerate(case_plan.nodes)
+        if isinstance(item, StepNode)
+    }
+    checkpoint_index_by_name = {
+        item.name: index
+        for index, item in enumerate(case_plan.nodes)
+        if isinstance(item, CheckpointNode)
+    }
+    if node.retry.from_node_id is not None:
+        return step_index_by_id.get(node.retry.from_node_id)
+    if node.retry.from_checkpoint is not None:
+        return checkpoint_index_by_name.get(node.retry.from_checkpoint)
+    return node_index
+
+
+def _record_matches_node(
+    record: NodeExecutionRecord,
+    node: Any,
+    binding: StepBindingState | None,
+) -> bool:
+    if record.node_id != node.node_id:
+        return False
+    if record.node_type != type(node).__name__:
+        return False
+    if record.label != getattr(node, "label", None):
+        return False
+
+    if isinstance(node, StepNode):
+        if binding is None:
+            return False
+        return (
+            binding.fn_ref == node.fn_ref
+            and binding.source_fingerprint == node.source_fingerprint
+        )
+    if isinstance(node, CheckpointNode):
+        return record.result == node.name
+    if isinstance(node, BranchMarkerNode):
+        return record.result == node.active_key
+    return False
+
+
+def _snapshot_matches_prefix(
+    snapshot: RuntimeSnapshotState,
+    case_plan: CasePlan,
+    boundary_index: int,
+) -> bool:
+    if boundary_index < 0 or boundary_index > len(case_plan.nodes):
+        return False
+
+    prefix = [
+        (index, record)
+        for index, record in zip(snapshot.record_indices, snapshot.records)
+        if index < boundary_index
+    ]
+    if [index for index, _ in prefix] != list(range(boundary_index)):
+        return False
+
+    step_keys, _, _ = _case_rehydration_maps(case_plan)
+    for index, record in prefix:
+        node = case_plan.nodes[index]
+        binding = (
+            snapshot.step_bindings.get(step_keys[node.node_id])
+            if isinstance(node, StepNode)
+            else None
+        )
+        if not _record_matches_node(record, node, binding):
+            return False
+    return True
+
+
+def _trim_snapshot_to_prefix(
+    snapshot: RuntimeSnapshotState,
+    case_plan: CasePlan,
+    boundary_index: int,
+) -> RuntimeSnapshotState:
+    step_keys, _, _ = _case_rehydration_maps(case_plan)
+    keep_step_ids = {
+        node.node_id
+        for node in case_plan.nodes[:boundary_index]
+        if isinstance(node, StepNode)
+    }
+    keep_binding_keys = {
+        step_keys[node_id]
+        for node_id in keep_step_ids
+        if node_id in step_keys
+    }
+    kept_records = [
+        (index, record)
+        for index, record in zip(snapshot.record_indices, snapshot.records)
+        if index < boundary_index
+    ]
+    return RuntimeSnapshotState(
+        record_indices=[index for index, _ in kept_records],
+        records=[record for _, record in kept_records],
+        step_bindings={
+            key: _copy_binding(binding)
+            for key, binding in snapshot.step_bindings.items()
+            if key in keep_binding_keys
+        },
+        retry_remaining={
+            node_id: remaining
+            for node_id, remaining in snapshot.retry_remaining.items()
+            if node_id in keep_step_ids
+        },
+        step_attempts={
+            node_id: attempts
+            for node_id, attempts in snapshot.step_attempts.items()
+            if node_id in keep_step_ids
+        },
+    )
+
+
+def _restart_develop_state(
+    path: Path,
+    *,
+    case_id: str,
+    observer: _ExecutionObserver,
+) -> _DevelopStateRefresh:
+    delete_execution_state(path)
+    artifact_root, _ = artifact_root_for_state(path)
+    delete_artifact_root(artifact_root)
+    observer.on_develop_state_restart(case_id=case_id)
+    return _DevelopStateRefresh(restarted_case_id=case_id)
+
+
+def _refresh_develop_state_for_plan(
+    path: Path | None,
+    *,
+    journey_plan: JourneyPlan,
+    step: str | None,
+    develop_step: str | None,
+    selected_cases: list[_SelectedCase],
+    pause_action: str | None,
+    observer: _ExecutionObserver,
+) -> _DevelopStateRefresh:
+    if path is None or develop_step is None or pause_action not in {"continue", "retry"}:
+        return _DevelopStateRefresh()
+
+    state = load_execution_state(path)
+    if state is None:
+        return _DevelopStateRefresh()
+
+    expected_cases = _selected_case_refs(selected_cases)
+    new_signature = _plan_signature(journey_plan, selected_cases, step, develop_step)
+    if state.plan_signature == new_signature and state.selected_cases == expected_cases:
+        return _DevelopStateRefresh()
+
+    if (
+        state.version != STATE_FORMAT_VERSION
+        or state.journey_id != journey_plan.journey_id
+        or state.function_ref != journey_plan.function_ref
+        or state.step != step
+        or state.develop_step != develop_step
+        or state.active_case is None
+        or state.active_case.paused_step is None
+        or not 0 <= state.current_case_index < len(selected_cases)
+    ):
+        return _DevelopStateRefresh()
+
+    active_case = state.active_case
+    selected_case = selected_cases[state.current_case_index]
+    case_plan = selected_case.case_plan
+    if active_case.case_id != case_plan.case_id:
+        return _restart_develop_state(
+            path,
+            case_id=active_case.case_id,
+            observer=observer,
+        )
+
+    paused_index = _find_paused_step_index(case_plan, active_case.paused_step)
+    if paused_index is None:
+        return _restart_develop_state(
+            path,
+            case_id=active_case.case_id,
+            observer=observer,
+        )
+    paused_node = case_plan.nodes[paused_index]
+    if not isinstance(paused_node, StepNode):
+        return _restart_develop_state(
+            path,
+            case_id=active_case.case_id,
+            observer=observer,
+        )
+
+    if pause_action == "continue":
+        reusable_boundary = paused_index + 1
+        trim_boundary: int | None = None
+    else:
+        retry_anchor = _retry_anchor_index_for_case(case_plan, paused_node, paused_index)
+        if retry_anchor is None:
+            return _restart_develop_state(
+                path,
+                case_id=active_case.case_id,
+                observer=observer,
+            )
+        reusable_boundary = retry_anchor
+        trim_boundary = retry_anchor
+
+    if not _snapshot_matches_prefix(
+        active_case.snapshot,
+        case_plan,
+        reusable_boundary,
+    ):
+        return _restart_develop_state(
+            path,
+            case_id=active_case.case_id,
+            observer=observer,
+        )
+
+    active_case.paused_step = replace(
+        active_case.paused_step,
+        node_id=paused_node.node_id,
+        label=paused_node.label,
+        node_index=paused_index,
+    )
+    active_case.stop_after_index = paused_index
+    if trim_boundary is not None:
+        active_case.snapshot = _trim_snapshot_to_prefix(
+            active_case.snapshot,
+            case_plan,
+            trim_boundary,
+        )
+        active_case.replay_from_index = trim_boundary
+        active_case.dirty_node_id = None
+
+    state.plan_signature = new_signature
+    state.selected_cases = expected_cases
+    save_execution_state(path, state)
+    return _DevelopStateRefresh()
+
+
 def _execute_plan(
     journey_fn: Callable[..., Any],
     *,
@@ -1901,12 +2248,28 @@ def _execute_plan(
         develop_step=develop_step,
         state=state,
     )
-    state_controller = _StateController(
-        Path(state) if state is not None else None,
+    state_path = Path(state) if state is not None else None
+    develop_refresh = _refresh_develop_state_for_plan(
+        state_path,
         journey_plan=plan,
         step=step,
         develop_step=develop_step,
         selected_cases=selected_cases,
+        pause_action=pause_action,
+        observer=execution_observer,
+    )
+    effective_pause_action = (
+        None if develop_refresh.restarted_case_id is not None else pause_action
+    )
+    state_controller = _StateController(
+        state_path,
+        journey_plan=plan,
+        step=step,
+        develop_step=develop_step,
+        selected_cases=selected_cases,
+        allow_stale_develop_pause=(
+            develop_step is not None and effective_pause_action is None
+        ),
     )
 
     case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
@@ -1981,9 +2344,9 @@ def _execute_plan(
                 )
 
             if develop_step is not None:
-                if run_session.paused_step is not None and pause_action is None:
+                if run_session.paused_step is not None and effective_pause_action is None:
                     return _PausedExecution(run_session.paused_step)
-                run_session.apply_pause_action(pause_action)
+                run_session.apply_pause_action(effective_pause_action)
 
             case_started_at = time.perf_counter()
             stopped_label: str | None = None

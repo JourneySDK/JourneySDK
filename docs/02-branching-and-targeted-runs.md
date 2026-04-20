@@ -109,7 +109,7 @@ Paused after step assert_manual_review_path attempt=1 ok.
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-Use `--develop-step` when you are actively editing one branch and want Journey to stop at the point you care about instead of rerunning the whole world every time.
+Use `--develop-step` when you are actively editing one branch and want Journey to stop at the point you care about instead of rerunning the whole world every time. After every continue or retry choice, Journey reloads and recompiles the selected journey file before it runs more code. Edits to the retried step or later steps are picked up immediately; if code that Journey would have reused from the already-run prefix changed, the selected case starts again from the beginning.
 
 ## Rehydrate Later Cases from a Checkpoint
 

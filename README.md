@@ -238,6 +238,9 @@ CLI commands discover functions annotated with `@journey` in the current directo
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
 flow that reaches a target step label. Use `--develop-step` to run that same single case interactively, pausing
 after the target step and each later step so you can continue or retry while iterating on one part of the journey.
+Each continue or retry reloads and recompiles the journey file first, so edits to the current step, later steps, or
+future journey structure are picked up without restarting the CLI. If the already-run part of the selected case
+changed, Journey starts that case over so the reused prefix is not stale.
 
 ## Core principles
 

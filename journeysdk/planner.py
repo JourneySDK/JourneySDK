@@ -27,7 +27,7 @@ from .models import (
     _duration_to_seconds,
 )
 from .session import use_session
-from .utils import callable_ref
+from .utils import callable_ref, callable_source_fingerprint
 from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
 BranchEnv = dict[str, str]
@@ -103,6 +103,7 @@ class _PlanSession:
             args=args,
             kwargs=kwargs,
             retry=resolved_retry,
+            source_fingerprint=callable_source_fingerprint(fn),
         )
         self.nodes.append(node)
         self._steps_seen.add(node.node_id)

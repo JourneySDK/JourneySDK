@@ -19,7 +19,7 @@ from .models import (
 )
 from .rehydration import StoredValue
 
-STATE_FORMAT_VERSION = 9
+STATE_FORMAT_VERSION = 10
 
 
 @dataclass
@@ -34,6 +34,8 @@ class StepBindingState:
     kwargs: dict[str, StoredValue]
     has_result: bool
     result: StoredValue | None = None
+    fn_ref: str | None = None
+    source_fingerprint: str | None = None
 
 
 @dataclass

@@ -274,6 +274,12 @@ class _LiveTextReporter(_ExecutionObserver):
             parts.append(f"replay_anchor={report.replay_anchor}")
         self._emit(" ".join(parts))
 
+    def on_develop_state_restart(self, *, case_id: str) -> None:
+        self._emit(
+            "Already-run journey code changed before the paused step; "
+            f"restarting {case_id} from the beginning."
+        )
+
 
 def _error_from_exception(
     exc: Exception,
@@ -585,6 +591,48 @@ def _execute_target_step(
     ], []
 
 
+def _reload_develop_target(
+    selected: _CompiledJourney,
+    *,
+    root: Path,
+    develop_step: str,
+) -> tuple[_CompiledJourney | None, list[_CommandError]]:
+    discovered, discovery_errors = discover_journeys(
+        root,
+        file_path=str(selected.file_path),
+        journey_name=selected.journey_name,
+        fail_fast=True,
+    )
+    errors = [
+        _error_from_exception(
+            error,
+            phase="plan",
+            file_path=error.file_path,
+        )
+        for error in discovery_errors
+    ]
+    if errors:
+        return None, errors
+    if not discovered:
+        return None, [
+            _error_from_exception(
+                JourneySelectionError(
+                    f"Journey '{selected.journey_name}' was not found after reloading.",
+                    hint="Check that the journey function still exists and is decorated with @journey.",
+                ),
+                phase="plan",
+                file_path=str(selected.file_path),
+                journey_name=selected.journey_name,
+            )
+        ]
+
+    recompiled, compile_errors = _compile_targets(discovered, fail_fast=True)
+    if compile_errors:
+        return None, compile_errors
+
+    return _select_targeted_journey(recompiled, step=develop_step)
+
+
 def _execute_target_pause(
     compiled: list[_CompiledJourney],
     *,
@@ -630,6 +678,21 @@ def _execute_target_pause(
                     pause_action = "continue"
                 else:
                     pause_action = "retry"
+                reloaded, reload_errors = _reload_develop_target(
+                    selected,
+                    root=root,
+                    develop_step=develop_step,
+                )
+                if reloaded is None:
+                    return [], reload_errors
+                selected = reloaded
+                if stream_live:
+                    display = _display_path(root, selected.file_path)
+                    print(
+                        f"Reloaded and recompiled {display}:{selected.journey_name} "
+                        f"after {pause_action}.",
+                        flush=True,
+                    )
                 continue
 
             report = outcome

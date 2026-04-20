@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib
 import importlib.util
+import linecache
 import os
 import sys
 from collections.abc import Callable
@@ -197,6 +199,7 @@ def _has_journey_decorator(
 
 
 def _load_file_module(path: Path) -> Any:
+    importlib.invalidate_caches()
     digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:12]
     module_name = f"_journey_file_{path.stem}_{digest}"
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -205,5 +208,13 @@ def _load_file_module(path: Path) -> Any:
 
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    source = path.read_text(encoding="utf-8")
+    linecache.cache[str(path)] = (
+        len(source),
+        None,
+        source.splitlines(keepends=True),
+        str(path),
+    )
+    code = compile(source, str(path), "exec")
+    exec(code, module.__dict__)
     return module

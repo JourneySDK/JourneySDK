@@ -70,6 +70,7 @@ class StepNode:
     args: tuple[Any, ...]
     kwargs: dict[str, Any]
     retry: StepRetry | None = None
+    source_fingerprint: str | None = None
 
 
 RunNode = StepNode

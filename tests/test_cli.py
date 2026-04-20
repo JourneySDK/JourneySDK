@@ -622,18 +622,27 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
+    attempts_file = tmp_path / "attempts.count"
     _write(
         tmp_path / "flow.py",
-        """
+        f"""
         import journeysdk as journey
-        ATTEMPTS = {"poll": 0}
+        from pathlib import Path
+
+        ATTEMPTS = Path({str(attempts_file)!r})
+
+        def _read_attempts():
+            if not ATTEMPTS.exists():
+                return 0
+            return int(ATTEMPTS.read_text(encoding="utf-8"))
 
         def prepare():
             return True
 
         def poll():
-            ATTEMPTS["poll"] += 1
-            if ATTEMPTS["poll"] < 3:
+            attempts = _read_attempts() + 1
+            ATTEMPTS.write_text(str(attempts), encoding="utf-8")
+            if attempts < 3:
                 raise RuntimeError("pending")
             return True
 
@@ -669,6 +678,466 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
     assert "  step finish attempt=1 ok duration=" in output
     assert "Paused after step finish attempt=1 ok." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+
+
+def test_execute_develop_step_retry_reloads_changed_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def publish():
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write("old\\n")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(publish)
+        """,
+    )
+
+    prompts = iter(["r", "c"])
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        choice = next(prompts)
+        if choice == "r":
+            _write(
+                flow_file,
+                f"""
+                import journeysdk as journey
+                from pathlib import Path
+
+                EVENTS = Path({str(events_file)!r})
+
+                def publish():
+                    with EVENTS.open("a", encoding="utf-8") as handle:
+                        handle.write("new\\n")
+                    return True
+
+                @journey.journey
+                def flow():
+                    journey.step(publish)
+                """,
+            )
+        return choice
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Reloaded and recompiled flow.py:flow after retry." in output
+    assert events_file.read_text(encoding="utf-8").splitlines() == ["old", "new"]
+
+
+def test_execute_develop_step_continue_reloads_later_step_without_rerunning_prior_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare")
+            return True
+
+        def publish():
+            _append("publish")
+            return True
+
+        def cleanup():
+            _append("cleanup_old")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+            journey.step(cleanup)
+        """,
+    )
+
+    prompts = iter(["c", "c"])
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        choice = next(prompts)
+        if choice == "c" and not hasattr(fake_input, "edited"):
+            fake_input.edited = True
+            _write(
+                flow_file,
+                f"""
+                import journeysdk as journey
+                from pathlib import Path
+
+                EVENTS = Path({str(events_file)!r})
+
+                def _append(message: str):
+                    with EVENTS.open("a", encoding="utf-8") as handle:
+                        handle.write(message + "\\n")
+
+                def prepare():
+                    _append("prepare")
+                    return True
+
+                def publish():
+                    _append("publish")
+                    return True
+
+                def cleanup():
+                    _append("cleanup_new")
+                    return True
+
+                @journey.journey
+                def flow():
+                    journey.step(prepare)
+                    journey.step(publish)
+                    journey.step(cleanup)
+                """,
+            )
+        return choice
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Reloaded and recompiled flow.py:flow after continue." in output
+    assert events_file.read_text(encoding="utf-8").splitlines() == [
+        "prepare",
+        "publish",
+        "cleanup_new",
+    ]
+
+
+def test_execute_develop_step_restarts_when_already_run_step_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare_old")
+            return True
+
+        def publish():
+            _append("publish")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+        """,
+    )
+
+    prompts = iter(["c", "c"])
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        choice = next(prompts)
+        if choice == "c" and not hasattr(fake_input, "edited"):
+            fake_input.edited = True
+            _write(
+                flow_file,
+                f"""
+                import journeysdk as journey
+                from pathlib import Path
+
+                EVENTS = Path({str(events_file)!r})
+
+                def _append(message: str):
+                    with EVENTS.open("a", encoding="utf-8") as handle:
+                        handle.write(message + "\\n")
+
+                def prepare():
+                    _append("prepare_new")
+                    return True
+
+                def publish():
+                    _append("publish")
+                    return True
+
+                @journey.journey
+                def flow():
+                    journey.step(prepare)
+                    journey.step(publish)
+                """,
+            )
+        return choice
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Already-run journey code changed before the paused step; restarting case_1" in output
+    assert events_file.read_text(encoding="utf-8").splitlines() == [
+        "prepare_old",
+        "publish",
+        "prepare_new",
+        "publish",
+    ]
+
+
+def test_execute_develop_step_accepts_future_plan_changes_after_continue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare")
+            return True
+
+        def publish():
+            _append("publish")
+            return True
+
+        def cleanup():
+            _append("cleanup")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+            journey.step(cleanup)
+        """,
+    )
+
+    prompts = iter(["c", "c", "c"])
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        choice = next(prompts)
+        if choice == "c" and not hasattr(fake_input, "edited"):
+            fake_input.edited = True
+            _write(
+                flow_file,
+                f"""
+                import journeysdk as journey
+                from pathlib import Path
+
+                EVENTS = Path({str(events_file)!r})
+
+                def _append(message: str):
+                    with EVENTS.open("a", encoding="utf-8") as handle:
+                        handle.write(message + "\\n")
+
+                def prepare():
+                    _append("prepare")
+                    return True
+
+                def publish():
+                    _append("publish")
+                    return True
+
+                def extra():
+                    _append("extra")
+                    return True
+
+                def cleanup():
+                    _append("cleanup")
+                    return True
+
+                @journey.journey
+                def flow():
+                    journey.step(prepare)
+                    journey.step(publish)
+                    journey.step(extra)
+                    journey.step(cleanup)
+                """,
+            )
+        return choice
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "restarting case_1" not in output
+    assert "Paused after step extra attempt=1 ok." in output
+    assert events_file.read_text(encoding="utf-8").splitlines() == [
+        "prepare",
+        "publish",
+        "extra",
+        "cleanup",
+    ]
+
+
+def test_execute_develop_step_state_resume_reloads_future_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    state_file = tmp_path / "pause.state"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare")
+            return True
+
+        def publish():
+            _append("publish")
+            return True
+
+        def cleanup():
+            _append("cleanup_old")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+            journey.step(cleanup)
+        """,
+    )
+
+    def interrupting_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        raise KeyboardInterrupt()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", interrupting_input)
+    first_exit = main(
+        [
+            "--file",
+            "flow.py",
+            "--develop-step",
+            "publish",
+            "--state",
+            str(state_file),
+        ]
+    )
+    capsys.readouterr()
+
+    assert first_exit == 130
+    assert state_file.exists()
+
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare")
+            return True
+
+        def publish():
+            _append("publish")
+            return True
+
+        def cleanup():
+            _append("cleanup_new")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+            journey.step(cleanup)
+        """,
+    )
+
+    prompts = iter(["c", "c"])
+
+    def resume_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        return next(prompts)
+
+    monkeypatch.setattr("builtins.input", resume_input)
+    second_exit = main(
+        [
+            "--file",
+            "flow.py",
+            "--develop-step",
+            "publish",
+            "--state",
+            str(state_file),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert second_exit == 0
+    assert "Reloaded and recompiled flow.py:flow after continue." in output
+    assert events_file.read_text(encoding="utf-8").splitlines() == [
+        "prepare",
+        "publish",
+        "cleanup_new",
+    ]
 
 
 def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
