@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -437,25 +438,59 @@ def _paused_prompt(paused: _PausedExecution) -> str:
     if paused.paused_step.ok:
         return (
             f"Paused after step {step_name} attempt={paused.paused_step.attempt} ok. "
-            "Enter c to continue or r to retry: "
+            "Press c to continue or r to retry: "
         )
     if paused.paused_step.error:
         return (
             f"Paused after step {step_name} attempt={paused.paused_step.attempt} "
-            f"failed ({paused.paused_step.error}). Enter c to exit with failure or r to retry: "
+            f"failed ({paused.paused_step.error}). Press c to exit with failure or r to retry: "
         )
     return (
         f"Paused after step {step_name} attempt={paused.paused_step.attempt} failed. "
-        "Enter c to exit with failure or r to retry: "
+        "Press c to exit with failure or r to retry: "
     )
+
+
+def _read_pause_choice(prompt: str) -> str:
+    if not sys.stdin.isatty():
+        return input(prompt).strip().lower()
+
+    try:
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+    except (ImportError, OSError, AttributeError):
+        return input(prompt).strip().lower()
+
+    print(prompt, end="", flush=True)
+    try:
+        try:
+            tty.setcbreak(fd)
+            choice = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    except KeyboardInterrupt:
+        print(flush=True)
+        raise
+
+    if choice == "\x03":
+        print(flush=True)
+        raise KeyboardInterrupt()
+    if choice == "":
+        print(flush=True)
+        raise EOFError()
+    print(flush=True)
+    return choice.strip().lower()
 
 
 def _prompt_for_pause_action(paused: _PausedExecution) -> str:
     while True:
-        choice = input(_paused_prompt(paused)).strip().lower()
+        choice = _read_pause_choice(_paused_prompt(paused))
         if choice in {"c", "r"}:
             return choice
-        print("Enter 'c' to continue or 'r' to retry.", flush=True)
+        print("Press 'c' to continue or 'r' to retry.", flush=True)
 
 
 def _paused_failure_error(

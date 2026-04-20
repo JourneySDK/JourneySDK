@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from journeysdk.cli import build_parser, main
+from journeysdk.cli import _read_pause_choice, build_parser, main
 
 
 def _write(path: Path, content: str) -> None:
@@ -82,6 +84,50 @@ def test_execute_develop_step_rejects_json_mode(
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
     assert "--develop-step cannot be used with --json" in captured.err
+
+
+def test_pause_choice_reads_one_key_from_tty(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    calls: list[tuple[object, ...]] = []
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+        def fileno(self) -> int:
+            return 123
+
+        def read(self, size: int) -> str:
+            calls.append(("read", size))
+            return "r"
+
+    def fake_tcgetattr(fd: int) -> object:
+        calls.append(("get", fd))
+        return object()
+
+    def fake_tcsetattr(fd: int, when: int, settings: object) -> None:
+        del settings
+        calls.append(("set", fd, when))
+
+    def fake_setcbreak(fd: int) -> None:
+        calls.append(("cbreak", fd))
+
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+    monkeypatch.setitem(
+        sys.modules,
+        "termios",
+        SimpleNamespace(TCSADRAIN=7, tcgetattr=fake_tcgetattr, tcsetattr=fake_tcsetattr),
+    )
+    monkeypatch.setitem(sys.modules, "tty", SimpleNamespace(setcbreak=fake_setcbreak))
+
+    assert _read_pause_choice("Press c to continue or r to retry: ") == "r"
+
+    output = capsys.readouterr().out
+    assert output == "Press c to continue or r to retry: \n"
+    assert ("read", 1) in calls
+    assert ("set", 123, 7) in calls
 
 
 def test_execute_discovers_decorated_journeys_recursively_and_via_aliases(
