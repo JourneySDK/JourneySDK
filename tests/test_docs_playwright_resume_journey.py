@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import builtins
 import importlib
 from pathlib import Path
 
 import journeysdk as journey
 import pytest
 from journeysdk.models import StepNode
+
+pytest.importorskip("playwright.sync_api")
 
 playwright_resume_module = importlib.import_module(
     "docs.playwright_resume_journey.playwright_resume_journey"
@@ -41,16 +42,7 @@ def _require_playwright_browser() -> None:
         pytest.skip(f"Playwright browser unavailable: {exc}")
 
 
-def test_playwright_resume_example_compiles_without_importing_playwright(monkeypatch):
-    original_import = builtins.__import__
-
-    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "playwright" or name.startswith("playwright."):
-            raise AssertionError("compile_journey() should not import Playwright.")
-        return original_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", guarded_import)
-
+def test_playwright_resume_example_compiles_with_explicit_playwright_dependency():
     reloaded = importlib.reload(playwright_resume_module)
     first_plan = journey.compile_journey(reloaded.playwright_resume_journey)
     second_plan = journey.compile_journey(reloaded.playwright_resume_journey)

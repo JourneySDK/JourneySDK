@@ -6,11 +6,9 @@ import hashlib
 import importlib
 import inspect
 import textwrap
-from collections.abc import Callable
-from typing import Any
 
 
-def callable_ref(fn: Callable[..., object]) -> str:
+def callable_ref(fn: object) -> str:
     """Create a stable printable reference for a callable."""
 
     module = getattr(fn, "__module__", "<unknown>")
@@ -18,7 +16,7 @@ def callable_ref(fn: Callable[..., object]) -> str:
     return f"{module}:{qualname}"
 
 
-def callable_source_fingerprint(fn: Callable[..., object]) -> str | None:
+def callable_source_fingerprint(fn: object) -> str | None:
     """Return a stable fingerprint for inspectable callable source code."""
 
     try:
@@ -30,14 +28,14 @@ def callable_source_fingerprint(fn: Callable[..., object]) -> str | None:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def resolve_ref(ref: str) -> Any:
+def resolve_ref(ref: str) -> object:
     """Resolve one ``module:qualname`` reference."""
 
     module_name, separator, qualname = ref.partition(":")
     if not separator or not module_name or not qualname:
         raise ValueError(f"Invalid reference {ref!r}.")
     module = importlib.import_module(module_name)
-    current: Any = module
+    current: object = module
     for part in qualname.split("."):
         if part == "<locals>":
             raise ValueError(f"Reference {ref!r} points to a non-importable local object.")

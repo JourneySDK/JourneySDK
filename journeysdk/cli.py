@@ -6,10 +6,8 @@ import argparse
 import json
 import sys
 import tempfile
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from .discovery import DiscoveredJourney, discover_journeys
 from .errors import (
@@ -29,6 +27,7 @@ from .models import (
     StepNode,
 )
 from .planner import compile_journey
+from .types import JourneyEntrypoint
 
 
 @dataclass(frozen=True)
@@ -45,7 +44,7 @@ class _CommandError:
 class _CompiledJourney:
     file_path: Path
     journey_name: str
-    function: Callable[..., Any]
+    function: JourneyEntrypoint
     plan: JourneyPlan
 
 
@@ -122,7 +121,7 @@ class _LiveTextReporter(_ExecutionObserver):
         self,
         *,
         plan: JourneyPlan,
-        selected_cases: list[Any],
+        selected_cases: list[object],
     ) -> None:
         del selected_cases
         if self._journey_started:

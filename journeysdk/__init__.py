@@ -25,6 +25,10 @@ from .models import (
     JourneyPlan,
     NodeExecutionRecord,
     PlannedValue,
+    StepArgument,
+    StepArguments,
+    StepKeywordArguments,
+    StepResult,
     StepRetry,
 )
 from .planner import compile_journey
@@ -32,6 +36,14 @@ from .rehydration import (
     JourneyRestoreContext,
     JourneyStoreContext,
     RehydratableValue,
+)
+from .types import (
+    JourneyEntrypoint,
+    JourneyFunction,
+    JsonObject,
+    JsonPrimitive,
+    JsonValue,
+    StepFunction,
 )
 
 __all__ = [
@@ -50,11 +62,21 @@ __all__ = [
     "JourneySelectionError",
     "JourneyRestoreContext",
     "JourneyStoreContext",
+    "JourneyEntrypoint",
+    "JourneyFunction",
     "NodeExecutionRecord",
     "NoJourneysFoundError",
     "PlannedValue",
     "RehydratableValue",
+    "JsonObject",
+    "JsonPrimitive",
+    "JsonValue",
+    "StepFunction",
+    "StepArgument",
+    "StepArguments",
+    "StepKeywordArguments",
     "StepNotFoundError",
+    "StepResult",
     "StepRetry",
     "UnknownCheckpointError",
     "UnsupportedControlFlowError",

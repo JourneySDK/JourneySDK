@@ -21,11 +21,6 @@ from tests._resume_tutorial_helpers import (
     start_interrupt_on_prompt,
 )
 
-playwright_resume_example = __import__(
-    "docs.playwright_resume_journey.playwright_resume_journey",
-    fromlist=["playwright_resume_journey"],
-)
-
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -273,6 +268,10 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
     tmp_path: Path,
 ):
     sync_api = pytest.importorskip("playwright.sync_api")
+    playwright_resume_example = __import__(
+        "docs.playwright_resume_journey.playwright_resume_journey",
+        fromlist=["playwright_resume_journey"],
+    )
     try:
         with sync_api.sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)

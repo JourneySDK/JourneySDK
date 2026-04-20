@@ -7,7 +7,11 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import cast
+
+from journeysdk.types import JsonObject
+
+from ._webhook_shared import WebhookRequestPayload
 
 JOURNEY_CLOUD_API_KEY_ENV = "JOURNEY_CLOUD_API_KEY"
 JOURNEY_CLOUD_BASE_URL_ENV = "JOURNEY_CLOUD_BASE_URL"
@@ -42,7 +46,7 @@ def load_cloud_config(*, api_base_url: str | None = None) -> _CloudWebhookConfig
     )
 
 
-def create_webhook_endpoint(*, path: str) -> tuple[str, dict[str, Any]]:
+def create_webhook_endpoint(*, path: str) -> tuple[str, JsonObject]:
     """Create one cloud-hosted webhook endpoint."""
 
     config = load_cloud_config()
@@ -62,7 +66,7 @@ def fetch_next_request(
     *,
     endpoint_id: str,
     api_base_url: str | None,
-) -> dict[str, Any] | None:
+) -> WebhookRequestPayload | None:
     """Fetch one queued webhook request from the cloud service."""
 
     config = load_cloud_config(api_base_url=api_base_url)
@@ -77,7 +81,7 @@ def fetch_next_request(
         return None
     if not isinstance(payload, dict):
         raise RuntimeError("Journey cloud returned an invalid webhook request payload.")
-    return payload
+    return cast(WebhookRequestPayload, payload)
 
 
 def _request_json(
@@ -87,7 +91,7 @@ def _request_json(
     route: str,
     payload: dict[str, object],
     allow_no_content: bool,
-) -> dict[str, Any] | None:
+) -> JsonObject | None:
     url = f"{config.api_base_url}{route}"
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -132,7 +136,7 @@ def _request_json(
         raise RuntimeError(
             f"Journey cloud returned an unexpected response payload for {url}."
         )
-    return decoded
+    return cast(JsonObject, decoded)
 
 
 def _error_detail(raw_body: bytes) -> str:

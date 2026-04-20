@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Literal, TypedDict, cast
+
+from playwright.sync_api import Page as PlaywrightPage
+from playwright.sync_api import sync_playwright
+
+
+class PlaywrightCookie(TypedDict, total=False):
+    name: str
+    value: str
+    domain: str
+    path: str
+    expires: float
+    httpOnly: bool
+    secure: bool
+    sameSite: Literal["Strict", "Lax", "None"]
+
+
+class PlaywrightPagePayload(TypedDict):
+    url: str
+    cookies: list[PlaywrightCookie]
+    local_storage: dict[str, str]
+
 
 _STORAGE_SCRIPT = """
 () => {
@@ -32,7 +52,7 @@ _REHYDRATE_STORAGE_SCRIPT = """
 """
 
 
-def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _normalize_payload(payload: Mapping[str, object]) -> PlaywrightPagePayload:
     if set(payload) != {"url", "cookies", "local_storage"}:
         raise ValueError(
             "PlaywrightPageState expects exactly 'url', 'cookies', and 'local_storage'."
@@ -45,14 +65,14 @@ def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     cookies = payload["cookies"]
     if not isinstance(cookies, list):
         raise TypeError("PlaywrightPageState cookies must be a list of cookie objects.")
-    normalized_cookies: list[dict[str, Any]] = []
+    normalized_cookies: list[PlaywrightCookie] = []
     for cookie in cookies:
         if not isinstance(cookie, dict):
             raise TypeError(
                 "PlaywrightPageState cookies must contain only cookie dictionaries."
             )
         normalized_cookie = cast(
-            dict[str, Any],
+            PlaywrightCookie,
             json.loads(json.dumps(cookie, sort_keys=True)),
         )
         normalized_cookies.append(normalized_cookie)
@@ -77,19 +97,6 @@ def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _load_sync_playwright() -> Any:
-    try:
-        module = importlib.import_module("playwright.sync_api")
-    except ModuleNotFoundError as exc:
-        if exc.name not in {"playwright", "playwright.sync_api"}:
-            raise
-        raise ImportError(
-            "journeysdk.tools.playwright requires the optional 'playwright' package. "
-            "Install it with `uv run --with playwright ...` or `pip install playwright`."
-        ) from exc
-    return getattr(module, "sync_playwright")
-
-
 @dataclass(frozen=True)
 class PlaywrightPageState:
     """Serializable page snapshot for resumable Playwright steps."""
@@ -109,7 +116,7 @@ class PlaywrightPageState:
         )
 
     @classmethod
-    def from_page(cls, page: Any) -> PlaywrightPageState:
+    def from_page(cls, page: PlaywrightPage) -> PlaywrightPageState:
         """Capture the current page URL, cookies, and local storage."""
 
         payload = {
@@ -135,10 +142,10 @@ class PlaywrightPageState:
             raise TypeError(
                 "PlaywrightPageState.from_json(...) expects a JSON object."
             )
-        return cls._from_payload(cast(dict[str, Any], payload))
+        return cls._from_payload(cast(Mapping[str, object], payload))
 
     @classmethod
-    def _from_payload(cls, payload: dict[str, Any]) -> PlaywrightPageState:
+    def _from_payload(cls, payload: Mapping[str, object]) -> PlaywrightPageState:
         normalized = _normalize_payload(payload)
         return cls(
             _payload_json=json.dumps(
@@ -158,19 +165,19 @@ class PlaywrightPageState:
         return cast(str, self._payload()["url"])
 
     @property
-    def cookies(self) -> tuple[dict[str, Any], ...]:
-        cookies = cast(list[dict[str, Any]], self._payload()["cookies"])
-        return tuple(dict(cookie) for cookie in cookies)
+    def cookies(self) -> tuple[PlaywrightCookie, ...]:
+        cookies = self._payload()["cookies"]
+        return tuple(cast(PlaywrightCookie, dict(cookie)) for cookie in cookies)
 
     @property
     def local_storage(self) -> dict[str, str]:
         return dict(cast(dict[str, str], self._payload()["local_storage"]))
 
-    def _payload(self) -> dict[str, Any]:
-        return cast(dict[str, Any], json.loads(self._payload_json))
+    def _payload(self) -> PlaywrightPagePayload:
+        return cast(PlaywrightPagePayload, json.loads(self._payload_json))
 
 
-def capture_page_state(page: Any) -> PlaywrightPageState:
+def capture_page_state(page: PlaywrightPage) -> PlaywrightPageState:
     """Capture one live Playwright page as resumable state."""
 
     return PlaywrightPageState.from_page(page)
@@ -182,7 +189,7 @@ def open_page(
     *,
     browser: Literal["chromium", "firefox", "webkit"] = "chromium",
     headless: bool = True,
-) -> Iterator[Any]:
+) -> Iterator[PlaywrightPage]:
     """Open a fresh Playwright page from saved page state."""
 
     state = (
@@ -190,7 +197,6 @@ def open_page(
         if isinstance(page_state, PlaywrightPageState)
         else PlaywrightPageState.from_json(page_state)
     )
-    sync_playwright = _load_sync_playwright()
     with sync_playwright() as playwright:
         browser_type = getattr(playwright, browser, None)
         if browser_type is None:
@@ -206,10 +212,16 @@ def open_page(
             page.goto(state.url, wait_until="load")
             page.evaluate(_REHYDRATE_STORAGE_SCRIPT, state.local_storage)
             page.reload(wait_until="load")
-            yield page
+            yield cast(PlaywrightPage, page)
         finally:
             context.close()
             launched_browser.close()
 
 
-__all__ = ["PlaywrightPageState", "capture_page_state", "open_page"]
+__all__ = [
+    "PlaywrightCookie",
+    "PlaywrightPagePayload",
+    "PlaywrightPageState",
+    "capture_page_state",
+    "open_page",
+]

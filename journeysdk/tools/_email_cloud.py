@@ -7,7 +7,9 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import cast
+
+from journeysdk.types import JsonObject
 
 JOURNEY_CLOUD_API_KEY_ENV = "JOURNEY_CLOUD_API_KEY"
 JOURNEY_CLOUD_BASE_URL_ENV = "JOURNEY_CLOUD_BASE_URL"
@@ -42,7 +44,7 @@ def load_cloud_config(*, api_base_url: str | None = None) -> _CloudEmailConfig:
     )
 
 
-def get_default_inbox(*, api_base_url: str | None = None) -> tuple[str, dict[str, Any]]:
+def get_default_inbox(*, api_base_url: str | None = None) -> tuple[str, JsonObject]:
     """Fetch the default cloud-hosted inbox for the active API key."""
 
     config = load_cloud_config(api_base_url=api_base_url)
@@ -62,7 +64,7 @@ def send_message(
     *,
     payload: dict[str, object],
     api_base_url: str | None = None,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Send one email through the cloud-hosted default inbox."""
 
     config = load_cloud_config(api_base_url=api_base_url)
@@ -82,7 +84,7 @@ def fetch_next_message(
     *,
     payload: dict[str, object],
     api_base_url: str | None = None,
-) -> dict[str, Any] | None:
+) -> JsonObject | None:
     """Fetch one queued email from the cloud-hosted default inbox."""
 
     config = load_cloud_config(api_base_url=api_base_url)
@@ -107,7 +109,7 @@ def _request_json(
     route: str,
     payload: dict[str, object],
     allow_no_content: bool,
-) -> dict[str, Any] | None:
+) -> JsonObject | None:
     url = f"{config.api_base_url}{route}"
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -152,7 +154,7 @@ def _request_json(
         raise RuntimeError(
             f"Journey cloud returned an unexpected response payload for {url}."
         )
-    return decoded
+    return cast(JsonObject, decoded)
 
 
 def _error_detail(raw_body: bytes) -> str:
@@ -165,4 +167,3 @@ def _error_detail(raw_body: bytes) -> str:
     if isinstance(payload, dict) and "error" in payload:
         return str(payload["error"])
     return json.dumps(payload, sort_keys=True)
-

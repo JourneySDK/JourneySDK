@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 from types import FrameType
@@ -58,6 +57,7 @@ from .rehydration import (
     restore_value,
     store_value,
 )
+from .types import JourneyEntrypoint, StepFunction
 from .utils import callable_ref
 from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
@@ -1509,7 +1509,7 @@ class _RunSession:
 
     def step(
         self,
-        fn: Callable[P, R],
+        fn: StepFunction[P, R],
         *args: P.args,
         retry: int = 0,
         retry_delay: StepRetryDelay = 5,
@@ -2228,7 +2228,7 @@ def _refresh_develop_state_for_plan(
 
 
 def _execute_plan(
-    journey_fn: Callable[..., Any],
+    journey_fn: JourneyEntrypoint,
     *,
     plan: JourneyPlan,
     step: str | None = None,
@@ -2416,7 +2416,7 @@ def _execute_plan(
 
 
 def execute(
-    journey_fn: Callable[..., Any],
+    journey_fn: JourneyEntrypoint,
     *,
     step: str | None = None,
     state: str | Path | None = None,

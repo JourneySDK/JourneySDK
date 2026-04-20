@@ -8,10 +8,13 @@ from collections import deque
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import SplitResult, parse_qs, quote, urlsplit
 
-from ._webhook_shared import build_request_payload, normalize_path as normalize_path_base
+from ._webhook_shared import (
+    WebhookRequestPayload,
+    build_request_payload,
+    normalize_path as normalize_path_base,
+)
 
 CONTROL_PREFIX = "/_journey/webhooks/"
 _LOOPBACK_HOST = "127.0.0.1"
@@ -48,7 +51,7 @@ def is_port_open(port: int) -> bool:
 
 @dataclass
 class _WebhookQueue:
-    requests: deque[dict[str, Any]] = field(default_factory=deque)
+    requests: deque[WebhookRequestPayload] = field(default_factory=deque)
 
 
 @dataclass
@@ -63,12 +66,12 @@ class _LocalWebhookHost:
         with self.lock:
             self.queues.setdefault(path, _WebhookQueue())
 
-    def enqueue(self, path: str, payload: dict[str, Any]) -> None:
+    def enqueue(self, path: str, payload: WebhookRequestPayload) -> None:
         with self.lock:
             queue = self.queues.setdefault(path, _WebhookQueue())
             queue.requests.append(payload)
 
-    def dequeue(self, path: str) -> dict[str, Any] | None:
+    def dequeue(self, path: str) -> WebhookRequestPayload | None:
         with self.lock:
             queue = self.queues.get(path)
             if queue is None or not queue.requests:
@@ -132,7 +135,7 @@ class _WebhookRequestHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(encoded)
 
-    def _handle_ingest(self, parsed: Any) -> None:
+    def _handle_ingest(self, parsed: SplitResult) -> None:
         path = parsed.path
         if path.startswith(CONTROL_PREFIX):
             self.send_error(HTTPStatus.NOT_FOUND, "Unknown control route.")
@@ -164,7 +167,7 @@ class _WebhookRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(response)
 
     @staticmethod
-    def _encode_json(payload: dict[str, Any]) -> bytes:
+    def _encode_json(payload: object) -> bytes:
         import json
 
         return json.dumps(payload).encode("utf-8")
@@ -199,7 +202,7 @@ def ensure_local_host(*, port: int, path: str) -> None:
         thread.start()
 
 
-def poll_request(*, port: int, path: str) -> dict[str, Any] | None:
+def poll_request(*, port: int, path: str) -> WebhookRequestPayload | None:
     host = _HOSTS_BY_PORT.get(port)
     if host is None:
         return None

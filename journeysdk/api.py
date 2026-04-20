@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
-from typing import ParamSpec, TypeVar, cast
+from typing import ParamSpec, TypeGuard, TypeVar, cast
 
 from .errors import InvalidBranchUsageError
 from .models import (
@@ -14,13 +13,14 @@ from .models import (
     StepRetryFrom,
 )
 from .session import get_session
+from .types import JourneyEntrypoint, JourneyFunction, StepFunction
 
 _JOURNEY_MARKER_ATTR = "__journey_marker__"
 P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def journey(fn: Callable[P, R]) -> Callable[P, R]:
+def journey(fn: JourneyFunction[P, R]) -> JourneyFunction[P, R]:
     """Mark a top-level authoring function so the CLI can discover it.
 
     Decorate the function that defines one complete QA journey. The decorated
@@ -56,7 +56,7 @@ def journey(fn: Callable[P, R]) -> Callable[P, R]:
     return fn
 
 
-def is_journey_callable(obj: Any) -> bool:
+def is_journey_callable(obj: object) -> TypeGuard[JourneyEntrypoint]:
     """Return whether a callable was marked with the journey decorator."""
 
     return callable(obj) and bool(getattr(obj, _JOURNEY_MARKER_ATTR, False))
@@ -130,7 +130,7 @@ def branch(
 
 
 def step(
-    fn: Callable[P, R],
+    fn: StepFunction[P, R],
     *args: P.args,
     retry: int = 0,
     retry_delay: StepRetryDelay = 5,

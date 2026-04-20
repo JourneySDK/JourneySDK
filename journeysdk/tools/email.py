@@ -6,7 +6,7 @@ import imaplib
 import os
 import smtplib
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email import policy
@@ -14,7 +14,7 @@ from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import format_datetime, getaddresses, make_msgid, parsedate_to_datetime
 import hashlib
-from typing import Any
+from typing import Any, Literal, Protocol, TypeAlias, TypedDict
 
 from ._email_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
@@ -52,6 +52,29 @@ _DIRECT_EMAIL_REQUIRED_ENV_VARS = (
     JOURNEY_EMAIL_IMAP_SSL_ENV,
 )
 
+EmailTransport: TypeAlias = Literal["direct", "cloud"]
+
+
+class EmailSendReceipt(TypedDict):
+    message_id: str
+    from_address: str
+    to: list[str]
+    subject: str
+    transport: str
+
+
+class EmailReceivedMessage(TypedDict):
+    message_id: str
+    subject: str
+    from_address: str
+    to: list[str]
+    cc: list[str]
+    reply_to: str | None
+    text_body: str | None
+    html_body: str | None
+    headers: dict[str, str]
+    received_at: str
+
 
 @dataclass(frozen=True)
 class EmailServerConfig:
@@ -78,8 +101,23 @@ class EmailInbox:
 
     address: str
     mailbox: str
-    transport: str
+    transport: EmailTransport
     api_base_url: str | None
+
+
+class GetEmailInboxStep(Protocol):
+    def __call__(self) -> EmailInbox:
+        ...
+
+
+class SendEmailStep(Protocol):
+    def __call__(self, email_inbox: EmailInbox | None = None) -> EmailSendReceipt:
+        ...
+
+
+class WaitForEmailStep(Protocol):
+    def __call__(self, email_inbox: EmailInbox | None = None) -> EmailReceivedMessage:
+        ...
 
 
 @dataclass(frozen=True)
@@ -91,7 +129,7 @@ class _DirectEnvResolution:
 
 @dataclass(frozen=True)
 class _ResolvedTransport:
-    transport: str
+    transport: EmailTransport
     server: EmailServerConfig | None
     api_base_url: str | None
     address: str | None
@@ -101,7 +139,7 @@ class _ResolvedTransport:
 def get_email_inbox(
     *,
     server: EmailServerConfig | None = None,
-) -> Callable[[], EmailInbox]:
+) -> GetEmailInboxStep:
     """Resolve the active default inbox for direct or cloud execution."""
 
     validated_server = (
@@ -141,7 +179,7 @@ def send_email(
     html_body: str | None = None,
     from_address: str | None = None,
     server: EmailServerConfig | None = None,
-) -> Callable[[EmailInbox | None], dict[str, Any]]:
+) -> SendEmailStep:
     """Send one email through the active default inbox."""
 
     validated_server = (
@@ -180,7 +218,7 @@ def send_email(
         value=from_address,
     )
 
-    def perform_send(email_inbox: EmailInbox | None = None) -> dict[str, Any]:
+    def perform_send(email_inbox: EmailInbox | None = None) -> EmailSendReceipt:
         resolved = _resolve_transport(
             owner="send_email",
             email_inbox=email_inbox,
@@ -258,7 +296,7 @@ def wait_for_email(
     to_address: str | None = None,
     unread_only: bool = True,
     server: EmailServerConfig | None = None,
-) -> Callable[[EmailInbox | None], dict[str, Any]]:
+) -> WaitForEmailStep:
     """Poll the active inbox until one matching email arrives."""
 
     validated_server = (
@@ -294,7 +332,7 @@ def wait_for_email(
     if not isinstance(unread_only, bool):
         raise TypeError("wait_for_email(..., unread_only=...) expects a boolean.")
 
-    def receive_email(email_inbox: EmailInbox | None = None) -> dict[str, Any]:
+    def receive_email(email_inbox: EmailInbox | None = None) -> EmailReceivedMessage:
         resolved = _resolve_transport(
             owner="wait_for_email",
             email_inbox=email_inbox,
@@ -673,7 +711,7 @@ def _fetch_direct_message(
     from_address: str | None,
     to_address: str | None,
     unread_only: bool,
-) -> dict[str, Any] | None:
+) -> EmailReceivedMessage | None:
     imap_client = _build_imap_client(server_config)
     try:
         _require_imap_ok(
@@ -777,7 +815,7 @@ def _normalize_received_message_from_message(
     message: EmailMessage,
     *,
     raw_message: bytes | None = None,
-) -> dict[str, Any]:
+) -> EmailReceivedMessage:
     text_body, html_body = _extract_bodies(message)
     received_at = _received_at_from_message(message)
     from_address = _first_address(message, "From") or "unknown@example.test"
@@ -854,7 +892,7 @@ def _received_at_from_message(message: EmailMessage) -> str:
 
 def _message_matches(
     *,
-    message: dict[str, Any],
+    message: EmailReceivedMessage,
     subject_contains: str | None,
     from_address: str | None,
     to_address: str | None,
@@ -929,7 +967,7 @@ def _build_missing_configuration_error(
 def _payload_to_inbox(
     *,
     owner: str,
-    payload: dict[str, Any],
+    payload: Mapping[str, object],
     api_base_url: str,
 ) -> EmailInbox:
     address = payload.get("address")
@@ -949,7 +987,7 @@ def _payload_to_inbox(
     )
 
 
-def _validate_send_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+def _validate_send_receipt(receipt: Mapping[str, object]) -> EmailSendReceipt:
     message_id = receipt.get("message_id")
     from_address = receipt.get("from_address")
     subject = receipt.get("subject")
@@ -967,28 +1005,31 @@ def _validate_send_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Journey cloud returned an invalid email receipt.")
     if any(not isinstance(item, str) or not item for item in to):
         raise RuntimeError("Journey cloud returned an invalid email recipient list.")
+    recipients = list(to)
     return {
         "message_id": message_id,
         "from_address": from_address,
-        "to": to,
+        "to": recipients,
         "subject": subject,
         "transport": transport,
     }
 
 
-def _validate_received_message(payload: dict[str, Any]) -> dict[str, Any]:
+def _validate_received_message(payload: Mapping[str, object]) -> EmailReceivedMessage:
     required_string_fields = ("message_id", "subject", "from_address", "received_at")
     for field in required_string_fields:
         value = payload.get(field)
         if not isinstance(value, str) or not value:
             raise RuntimeError(f"Email payload is missing a valid {field!r}.")
 
+    address_lists: dict[str, list[str]] = {}
     for field in ("to", "cc"):
         values = payload.get(field)
         if not isinstance(values, list) or any(
             not isinstance(item, str) or not item for item in values
         ):
             raise RuntimeError(f"Email payload is missing a valid {field!r} list.")
+        address_lists[field] = list(values)
 
     reply_to = payload.get("reply_to")
     if reply_to is not None and (not isinstance(reply_to, str) or not reply_to):
@@ -1005,17 +1046,22 @@ def _validate_received_message(payload: dict[str, Any]) -> dict[str, Any]:
         for key, value in headers.items()
     ):
         raise RuntimeError("Email payload has invalid headers.")
+    normalized_headers = {
+        key: value
+        for key, value in headers.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
 
     return {
         "message_id": payload["message_id"],
         "subject": payload["subject"],
         "from_address": payload["from_address"],
-        "to": payload["to"],
-        "cc": payload["cc"],
+        "to": address_lists["to"],
+        "cc": address_lists["cc"],
         "reply_to": payload.get("reply_to"),
         "text_body": payload.get("text_body"),
         "html_body": payload.get("html_body"),
-        "headers": headers,
+        "headers": normalized_headers,
         "received_at": payload["received_at"],
     }
 
@@ -1027,7 +1073,7 @@ def _build_send_receipt(
     to: list[str],
     subject: str,
     transport: str,
-) -> dict[str, Any]:
+) -> EmailSendReceipt:
     return {
         "message_id": message_id,
         "from_address": from_address,
@@ -1090,14 +1136,14 @@ def _is_missing_cloud_config_error(exc: RuntimeError) -> bool:
 
 
 def _set_step_metadata(
-    fn: Callable[..., Any],
+    fn: object,
     *,
     label: str,
     owner: str,
-    attrs: dict[str, Any],
+    attrs: Mapping[str, object],
 ) -> None:
-    fn.__name__ = label
-    fn.__qualname__ = f"{owner}.<locals>.{label}"
+    setattr(fn, "__name__", label)
+    setattr(fn, "__qualname__", f"{owner}.<locals>.{label}")
     for key, value in attrs.items():
         setattr(fn, key, value)
 
@@ -1237,8 +1283,14 @@ def _first_address(message: EmailMessage, header: str) -> str | None:
 
 
 __all__ = [
+    "EmailReceivedMessage",
     "EmailInbox",
+    "EmailSendReceipt",
     "EmailServerConfig",
+    "EmailTransport",
+    "GetEmailInboxStep",
+    "SendEmailStep",
+    "WaitForEmailStep",
     "get_email_inbox",
     "send_email",
     "wait_for_email",

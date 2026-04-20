@@ -20,6 +20,9 @@ journey = "journeysdk.cli:main"
 include = ["journeysdk*"]
 exclude = ["tests*", "output*", "journey_cloud*"]
 
+[tool.setuptools.package-data]
+journeysdk = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

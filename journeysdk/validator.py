@@ -17,6 +17,7 @@ from .errors import (
     UnsupportedControlFlowError,
     UnsupportedLoopError,
 )
+from .types import JourneyEntrypoint
 
 
 @dataclass
@@ -368,7 +369,7 @@ class _JourneyValidator(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def validate_journey(journey_fn: Any) -> JourneyValidation:
+def validate_journey(journey_fn: JourneyEntrypoint) -> JourneyValidation:
     """Validate the journey source against v1 authoring constraints."""
 
     try:

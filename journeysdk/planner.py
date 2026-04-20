@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from types import FrameType
-from typing import Any, ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar
 
 from .errors import (
     InvalidBranchUsageError,
@@ -19,6 +18,7 @@ from .models import (
     CheckpointNode,
     CheckpointRef,
     JourneyPlan,
+    PlanNode,
     PlannedValue,
     StepNode,
     StepRetryDelay,
@@ -27,6 +27,7 @@ from .models import (
     _duration_to_seconds,
 )
 from .session import use_session
+from .types import JourneyEntrypoint, StepFunction
 from .utils import callable_ref, callable_source_fingerprint
 from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
 
@@ -53,7 +54,7 @@ class _PlanSession:
     def __init__(self, branch_env: BranchEnv, *, validation: JourneyValidation) -> None:
         self.branch_env = dict(branch_env)
         self.validation = validation
-        self.nodes: list[Any] = []
+        self.nodes: list[PlanNode] = []
         self._node_counter = 0
         self._group_counter = 0
         self._checkpoint_counter = 0
@@ -76,7 +77,7 @@ class _PlanSession:
 
     def step(
         self,
-        fn: Callable[P, R],
+        fn: StepFunction[P, R],
         *args: P.args,
         retry: int = 0,
         retry_delay: StepRetryDelay = 5,
@@ -252,7 +253,7 @@ def _resolve_step_retry(
     )
 
 
-def compile_journey(journey_fn: Callable[..., Any]) -> JourneyPlan:
+def compile_journey(journey_fn: JourneyEntrypoint) -> JourneyPlan:
     """Compile one journey function into linear case plans."""
 
     if not callable(journey_fn):

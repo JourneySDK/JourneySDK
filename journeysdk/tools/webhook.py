@@ -5,12 +5,18 @@ from __future__ import annotations
 import json
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Protocol, cast
 
 from journeysdk.session import get_session
-from ._webhook_shared import build_step_label, normalize_path as normalize_cloud_path
+from ._webhook_shared import (
+    WebhookHeaders,
+    WebhookQuery,
+    WebhookRequestPayload,
+    build_step_label,
+    normalize_path as normalize_cloud_path,
+)
 
 from ._webhook_cloud import create_webhook_endpoint, fetch_next_request
 from ._webhook_local import (
@@ -31,7 +37,26 @@ class CloudWebhookEndpoint:
     api_base_url: str
 
 
-def _guard_duplicate_registration(*, session: Any, port: int, path: str) -> None:
+class LocalWebhookStep(Protocol):
+    url: str
+    path: str
+    port: int
+
+    def __call__(self) -> WebhookRequestPayload:
+        ...
+
+
+class CloudWebhookEndpointStep(Protocol):
+    def __call__(self) -> CloudWebhookEndpoint:
+        ...
+
+
+class CloudWebhookRequestStep(Protocol):
+    def __call__(self, endpoint: CloudWebhookEndpoint) -> WebhookRequestPayload:
+        ...
+
+
+def _guard_duplicate_registration(*, session: object, port: int, path: str) -> None:
     epoch = getattr(session, "_journey_webhook_epoch", 0)
     seen_by_epoch = getattr(session, "_journey_webhook_seen_by_epoch", None)
     if seen_by_epoch is None:
@@ -70,14 +95,14 @@ def _validate_positive_number(*, owner: str, field: str, value: object) -> float
 
 
 def _set_step_metadata(
-    fn: Callable[..., Any],
+    fn: object,
     *,
     label: str,
     owner: str,
-    attrs: dict[str, Any],
+    attrs: Mapping[str, object],
 ) -> None:
-    fn.__name__ = label
-    fn.__qualname__ = f"{owner}.<locals>.{label}"
+    setattr(fn, "__name__", label)
+    setattr(fn, "__qualname__", f"{owner}.<locals>.{label}")
     for key, value in attrs.items():
         setattr(fn, key, value)
 
@@ -88,7 +113,7 @@ def host_webhook_endpoint(
     path: str,
     timeout: float = 1.0,
     poll_interval: float = 0.1,
-) -> Callable[[], dict[str, Any]]:
+) -> LocalWebhookStep:
     """Host a local webhook endpoint and return a step callable that polls it."""
 
     if isinstance(port, bool) or not isinstance(port, int):
@@ -121,13 +146,16 @@ def host_webhook_endpoint(
     if getattr(session, "mode", None) == "run":
         ensure_local_host(port=port, path=normalized_path)
 
-    def receive_webhook() -> dict[str, Any]:
+    def receive_webhook() -> WebhookRequestPayload:
         deadline = time.monotonic() + timeout_seconds
         while True:
             with urllib.request.urlopen(poll_url, timeout=max(timeout_seconds, 0.1)) as response:
                 if response.status == 200:
                     payload = response.read()
-                    return json.loads(payload.decode("utf-8"))
+                    return cast(
+                        WebhookRequestPayload,
+                        json.loads(payload.decode("utf-8")),
+                    )
                 if response.status != 204:
                     raise RuntimeError(
                         f"Unexpected webhook poll response {response.status} for {public_url}."
@@ -149,10 +177,10 @@ def host_webhook_endpoint(
             "port": port,
         },
     )
-    return receive_webhook
+    return cast(LocalWebhookStep, receive_webhook)
 
 
-def get_webhook_endpoint(*, path: str) -> Callable[[], CloudWebhookEndpoint]:
+def get_webhook_endpoint(*, path: str) -> CloudWebhookEndpointStep:
     """Acquire one cloud-hosted webhook endpoint and return it as a step value."""
 
     normalized_path = normalize_cloud_path(path, owner="get_webhook_endpoint")
@@ -192,7 +220,7 @@ def wait_for_webhook_request(
     path: str,
     timeout: float = 1.0,
     poll_interval: float = 0.1,
-) -> Callable[[CloudWebhookEndpoint], dict[str, Any]]:
+) -> CloudWebhookRequestStep:
     """Poll one cloud-hosted webhook endpoint for the next received request."""
 
     timeout_seconds = _validate_nonnegative_number(
@@ -208,7 +236,7 @@ def wait_for_webhook_request(
     normalized_path = normalize_cloud_path(path, owner="wait_for_webhook_request")
     label = build_step_label(prefix="receive_webhook_", path=normalized_path)
 
-    def receive_webhook(endpoint: CloudWebhookEndpoint) -> dict[str, Any]:
+    def receive_webhook(endpoint: CloudWebhookEndpoint) -> WebhookRequestPayload:
         if not isinstance(endpoint, CloudWebhookEndpoint):
             raise TypeError(
                 "wait_for_webhook_request(...) expects a CloudWebhookEndpoint step result."
@@ -248,7 +276,13 @@ def wait_for_webhook_request(
 
 
 __all__ = [
+    "CloudWebhookEndpointStep",
+    "CloudWebhookRequestStep",
     "CloudWebhookEndpoint",
+    "LocalWebhookStep",
+    "WebhookHeaders",
+    "WebhookQuery",
+    "WebhookRequestPayload",
     "get_webhook_endpoint",
     "host_webhook_endpoint",
     "wait_for_webhook_request",

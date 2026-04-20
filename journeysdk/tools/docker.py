@@ -9,10 +9,10 @@ import shutil
 import subprocess
 import tempfile
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
@@ -94,6 +94,11 @@ class DockerComposeStack:
         return stack
 
 
+class RunDockerStep(Protocol):
+    def __call__(self) -> DockerComposeStack:
+        ...
+
+
 @dataclass(frozen=True)
 class _LiveContainer:
     status: DockerContainerStatus
@@ -106,7 +111,7 @@ def run_docker(
     compose_file: str | os.PathLike[str] | None = None,
     project_name: str | None = None,
     wait_timeout: int | None = None,
-) -> Callable[[], DockerComposeStack]:
+) -> RunDockerStep:
     """Return a step callable that starts one local Docker Compose app."""
 
     normalized_compose_file = _normalize_optional_pathlike(
@@ -1257,14 +1262,14 @@ def _local_cp_source_path(local_path: Path) -> str:
 
 
 def _set_step_metadata(
-    fn: Callable[..., Any],
+    fn: object,
     *,
     label: str,
     owner: str,
-    attrs: dict[str, Any],
+    attrs: Mapping[str, object],
 ) -> None:
-    fn.__name__ = label
-    fn.__qualname__ = f"{owner}.<locals>.{label}"
+    setattr(fn, "__name__", label)
+    setattr(fn, "__qualname__", f"{owner}.<locals>.{label}")
     for key, value in attrs.items():
         setattr(fn, key, value)
 
@@ -1277,6 +1282,7 @@ def _slugify(value: str) -> str:
 __all__ = [
     "DockerComposeStack",
     "DockerContainerStatus",
+    "RunDockerStep",
     "restore_docker",
     "run_docker",
     "store_docker",

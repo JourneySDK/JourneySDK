@@ -4,9 +4,33 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any
+from typing import Protocol, TypeAlias, TypedDict, cast
 from urllib.parse import parse_qs
+
+from journeysdk.types import JsonValue
+
+
+class _HeaderCollection(Protocol):
+    def items(self) -> Iterable[tuple[object, object]]:
+        ...
+
+
+WebhookQuery: TypeAlias = dict[str, list[str]]
+WebhookHeaders: TypeAlias = dict[str, str]
+
+
+class WebhookRequestPayload(TypedDict):
+    method: str
+    url: str
+    path: str
+    query: WebhookQuery
+    headers: WebhookHeaders
+    body_text: str | None
+    body_json: JsonValue
+    body_base64: str
+    received_at: str
 
 
 def normalize_path(path: str, *, owner: str) -> str:
@@ -34,7 +58,7 @@ def build_step_label(*, prefix: str, path: str) -> str:
     return f"{prefix}{sanitize_label_fragment(path)}"
 
 
-def _lower_headers(raw_headers: Any) -> dict[str, str]:
+def _lower_headers(raw_headers: _HeaderCollection) -> WebhookHeaders:
     return {
         str(name).lower(): str(value)
         for name, value in raw_headers.items()
@@ -48,12 +72,12 @@ def _body_text(raw_body: bytes) -> str | None:
         return None
 
 
-def _body_json(*, headers: dict[str, str], text: str | None) -> Any:
+def _body_json(*, headers: WebhookHeaders, text: str | None) -> JsonValue:
     content_type = headers.get("content-type", "")
     if "application/json" not in content_type or text is None:
         return None
     try:
-        return json.loads(text)
+        return cast(JsonValue, json.loads(text))
     except json.JSONDecodeError:
         return None
 
@@ -64,10 +88,10 @@ def build_request_payload(
     url: str,
     path: str,
     query_string: str,
-    headers: Any,
+    headers: _HeaderCollection,
     raw_body: bytes,
     received_at: datetime | None = None,
-) -> dict[str, Any]:
+) -> WebhookRequestPayload:
     """Build the normalized webhook request payload returned by webhook helpers."""
 
     lowered_headers = _lower_headers(headers)

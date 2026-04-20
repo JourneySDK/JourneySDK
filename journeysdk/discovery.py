@@ -9,10 +9,9 @@ import importlib.util
 import linecache
 import os
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from types import ModuleType
 
 from .api import is_journey_callable
 from .errors import (
@@ -20,6 +19,7 @@ from .errors import (
     JourneyDiscoveryError,
     JourneySelectionError,
 )
+from .types import JourneyEntrypoint
 
 _SKIP_DIR_NAMES = {
     "__pycache__",
@@ -36,7 +36,7 @@ _SUPPORTED_IMPORT_MODULES = {"journey", "journeysdk"}
 class DiscoveredJourney:
     file_path: Path
     journey_name: str
-    function: Callable[..., Any]
+    function: JourneyEntrypoint
 
 
 def discover_journeys(
@@ -198,7 +198,7 @@ def _has_journey_decorator(
     return False
 
 
-def _load_file_module(path: Path) -> Any:
+def _load_file_module(path: Path) -> ModuleType:
     importlib.invalidate_caches()
     digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:12]
     module_name = f"_journey_file_{path.stem}_{digest}"

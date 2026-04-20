@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import builtins
-import importlib
 import json
-import sys
-import types
 
 import journeysdk as journey_sdk
 import pytest
+
+pytest.importorskip("playwright.sync_api")
 
 from journeysdk.tools import playwright as journey_playwright
 
@@ -135,12 +133,7 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
             events.append("playwright_exit")
             return False
 
-    fake_package = types.ModuleType("playwright")
-    fake_sync_api = types.ModuleType("playwright.sync_api")
-    fake_sync_api.sync_playwright = lambda: FakeManager()
-
-    monkeypatch.setitem(sys.modules, "playwright", fake_package)
-    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(journey_playwright, "sync_playwright", lambda: FakeManager())
 
     state = journey_playwright.PlaywrightPageState.from_json(
         json.dumps(
@@ -189,20 +182,8 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
     ]
 
 
-def test_playwright_tool_import_is_lazy(monkeypatch):
-    module = importlib.import_module("journeysdk.tools.playwright")
-    original_import = builtins.__import__
-
-    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "playwright" or name.startswith("playwright."):
-            raise AssertionError("Importing the tool should not import Playwright.")
-        return original_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", guarded_import)
-
-    reloaded = importlib.reload(module)
-    state = reloaded.PlaywrightPageState.from_url("http://example.test/login")
-
+def test_playwright_tool_builds_empty_state_from_url():
+    state = journey_playwright.PlaywrightPageState.from_url("http://example.test/login")
     assert state.url == "http://example.test/login"
     assert state.cookies == ()
     assert state.local_storage == {}

@@ -53,6 +53,13 @@ That script:
 - installs the built wheel as a temporary `uv` tool and verifies `journey --help`
 - runs a one-off `uv tool run --from <wheel> journey --help`
 
+## Public Typing
+
+Public SDK and official tool APIs should avoid `Any`. Prefer named aliases or protocols for
+callable roles, `TypedDict` for dictionary payloads, and `object` when callers must narrow an
+unknown value themselves. The public typing contract is covered by
+`tests/test_public_typing_contract.py`.
+
 ## Manual Release Flow
 
 1. Update the package version in `pyproject.toml`.

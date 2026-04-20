@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from datetime import timedelta
 from dataclasses import dataclass
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 StepRetryDelay: TypeAlias = int | float | timedelta
+StepArgument: TypeAlias = object
+StepArguments: TypeAlias = tuple[StepArgument, ...]
+StepKeywordArguments: TypeAlias = dict[str, StepArgument]
+StepResult: TypeAlias = object
 
 
 @dataclass(frozen=True)
@@ -31,7 +35,7 @@ class PlannedValue:
         )
 
 
-def _duration_to_seconds(value: Any, *, field_name: str) -> float:
+def _duration_to_seconds(value: object, *, field_name: str) -> float:
     if isinstance(value, timedelta):
         seconds = value.total_seconds()
     elif isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -67,8 +71,8 @@ class StepNode:
     node_id: str
     label: str | None
     fn_ref: str
-    args: tuple[Any, ...]
-    kwargs: dict[str, Any]
+    args: StepArguments
+    kwargs: StepKeywordArguments
     retry: StepRetry | None = None
     source_fingerprint: str | None = None
 
@@ -114,7 +118,7 @@ class NodeExecutionRecord:
     node_type: str
     label: str | None
     ok: bool
-    result: Any = None
+    result: StepResult = None
     error: str | None = None
 
 
