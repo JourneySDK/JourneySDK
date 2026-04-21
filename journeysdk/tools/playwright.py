@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from types import TracebackType
 from typing import Literal, TypedDict, cast
 
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
-from journeysdk.session import register_step_exit_callback
+from journeysdk.session import _register_step_exit_object
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
 
@@ -185,6 +186,10 @@ class JourneyPlaywrightPage(PlaywrightPage):
             super().__init__(impl_obj)
             self._journey_step_closed = False
         self._journey_snapshot_json = snapshot_json
+        self._journey_context = None
+        self._journey_browser = None
+        self._journey_manager = None
+        self._journey_exit_started = False
 
     @classmethod
     def _from_live_page(
@@ -202,6 +207,33 @@ class JourneyPlaywrightPage(PlaywrightPage):
         if impl_obj is None:
             raise TypeError("open_page(...) expected Playwright to return a sync Page.")
         return cls(impl_obj, snapshot_json=fallback_snapshot_json)
+
+    def _attach_live_page(
+        self,
+        page: PlaywrightPage,
+        *,
+        fallback_snapshot_json: str,
+    ) -> None:
+        impl_obj = getattr(page, "_impl_obj", None)
+        if impl_obj is None:
+            raise TypeError("open_page(...) expected Playwright to return a sync Page.")
+        PlaywrightPage.__init__(self, impl_obj)
+        self._journey_snapshot_json = fallback_snapshot_json
+        self._journey_step_closed = False
+
+    def _set_step_resources(
+        self,
+        *,
+        manager: object | None = None,
+        browser: object | None = None,
+        context: object | None = None,
+    ) -> None:
+        if manager is not None:
+            self._journey_manager = manager
+        if browser is not None:
+            self._journey_browser = browser
+        if context is not None:
+            self._journey_context = context
 
     @classmethod
     def _from_snapshot_json(cls, snapshot_json: str) -> JourneyPlaywrightPage:
@@ -237,6 +269,48 @@ class JourneyPlaywrightPage(PlaywrightPage):
 
     def _mark_step_closed(self) -> None:
         self._journey_step_closed = True
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close Playwright resources owned by this step-scoped page."""
+
+        if self._journey_exit_started:
+            return
+        self._journey_exit_started = True
+        failures: list[BaseException] = []
+
+        if self._is_live:
+            try:
+                self._snapshot_for_storage()
+            except BaseException as snapshot_exc:  # pragma: no cover - surfaced through executor
+                failures.append(snapshot_exc)
+            finally:
+                self._mark_step_closed()
+
+        for resource in (
+            self._journey_context,
+            self._journey_browser,
+        ):
+            close = getattr(resource, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except BaseException as close_exc:  # pragma: no cover - environment dependent
+                    failures.append(close_exc)
+
+        manager_exit = getattr(self._journey_manager, "__exit__", None)
+        if callable(manager_exit):
+            try:
+                manager_exit(exc_type, exc, traceback)
+            except BaseException as manager_exc:  # pragma: no cover - environment dependent
+                failures.append(manager_exc)
+
+        if failures:
+            raise RuntimeError(_cleanup_failure_message(failures))
 
     def __store__(self, context: JourneyStoreContext) -> object:
         """Store the current page state for Journey replay."""
@@ -274,62 +348,26 @@ def open_page(
     state_url = _snapshot_url(state_snapshot_json)
     state_cookies = _snapshot_cookies(state_snapshot_json)
     state_local_storage = _snapshot_local_storage(state_snapshot_json)
-    manager = None
-    launched_browser = None
-    context = None
-    page: JourneyPlaywrightPage | None = None
-    cleanup_started = False
-
-    def cleanup() -> None:
-        nonlocal cleanup_started
-        if cleanup_started:
-            return
-        cleanup_started = True
-        failures: list[Exception] = []
-
-        if page is not None:
-            try:
-                page._snapshot_for_storage()
-            except Exception as exc:  # pragma: no cover - surfaced through executor
-                failures.append(exc)
-            finally:
-                page._mark_step_closed()
-
-        if context is not None:
-            try:
-                context.close()
-            except Exception as exc:  # pragma: no cover - environment dependent
-                failures.append(exc)
-        if launched_browser is not None:
-            try:
-                launched_browser.close()
-            except Exception as exc:  # pragma: no cover - environment dependent
-                failures.append(exc)
-        if manager is not None:
-            try:
-                manager.__exit__(None, None, None)
-            except Exception as exc:  # pragma: no cover - environment dependent
-                failures.append(exc)
-
-        if failures:
-            raise RuntimeError(_cleanup_failure_message(failures))
-
-    register_step_exit_callback(cleanup)
+    page = JourneyPlaywrightPage._from_snapshot_json(state_snapshot_json)
+    _register_step_exit_object(page)
 
     try:
         manager = sync_playwright()
+        page._set_step_resources(manager=manager)
         playwright = manager.__enter__()
         browser_type = getattr(playwright, browser, None)
         if browser_type is None:
             raise ValueError(
                 "open_page(..., browser=...) expects 'chromium', 'firefox', or 'webkit'."
-        )
+            )
         launched_browser = browser_type.launch(headless=headless)
+        page._set_step_resources(browser=launched_browser)
         context = launched_browser.new_context()
+        page._set_step_resources(context=context)
         if state_cookies:
             context.add_cookies(list(state_cookies))
         native_page = context.new_page()
-        page = JourneyPlaywrightPage._from_live_page(
+        page._attach_live_page(
             cast(PlaywrightPage, native_page),
             fallback_snapshot_json=state_snapshot_json,
         )
@@ -337,10 +375,10 @@ def open_page(
         page.evaluate(_REHYDRATE_STORAGE_SCRIPT, state_local_storage)
         page.reload(wait_until="load")
         return page
-    except Exception as exc:
+    except BaseException as exc:
         try:
-            cleanup()
-        except Exception as cleanup_exc:
+            page.__exit__(type(exc), exc, exc.__traceback__)
+        except BaseException as cleanup_exc:
             add_note = getattr(exc, "add_note", None)
             if callable(add_note):
                 add_note(str(cleanup_exc))
@@ -359,7 +397,7 @@ def _normalize_open_page_input(
     raise TypeError("open_page(...) expects a URL string or JourneyPlaywrightPage.")
 
 
-def _cleanup_failure_message(failures: list[Exception]) -> str:
+def _cleanup_failure_message(failures: list[BaseException]) -> str:
     if len(failures) == 1:
         failure = failures[0]
         return (

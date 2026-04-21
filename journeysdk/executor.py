@@ -5,11 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
-from types import FrameType
-from typing import Any, NoReturn, ParamSpec, TypeVar, cast
+from types import FrameType, TracebackType
+from typing import Any, NoReturn, ParamSpec, Protocol, TypeVar, cast
 
 from .errors import (
     AmbiguousStepSelectionError,
@@ -76,6 +75,16 @@ class _RetryRequested(Exception):
 @dataclass
 class _PauseRequested(Exception):
     paused_step: PausedStepState
+
+
+class _StepExitObject(Protocol):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> object:
+        ...
 
 
 @dataclass(frozen=True)
@@ -313,7 +322,7 @@ def _cleanup_failure_message(failures: list[BaseException]) -> str:
         f"{type(failure).__name__}: {failure}"
         for failure in failures
     )
-    return f"{len(failures)} step-exit cleanup callbacks failed: {joined}"
+    return f"{len(failures)} step-exit cleanup objects failed: {joined}"
 
 
 def _add_cleanup_failure_notes(exc: BaseException, failures: list[BaseException]) -> None:
@@ -864,7 +873,7 @@ class _RunSession:
         self._pending_checkpoint_restore_name = checkpoint_restore_name
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
-        self._active_step_exit_callbacks: list[Callable[[], None]] | None = None
+        self._active_step_exit_objects: list[_StepExitObject] | None = None
         (
             self._step_key_by_id,
             self._checkpoint_key_by_name,
@@ -1600,10 +1609,10 @@ class _RunSession:
             )
         return self._state_controller
 
-    def register_step_exit_callback(self, callback: Callable[[], None]) -> None:
-        """Register one callback for the currently executing step attempt."""
+    def _register_step_exit_object(self, value: object) -> None:
+        """Register one lifecycle object for the current step attempt."""
 
-        if self._active_step_exit_callbacks is None:
+        if self._active_step_exit_objects is None:
             raise InvalidBranchUsageError(
                 "Step-exit cleanup can only be registered while a journey step is running.",
                 hint=(
@@ -1611,28 +1620,39 @@ class _RunSession:
                     "step(...), not during planning, module import, or between steps."
                 ),
             )
-        self._active_step_exit_callbacks.append(callback)
+        exit_method = getattr(value, "__exit__", None)
+        if not callable(exit_method):
+            raise TypeError(
+                "Step-exit lifecycle objects must define a callable "
+                "__exit__(exc_type, exc, traceback) method."
+            )
+        self._active_step_exit_objects.append(cast(_StepExitObject, value))
 
     def _start_step_exit_lifecycle(self) -> None:
-        if self._active_step_exit_callbacks is not None:
+        if self._active_step_exit_objects is not None:
             raise InvalidBranchUsageError(
                 "A journey step started while another step was already running.",
                 hint="Do not call step(...) from inside another step function.",
             )
-        self._active_step_exit_callbacks = []
+        self._active_step_exit_objects = []
 
-    def _finish_step_exit_lifecycle(self) -> list[BaseException]:
-        callbacks = self._active_step_exit_callbacks
-        self._active_step_exit_callbacks = None
-        if callbacks is None:
+    def _finish_step_exit_lifecycle(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> list[BaseException]:
+        objects = self._active_step_exit_objects
+        self._active_step_exit_objects = None
+        if objects is None:
             return []
 
         failures: list[BaseException] = []
-        for callback in reversed(callbacks):
+        for value in reversed(objects):
             try:
-                callback()
-            except BaseException as exc:  # pragma: no cover - exercised through callers
-                failures.append(exc)
+                value.__exit__(exc_type, exc, traceback)
+            except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
+                failures.append(cleanup_exc)
         return failures
 
     def step(
@@ -1712,7 +1732,11 @@ class _RunSession:
         try:
             output = fn(*bound_args, **bound_kwargs)
         except KeyboardInterrupt as exc:
-            cleanup_failures = self._finish_step_exit_lifecycle()
+            cleanup_failures = self._finish_step_exit_lifecycle(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
             _add_cleanup_failure_notes(exc, cleanup_failures)
             self._observer.on_step_interrupted(
                 case_plan=self.case_plan,
@@ -1724,7 +1748,11 @@ class _RunSession:
             )
             raise
         except Exception as exc:  # pragma: no cover - surfaced to caller
-            cleanup_failures = self._finish_step_exit_lifecycle()
+            cleanup_failures = self._finish_step_exit_lifecycle(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
             _add_cleanup_failure_notes(exc, cleanup_failures)
             self._handle_step_exception(
                 node,
@@ -1737,7 +1765,11 @@ class _RunSession:
         try:
             binding = self._set_step_result(node, output)
         except Exception as exc:
-            cleanup_failures = self._finish_step_exit_lifecycle()
+            cleanup_failures = self._finish_step_exit_lifecycle(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
             _add_cleanup_failure_notes(exc, cleanup_failures)
             raise
 

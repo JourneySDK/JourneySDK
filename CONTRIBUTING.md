@@ -60,44 +60,12 @@ callable roles, `TypedDict` for dictionary payloads, and `object` when callers m
 unknown value themselves. The public typing contract is covered by
 `tests/test_public_typing_contract.py`.
 
-## Step-Exit Tool Lifecycle
+## Tool Lifecycle Protocols
 
-Official tools that open live resources inside a step should register cleanup
-with `journeysdk.session.register_step_exit_callback`. This hook is only valid
-while a step function is executing. Do not call lifecycle-aware tools during
-planning, module import, or between `step(...)` calls.
-
-Use this pattern when a tool owns a resource that should not outlive the step
-attempt:
-
-```python
-from journeysdk.session import register_step_exit_callback
-
-
-def open_resource():
-    resource = acquire_resource()
-    closed = False
-
-    def cleanup():
-        nonlocal closed
-        if closed:
-            return
-        closed = True
-        resource.close()
-
-    register_step_exit_callback(cleanup)
-    return resource
-```
-
-Callbacks run in LIFO order when the step exits on success, failure, retry,
-develop-step pause, or interruption. Keep callbacks idempotent, and close only
-resources owned by that tool call. If a step returns a value that must survive
-retries, `--state`, or checkpoint replay, the returned value must implement the
-Journey rehydration protocol documented in the README; do not rely on pickling
-live resources.
-
-Tests for lifecycle-aware tools should cover successful cleanup, cleanup after
-failure, cleanup on retry or interruption, the outside-step guard, and
+Official tools that open live resources should follow the Journey rehydration
+and step-exit lifecycle protocols documented in the README. Lifecycle-aware
+tool tests should cover successful cleanup, cleanup after failure, cleanup on
+retry or interruption, the outside-step guard, invalid lifecycle values, and
 rehydration of returned values.
 
 ## Manual Release Flow

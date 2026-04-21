@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import pickle
+from types import TracebackType
 
 import journeysdk.errors as journey_errors
 import journeysdk.executor as journey_executor
@@ -21,7 +22,7 @@ from journeysdk.errors import (
     UnsupportedLoopError,
 )
 from journeysdk.models import BranchMarkerNode, CheckpointNode, StepNode, StepRetry
-from journeysdk.session import register_step_exit_callback
+from journeysdk.session import _register_step_exit_object
 from journeysdk.state import ExecutionStateEnvelope, SelectedCaseState
 
 
@@ -92,6 +93,32 @@ class _ReplayValue:
             f"restore_{seed}_{mode}_{context.boundary_kind}_{context.checkpoint_name or context.boundary_id}"
         )
         return cls(seed, mode=mode)
+
+
+class _StepExitValue:
+    def __init__(
+        self,
+        events: list[str],
+        name: str,
+        *,
+        fail_message: str | None = None,
+    ) -> None:
+        self._events = events
+        self._name = name
+        self._fail_message = fail_message
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        del exc, traceback
+        suffix = exc_type.__name__ if exc_type is not None else "None"
+        self._events.append(f"{self._name}:{suffix}")
+        if self._fail_message is not None:
+            raise RuntimeError(self._fail_message)
+        return True
 
 
 class _RecordingObserver(journey_executor._ExecutionObserver):
@@ -1099,13 +1126,13 @@ def test_execute_step_supports_retryable_target_steps():
     assert _record_labels(report.case_reports[0]) == ["prepare", "publish"]
 
 
-def test_execute_step_exit_callbacks_run_before_next_step_and_lifo():
+def test_execute_step_exit_objects_run_before_next_step_and_lifo():
     events: list[str] = []
 
     def allocate():
         events.append("allocate")
-        register_step_exit_callback(lambda: events.append("cleanup_first"))
-        register_step_exit_callback(lambda: events.append("cleanup_second"))
+        _register_step_exit_object(_StepExitValue(events, "cleanup_first"))
+        _register_step_exit_object(_StepExitValue(events, "cleanup_second"))
         return "resource"
 
     def use_resource(resource):
@@ -1120,13 +1147,13 @@ def test_execute_step_exit_callbacks_run_before_next_step_and_lifo():
 
     assert events == [
         "allocate",
-        "cleanup_second",
-        "cleanup_first",
+        "cleanup_second:None",
+        "cleanup_first:None",
         "use_resource",
     ]
 
 
-def test_execute_step_exit_callbacks_run_on_failure_retry_and_interrupt(tmp_path):
+def test_execute_step_exit_objects_run_on_failure_retry_and_interrupt(tmp_path):
     events: list[str] = []
     attempts = {"flaky": 0}
 
@@ -1134,14 +1161,14 @@ def test_execute_step_exit_callbacks_run_on_failure_retry_and_interrupt(tmp_path
         attempts["flaky"] += 1
         attempt = attempts["flaky"]
         events.append(f"flaky_{attempt}")
-        register_step_exit_callback(lambda: events.append(f"cleanup_{attempt}"))
+        _register_step_exit_object(_StepExitValue(events, f"cleanup_{attempt}"))
         if attempt == 1:
             raise RuntimeError("pending")
         return True
 
     def interrupted():
         events.append("interrupted")
-        register_step_exit_callback(lambda: events.append("cleanup_interrupted"))
+        _register_step_exit_object(_StepExitValue(events, "cleanup_interrupted"))
         raise KeyboardInterrupt()
 
     def journey():
@@ -1153,21 +1180,21 @@ def test_execute_step_exit_callbacks_run_on_failure_retry_and_interrupt(tmp_path
 
     assert events == [
         "flaky_1",
-        "cleanup_1",
+        "cleanup_1:RuntimeError",
         "flaky_2",
-        "cleanup_2",
+        "cleanup_2:None",
         "interrupted",
-        "cleanup_interrupted",
+        "cleanup_interrupted:KeyboardInterrupt",
     ]
 
 
-def test_execute_step_exit_callbacks_run_before_develop_step_pause(tmp_path):
+def test_execute_step_exit_objects_run_before_develop_step_pause(tmp_path):
     events: list[str] = []
     state_file = tmp_path / "pause.state"
 
     def publish():
         events.append("publish")
-        register_step_exit_callback(lambda: events.append("cleanup"))
+        _register_step_exit_object(_StepExitValue(events, "cleanup"))
         return True
 
     def journey():
@@ -1183,26 +1210,40 @@ def test_execute_step_exit_callbacks_run_before_develop_step_pause(tmp_path):
     )
 
     assert isinstance(paused, journey_executor._PausedExecution)
-    assert events == ["publish", "cleanup"]
+    assert events == ["publish", "cleanup:None"]
 
 
-def test_register_step_exit_callback_rejects_outside_executing_step():
+def test_step_exit_object_registration_rejects_outside_executing_step():
     with pytest.raises(InvalidBranchUsageError):
-        register_step_exit_callback(lambda: None)
+        _register_step_exit_object(_StepExitValue([], "cleanup"))
 
     def journey():
-        register_step_exit_callback(lambda: None)
+        _register_step_exit_object(_StepExitValue([], "cleanup"))
 
     with pytest.raises(InvalidBranchUsageError):
         journey_sdk.compile_journey(journey)
 
 
+def test_step_exit_object_registration_rejects_values_without_exit():
+    def publish():
+        _register_step_exit_object(object())
+
+    def journey():
+        journey_sdk.step(publish)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    assert "must define a callable __exit__" in str(exc_info.value)
+
+
 def test_execute_step_exit_cleanup_failure_fails_successful_step():
-    def close_badly():
-        raise RuntimeError("close failed")
+    events: list[str] = []
 
     def publish():
-        register_step_exit_callback(close_badly)
+        _register_step_exit_object(
+            _StepExitValue(events, "cleanup", fail_message="close failed")
+        )
         return True
 
     def journey():
@@ -1213,14 +1254,16 @@ def test_execute_step_exit_cleanup_failure_fails_successful_step():
 
     assert "Step-exit cleanup failed" in str(exc_info.value)
     assert "close failed" in str(exc_info.value)
+    assert events == ["cleanup:None"]
 
 
 def test_execute_step_exit_cleanup_failure_attaches_to_step_failure():
-    def close_badly():
-        raise RuntimeError("close failed")
+    events: list[str] = []
 
     def publish():
-        register_step_exit_callback(close_badly)
+        _register_step_exit_object(
+            _StepExitValue(events, "cleanup", fail_message="close failed")
+        )
         raise RuntimeError("publish failed")
 
     def journey():
@@ -1232,6 +1275,7 @@ def test_execute_step_exit_cleanup_failure_attaches_to_step_failure():
     assert "publish failed" in str(exc_info.value)
     assert "Step-exit cleanup failed" in str(exc_info.value)
     assert "close failed" in str(exc_info.value)
+    assert events == ["cleanup:RuntimeError"]
 
 
 def test_execute_develop_step_continues_to_later_steps_without_rerunning_prior_steps(

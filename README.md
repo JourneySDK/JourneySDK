@@ -157,6 +157,54 @@ next step instead of trying to pickle the live resource itself. Official tools
 follow this pattern: `JourneyPlaywrightPage` stores browser state, and later
 steps reopen it with `open_page(saved_page)`.
 
+## Step-Exit Tool Lifecycle
+
+Official tools that open live resources inside a step should return or manage
+an object with the standard context-manager `__exit__(exc_type, exc,
+traceback)` method, then register that object with Journey's internal
+step-exit lifecycle. This lifecycle is only active while a step function is
+executing. Do not call lifecycle-aware tools during planning, module import, or
+between `step(...)` calls.
+
+Use this pattern when a tool owns a resource that should not outlive the step
+attempt:
+
+```python
+from journeysdk.session import _register_step_exit_object
+
+
+class ResourceHandle:
+    def __init__(self):
+        self._resource = acquire_resource()
+        self._closed = False
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self._closed:
+            return
+        self._closed = True
+        self._resource.close()
+
+
+def open_resource():
+    handle = ResourceHandle()
+    _register_step_exit_object(handle)
+    return handle
+```
+
+Journey calls registered `__exit__` methods in LIFO order when the step exits
+on success, failure, retry, develop-step pause, or interruption. On success,
+`__exit__` receives `(None, None, None)`. On failure or interruption, it
+receives the original exception details. Journey ignores the return value, so
+`__exit__` cannot suppress a step failure.
+
+Keep lifecycle methods idempotent, and close only resources owned by that tool
+call. If the step returns a value that must survive retries, `--state`, or
+checkpoint replay, that value should also implement the Journey rehydration
+protocol above; do not rely on pickling live resources. `JourneyPlaywrightPage`
+is the canonical example because it implements both protocols: `__exit__`
+closes the live browser objects at step exit, while `__store__` / `__restore__`
+save enough browser state for a later step to reopen the page explicitly.
+
 Official tools are ordinary Python helpers that return step callables or serializable helper values. For example, the
 webhook tool can host a local endpoint before the app under test sends to it:
 

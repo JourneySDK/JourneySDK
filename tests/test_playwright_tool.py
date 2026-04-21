@@ -30,19 +30,35 @@ def _state_json(
     )
 
 
-def _fake_journey_page(
+class _FakeNativePage:
+    def __init__(self, context: object) -> None:
+        self.context = context
+
+
+class _FakePageImpl:
+    def __init__(self, page: journey_playwright.JourneyPlaywrightPage) -> None:
+        self._page = page
+
+    @property
+    def url(self) -> str:
+        return self._page._fake_url
+
+
+def _attach_fake_live_page(
+    page: journey_playwright.JourneyPlaywrightPage,
+    native_page: object,
     *,
-    context: object,
     events: list[object],
+    fallback_snapshot_json: str,
     initial_url: str = "about:blank",
-) -> journey_playwright.JourneyPlaywrightPage:
-    page = journey_playwright.JourneyPlaywrightPage._from_snapshot_json(
-        journey_playwright._snapshot_json_from_url(initial_url)
-    )
+) -> None:
+    context = getattr(native_page, "context")
+    page._journey_snapshot_json = fallback_snapshot_json
     page._journey_step_closed = False
     page._fake_context = context
     page._fake_url = initial_url
     page._fake_local_storage = {}
+    page._impl_obj = _FakePageImpl(page)
 
     def goto(self, url: str, *, wait_until: str) -> None:
         self._fake_url = url
@@ -78,7 +94,6 @@ def _fake_journey_page(
     page.evaluate = MethodType(evaluate, page)
     page.reload = MethodType(reload, page)
     page._snapshot_for_storage = MethodType(snapshot_for_storage, page)
-    return page
 
 
 def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path):
@@ -132,16 +147,29 @@ def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path)
 def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
     events: list[object] = []
 
+    def attach_live_page(
+        self: journey_playwright.JourneyPlaywrightPage,
+        native_page: object,
+        *,
+        fallback_snapshot_json: str,
+    ) -> None:
+        _attach_fake_live_page(
+            self,
+            native_page,
+            events=events,
+            fallback_snapshot_json=fallback_snapshot_json,
+        )
+
     class FakeContext:
         def __init__(self) -> None:
-            self.page = _fake_journey_page(context=self, events=events)
+            self.page = _FakeNativePage(self)
             self._cookies: list[dict[str, object]] = []
 
         def add_cookies(self, cookies: list[dict[str, object]]) -> None:
             self._cookies = list(cookies)
             events.append(("add_cookies", list(cookies)))
 
-        def new_page(self) -> journey_playwright.JourneyPlaywrightPage:
+        def new_page(self) -> _FakeNativePage:
             events.append("new_page")
             return self.page
 
@@ -180,6 +208,11 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
             return False
 
     monkeypatch.setattr(journey_playwright, "sync_playwright", lambda: FakeManager())
+    monkeypatch.setattr(
+        journey_playwright.JourneyPlaywrightPage,
+        "_attach_live_page",
+        attach_live_page,
+    )
 
     saved_page = journey_playwright.JourneyPlaywrightPage._from_snapshot_json(
         _state_json(
@@ -248,15 +281,28 @@ def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monke
     attempts = {"count": 0}
     events: list[object] = []
 
+    def attach_live_page(
+        self: journey_playwright.JourneyPlaywrightPage,
+        native_page: object,
+        *,
+        fallback_snapshot_json: str,
+    ) -> None:
+        _attach_fake_live_page(
+            self,
+            native_page,
+            events=events,
+            fallback_snapshot_json=fallback_snapshot_json,
+        )
+
     class FakeContext:
         def __init__(self) -> None:
-            self.page = _fake_journey_page(context=self, events=events)
+            self.page = _FakeNativePage(self)
             self._cookies: list[dict[str, object]] = []
 
         def add_cookies(self, cookies: list[dict[str, object]]) -> None:
             self._cookies = list(cookies)
 
-        def new_page(self) -> journey_playwright.JourneyPlaywrightPage:
+        def new_page(self) -> _FakeNativePage:
             return self.page
 
         def cookies(self) -> list[dict[str, object]]:
@@ -288,6 +334,11 @@ def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monke
             return False
 
     monkeypatch.setattr(journey_playwright, "sync_playwright", lambda: FakeManager())
+    monkeypatch.setattr(
+        journey_playwright.JourneyPlaywrightPage,
+        "_attach_live_page",
+        attach_live_page,
+    )
 
     def login() -> journey_playwright.JourneyPlaywrightPage:
         page = journey_playwright.open_page("http://example.test/login")
