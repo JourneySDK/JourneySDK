@@ -64,9 +64,9 @@ unknown value themselves. The public typing contract is covered by
 
 Official tools that open live resources should follow the Journey rehydration
 and step-exit lifecycle protocols documented in the README. Lifecycle-aware
-tool tests should cover successful cleanup, cleanup after failure, cleanup on
-retry or interruption, the outside-step guard, invalid lifecycle values, and
-rehydration of returned values.
+tool tests should cover successful cleanup of returned handles, nested returned
+handles, cleanup failure, the outside-step guard for resource helpers, explicit
+cleanup for non-returned live resources, and rehydration of returned values.
 
 ## Manual Release Flow
 

@@ -54,35 +54,38 @@ def continue_authenticated_dashboard(
     """Resume the authenticated dashboard and complete the protected action."""
 
     page = open_page(session)
-    auth_state = page.locator("#auth-state").text_content()
-    if auth_state != "authenticated":
-        raise AssertionError(
-            f"Expected an authenticated dashboard, got {auth_state!r}."
+    try:
+        auth_state = page.locator("#auth-state").text_content()
+        if auth_state != "authenticated":
+            raise AssertionError(
+                f"Expected an authenticated dashboard, got {auth_state!r}."
+            )
+
+        _tutorial_note(
+            "continue_authenticated_dashboard() reopened the saved dashboard at "
+            f"{session.url}. journey resumes at the step boundary, so this step "
+            "restarts from the top on resume with the same saved JourneyPlaywrightPage."
         )
+        _tutorial_note(
+            f"Press Ctrl-C during the next {pause_seconds:.1f} seconds to interrupt "
+            "after the authenticated browser state has already been saved. Then rerun "
+            "the same command with --state to reopen this dashboard from the same "
+            "saved session."
+        )
+        time.sleep(pause_seconds)
 
-    _tutorial_note(
-        "continue_authenticated_dashboard() reopened the saved dashboard at "
-        f"{session.url}. journey resumes at the step boundary, so this step "
-        "restarts from the top on resume with the same saved JourneyPlaywrightPage."
-    )
-    _tutorial_note(
-        f"Press Ctrl-C during the next {pause_seconds:.1f} seconds to interrupt "
-        "after the authenticated browser state has already been saved. Then rerun "
-        "the same command with --state to reopen this dashboard from the same "
-        "saved session."
-    )
-    time.sleep(pause_seconds)
+        page.get_by_role("button", name="Complete protected action").click()
+        page.wait_for_function(
+            "() => document.getElementById('status').textContent === 'Protected action complete'"
+        )
+        status_text = page.locator("#status").text_content()
 
-    page.get_by_role("button", name="Complete protected action").click()
-    page.wait_for_function(
-        "() => document.getElementById('status').textContent === 'Protected action complete'"
-    )
-    status_text = page.locator("#status").text_content()
-
-    return {
-        "auth_state": auth_state,
-        "status": status_text or "",
-    }
+        return {
+            "auth_state": auth_state,
+            "status": status_text or "",
+        }
+    finally:
+        page.__exit__(None, None, None)
 
 
 def assert_protected_action_complete(result: dict[str, str]) -> bool:

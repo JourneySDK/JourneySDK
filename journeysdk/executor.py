@@ -87,6 +87,42 @@ class _StepExitObject(Protocol):
         ...
 
 
+def _step_exit_objects_from_value(value: Any) -> list[_StepExitObject]:
+    objects: list[_StepExitObject] = []
+    seen_objects: set[int] = set()
+    seen_containers: set[int] = set()
+
+    def visit(item: Any) -> None:
+        exit_method = getattr(item, "__exit__", None)
+        if callable(exit_method):
+            identity = id(item)
+            if identity not in seen_objects:
+                seen_objects.add(identity)
+                objects.append(cast(_StepExitObject, item))
+            return
+
+        if type(item) is tuple or type(item) is list:
+            identity = id(item)
+            if identity in seen_containers:
+                return
+            seen_containers.add(identity)
+            for child in item:
+                visit(child)
+            return
+
+        if type(item) is dict:
+            identity = id(item)
+            if identity in seen_containers:
+                return
+            seen_containers.add(identity)
+            for key, child in item.items():
+                visit(key)
+                visit(child)
+
+    visit(value)
+    return objects
+
+
 @dataclass(frozen=True)
 class _PausedExecution:
     paused_step: PausedStepState
@@ -873,7 +909,7 @@ class _RunSession:
         self._pending_checkpoint_restore_name = checkpoint_restore_name
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
-        self._active_step_exit_objects: list[_StepExitObject] | None = None
+        self._active_step_running = False
         (
             self._step_key_by_id,
             self._checkpoint_key_by_name,
@@ -1609,46 +1645,29 @@ class _RunSession:
             )
         return self._state_controller
 
-    def _register_step_exit_object(self, value: object) -> None:
-        """Register one lifecycle object for the current step attempt."""
+    def _is_step_executing(self) -> bool:
+        return self._active_step_running
 
-        if self._active_step_exit_objects is None:
-            raise InvalidBranchUsageError(
-                "Step-exit cleanup can only be registered while a journey step is running.",
-                hint=(
-                    "Call lifecycle-aware tools from inside a function passed to "
-                    "step(...), not during planning, module import, or between steps."
-                ),
-            )
-        exit_method = getattr(value, "__exit__", None)
-        if not callable(exit_method):
-            raise TypeError(
-                "Step-exit lifecycle objects must define a callable "
-                "__exit__(exc_type, exc, traceback) method."
-            )
-        self._active_step_exit_objects.append(cast(_StepExitObject, value))
-
-    def _start_step_exit_lifecycle(self) -> None:
-        if self._active_step_exit_objects is not None:
+    def _start_step_lifecycle(self) -> None:
+        if self._active_step_running:
             raise InvalidBranchUsageError(
                 "A journey step started while another step was already running.",
                 hint="Do not call step(...) from inside another step function.",
             )
-        self._active_step_exit_objects = []
+        self._active_step_running = True
 
-    def _finish_step_exit_lifecycle(
+    def _finish_step_lifecycle(self) -> None:
+        self._active_step_running = False
+
+    def _exit_step_return_values(
         self,
+        output: Any,
         exc_type: type[BaseException] | None = None,
         exc: BaseException | None = None,
         traceback: TracebackType | None = None,
     ) -> list[BaseException]:
-        objects = self._active_step_exit_objects
-        self._active_step_exit_objects = None
-        if objects is None:
-            return []
-
         failures: list[BaseException] = []
-        for value in reversed(objects):
+        for value in reversed(_step_exit_objects_from_value(output)):
             try:
                 value.__exit__(exc_type, exc, traceback)
             except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
@@ -1728,16 +1747,11 @@ class _RunSession:
         )
         started_at = time.perf_counter()
 
-        self._start_step_exit_lifecycle()
+        self._start_step_lifecycle()
         try:
             output = fn(*bound_args, **bound_kwargs)
         except KeyboardInterrupt as exc:
-            cleanup_failures = self._finish_step_exit_lifecycle(
-                type(exc),
-                exc,
-                exc.__traceback__,
-            )
-            _add_cleanup_failure_notes(exc, cleanup_failures)
+            self._finish_step_lifecycle()
             self._observer.on_step_interrupted(
                 case_plan=self.case_plan,
                 node=node,
@@ -1748,12 +1762,7 @@ class _RunSession:
             )
             raise
         except Exception as exc:  # pragma: no cover - surfaced to caller
-            cleanup_failures = self._finish_step_exit_lifecycle(
-                type(exc),
-                exc,
-                exc.__traceback__,
-            )
-            _add_cleanup_failure_notes(exc, cleanup_failures)
+            self._finish_step_lifecycle()
             self._handle_step_exception(
                 node,
                 node_index=node_index,
@@ -1761,11 +1770,17 @@ class _RunSession:
                 started_at=started_at,
                 exc=exc,
             )
+        except BaseException:
+            self._finish_step_lifecycle()
+            raise
+
+        self._finish_step_lifecycle()
 
         try:
             binding = self._set_step_result(node, output)
         except Exception as exc:
-            cleanup_failures = self._finish_step_exit_lifecycle(
+            cleanup_failures = self._exit_step_return_values(
+                output,
                 type(exc),
                 exc,
                 exc.__traceback__,
@@ -1773,7 +1788,7 @@ class _RunSession:
             _add_cleanup_failure_notes(exc, cleanup_failures)
             raise
 
-        cleanup_failures = self._finish_step_exit_lifecycle()
+        cleanup_failures = self._exit_step_return_values(output)
         if cleanup_failures:
             self._discard_step_result(node)
             cleanup_error = RuntimeError(_cleanup_failure_message(cleanup_failures))

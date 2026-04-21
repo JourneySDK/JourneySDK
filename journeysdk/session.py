@@ -16,31 +16,23 @@ def get_session() -> Any | None:
     return _CURRENT_SESSION.get()
 
 
-def _register_step_exit_object(value: object) -> None:
-    """Register a lifecycle-aware value for the current step attempt.
+def _require_executing_step(owner: str) -> None:
+    """Raise unless code is running inside a step function body.
 
-    Official tools use this internal hook when they allocate live resources,
-    such as browsers or local servers, inside a step function. ``value`` must
-    implement the standard context-manager ``__exit__(exc_type, exc,
-    traceback)`` method. Journey calls that method when the active step exits
-    on success, failure, retry, pause, or interruption.
-
-    This helper is intentionally step-scoped. Calling it during planning, at
-    module import time, or anywhere outside the body of a function passed to
-    ``step(...)`` raises ``InvalidBranchUsageError``.
+    Official tools use this guard before opening live resources that Journey
+    can only clean up from a returned step value.
     """
 
     session = get_session()
-    register = getattr(session, "_register_step_exit_object", None)
-    if not callable(register):
+    is_step_executing = getattr(session, "_is_step_executing", None)
+    if not callable(is_step_executing) or not is_step_executing():
         raise InvalidBranchUsageError(
-            "Step-exit cleanup can only be registered while a journey step is running.",
+            f"{owner}(...) can only be called while a journey step is running.",
             hint=(
                 "Call lifecycle-aware tools from inside a function passed to "
                 "step(...), not during planning, module import, or between steps."
             ),
         )
-    register(value)
 
 
 @contextmanager

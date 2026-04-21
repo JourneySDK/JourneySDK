@@ -231,15 +231,18 @@ def continue_authenticated_dashboard(
     pause_seconds: float,
 ) -> dict[str, str]:
     page = open_page(session)
-    auth_state = page.locator("#auth-state").text_content()
-    ...
-    time.sleep(pause_seconds)
-    page.get_by_role("button", name="Complete protected action").click()
-    ...
-    return {
-        "auth_state": auth_state,
-        "status": status_text or "",
-    }
+    try:
+        auth_state = page.locator("#auth-state").text_content()
+        ...
+        time.sleep(pause_seconds)
+        page.get_by_role("button", name="Complete protected action").click()
+        ...
+        return {
+            "auth_state": auth_state,
+            "status": status_text or "",
+        }
+    finally:
+        page.__exit__(None, None, None)
 ```
 
 The journey is still small:
@@ -333,7 +336,8 @@ Expected stderr:
 
 - Browser logic stays inside normal Python functions. Journey does not wrap Playwright in a separate DSL.
 - The same journey can branch into a webhook case and a local file case.
-- `JourneyPlaywrightPage` is just another step value. That is why Journey can save it, resume it, and pass it into later steps.
+- `JourneyPlaywrightPage` is just another step value. Returning it lets Journey save it, close it, resume it, and pass it into later steps.
+- Steps that open a page but return other data should close the page explicitly, as shown in `continue_authenticated_dashboard()`.
 - Targeted execution is especially useful for UI work because you can rerun only the branch you are debugging.
 
 Continue with [05 Journey Cloud Integrations](05-journey-cloud-integrations.md) when the external resource should be hosted by Journey Cloud instead of the local test process.

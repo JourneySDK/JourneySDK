@@ -159,20 +159,15 @@ steps reopen it with `open_page(saved_page)`.
 
 ## Step-Exit Tool Lifecycle
 
-Official tools that open live resources inside a step should return or manage
-an object with the standard context-manager `__exit__(exc_type, exc,
-traceback)` method, then register that object with Journey's internal
-step-exit lifecycle. This lifecycle is only active while a step function is
-executing. Do not call lifecycle-aware tools during planning, module import, or
-between `step(...)` calls.
+Official tools that open live resources inside a step should return an object
+with the standard context-manager `__exit__(exc_type, exc, traceback)` method.
+After a step function returns, Journey stores the returned value, discovers
+returned `__exit__` handles, and closes them before the next step runs.
 
 Use this pattern when a tool owns a resource that should not outlive the step
 attempt:
 
 ```python
-from journeysdk.session import _register_step_exit_object
-
-
 class ResourceHandle:
     def __init__(self):
         self._resource = acquire_resource()
@@ -186,16 +181,25 @@ class ResourceHandle:
 
 
 def open_resource():
-    handle = ResourceHandle()
-    _register_step_exit_object(handle)
+    return ResourceHandle()
+
+
+def use_resource():
+    handle = open_resource()
+    handle.do_work()
     return handle
 ```
 
-Journey calls registered `__exit__` methods in LIFO order when the step exits
-on success, failure, retry, develop-step pause, or interruption. On success,
-`__exit__` receives `(None, None, None)`. On failure or interruption, it
-receives the original exception details. Journey ignores the return value, so
-`__exit__` cannot suppress a step failure.
+Journey looks for lifecycle handles in the direct step result and inside
+built-in `tuple`, `list`, and `dict` containers. It de-duplicates handles by
+object identity and calls `__exit__` in reverse discovery order. On successful
+step returns, `__exit__` receives `(None, None, None)`. Journey ignores the
+return value, so `__exit__` cannot suppress cleanup failures.
+
+The important constraint is visibility: Journey only auto-exits handles it can
+see in the returned value graph. A live local resource that is not returned is
+outside this protocol. Either return the handle, return a container that
+contains it, or close it explicitly with local `try` / `finally` code.
 
 Keep lifecycle methods idempotent, and close only resources owned by that tool
 call. If the step returns a value that must survive retries, `--state`, or
@@ -291,9 +295,10 @@ def login_and_capture_session():
     page.wait_for_url("**/dashboard")
     return page
 
-def assert_dashboard(session: JourneyPlaywrightPage):
+def assert_dashboard(session: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
     page = open_page(session)
     assert page.url.endswith("/dashboard")
+    return page
 ```
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is

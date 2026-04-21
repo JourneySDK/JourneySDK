@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import MethodType
 
 import journeysdk as journey_sdk
 import pytest
-from journeysdk.errors import InvalidBranchUsageError
+from journeysdk.errors import CallableExecutionError, InvalidBranchUsageError
 
 pytest.importorskip("playwright.sync_api")
 
@@ -15,19 +14,17 @@ from playwright.sync_api import Page as PlaywrightPage
 from journeysdk.tools import playwright as journey_playwright
 
 
-def _state_json(
+def _state_payload(
     *,
     url: str = "http://example.test/dashboard",
     cookies: list[dict[str, object]] | None = None,
     local_storage: dict[str, str] | None = None,
-) -> str:
-    return json.dumps(
-        {
-            "url": url,
-            "cookies": cookies or [],
-            "local_storage": local_storage or {},
-        }
-    )
+) -> dict[str, object]:
+    return {
+        "url": url,
+        "cookies": cookies or [],
+        "local_storage": local_storage or {},
+    }
 
 
 class _FakeNativePage:
@@ -49,11 +46,11 @@ def _attach_fake_live_page(
     native_page: object,
     *,
     events: list[object],
-    fallback_snapshot_json: str,
+    fallback_snapshot: object,
     initial_url: str = "about:blank",
 ) -> None:
     context = getattr(native_page, "context")
-    page._journey_snapshot_json = fallback_snapshot_json
+    page._journey_snapshot = fallback_snapshot
     page._journey_step_closed = False
     page._fake_context = context
     page._fake_url = initial_url
@@ -81,14 +78,16 @@ def _attach_fake_live_page(
     def reload(self, *, wait_until: str) -> None:
         events.append(("reload", wait_until))
 
-    def snapshot_for_storage(self) -> str:
+    def snapshot_for_storage(self):
         events.append(("capture_state", self._fake_url))
-        self._journey_snapshot_json = _state_json(
-            url=self._fake_url,
-            cookies=self._fake_context.cookies(),
-            local_storage=self._fake_local_storage,
+        self._journey_snapshot = journey_playwright._PageSnapshot.from_payload(
+            _state_payload(
+                url=self._fake_url,
+                cookies=self._fake_context.cookies(),
+                local_storage=self._fake_local_storage,
+            )
         )
-        return self._journey_snapshot_json
+        return self._journey_snapshot
 
     page.goto = MethodType(goto, page)
     page.evaluate = MethodType(evaluate, page)
@@ -96,10 +95,132 @@ def _attach_fake_live_page(
     page._snapshot_for_storage = MethodType(snapshot_for_storage, page)
 
 
+class _FakeContext:
+    def __init__(
+        self,
+        events: list[object],
+        *,
+        fail_new_page: bool = False,
+    ) -> None:
+        self._events = events
+        self._fail_new_page = fail_new_page
+        self.page = _FakeNativePage(self)
+        self._cookies: list[dict[str, object]] = []
+
+    def add_cookies(self, cookies: list[dict[str, object]]) -> None:
+        self._cookies = list(cookies)
+        self._events.append(("add_cookies", list(cookies)))
+
+    def new_page(self) -> _FakeNativePage:
+        self._events.append("new_page")
+        if self._fail_new_page:
+            raise RuntimeError("new page failed")
+        return self.page
+
+    def cookies(self) -> list[dict[str, object]]:
+        return list(self._cookies)
+
+    def close(self) -> None:
+        self._events.append("context_close")
+
+
+class _FakeBrowser:
+    def __init__(
+        self,
+        events: list[object],
+        *,
+        fail_new_page: bool = False,
+    ) -> None:
+        self._events = events
+        self.context = _FakeContext(events, fail_new_page=fail_new_page)
+
+    def new_context(self) -> _FakeContext:
+        self._events.append("new_context")
+        return self.context
+
+    def close(self) -> None:
+        self._events.append("browser_close")
+
+
+class _FakeBrowserType:
+    def __init__(
+        self,
+        events: list[object],
+        *,
+        fail_new_page: bool = False,
+    ) -> None:
+        self._events = events
+        self._fail_new_page = fail_new_page
+
+    def launch(self, *, headless: bool) -> _FakeBrowser:
+        self._events.append(("launch", headless))
+        return _FakeBrowser(self._events, fail_new_page=self._fail_new_page)
+
+
+class _FakePlaywright:
+    def __init__(
+        self,
+        events: list[object],
+        *,
+        fail_new_page: bool = False,
+    ) -> None:
+        self.chromium = _FakeBrowserType(events, fail_new_page=fail_new_page)
+
+
+class _FakeManager:
+    def __init__(
+        self,
+        events: list[object],
+        *,
+        fail_new_page: bool = False,
+    ) -> None:
+        self._events = events
+        self._fail_new_page = fail_new_page
+
+    def __enter__(self) -> _FakePlaywright:
+        self._events.append("playwright_enter")
+        return _FakePlaywright(self._events, fail_new_page=self._fail_new_page)
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self._events.append("playwright_exit")
+        return False
+
+
+def _install_fake_playwright(
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[object],
+    *,
+    fail_new_page: bool = False,
+) -> None:
+    def attach_live_page(
+        self: journey_playwright.JourneyPlaywrightPage,
+        native_page: object,
+        *,
+        fallback_snapshot: object,
+    ) -> None:
+        _attach_fake_live_page(
+            self,
+            native_page,
+            events=events,
+            fallback_snapshot=fallback_snapshot,
+        )
+
+    monkeypatch.setattr(
+        journey_playwright,
+        "sync_playwright",
+        lambda: _FakeManager(events, fail_new_page=fail_new_page),
+    )
+    monkeypatch.setattr(
+        journey_playwright.JourneyPlaywrightPage,
+        "_attach_live_page",
+        attach_live_page,
+    )
+
+
 def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path):
     assert issubclass(journey_playwright.JourneyPlaywrightPage, PlaywrightPage)
 
-    state_json = _state_json(
+    state = _state_payload(
         cookies=[
             {
                 "name": "journey_session",
@@ -112,7 +233,14 @@ def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path)
             "journey_session_token": "demo-token",
         },
     )
-    page = journey_playwright.JourneyPlaywrightPage._from_snapshot_json(state_json)
+    page = journey_playwright.JourneyPlaywrightPage.__restore__(
+        state,
+        journey_sdk.JourneyRestoreContext(
+            artifact_root=tmp_path,
+            boundary_kind="binding",
+            boundary_id="step:n_1",
+        ),
+    )
 
     payload = page.__store__(
         journey_sdk.JourneyStoreContext(
@@ -130,92 +258,53 @@ def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path)
         ),
     )
 
-    assert isinstance(payload, str)
+    assert isinstance(payload, dict)
     assert isinstance(restored, journey_playwright.JourneyPlaywrightPage)
     assert restored.url == "http://example.test/dashboard"
-    assert json.loads(
-        restored.__store__(
-            journey_sdk.JourneyStoreContext(
-                artifact_root=tmp_path,
-                boundary_kind="binding",
-                boundary_id="step:n_1",
-            )
+    assert restored.__store__(
+        journey_sdk.JourneyStoreContext(
+            artifact_root=tmp_path,
+            boundary_kind="binding",
+            boundary_id="step:n_1",
         )
-    ) == json.loads(state_json)
+    ) == state
 
 
-def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
+def test_open_page_opens_url_string_and_cleans_returned_page(monkeypatch):
     events: list[object] = []
+    _install_fake_playwright(monkeypatch, events)
 
-    def attach_live_page(
-        self: journey_playwright.JourneyPlaywrightPage,
-        native_page: object,
-        *,
-        fallback_snapshot_json: str,
-    ) -> None:
-        _attach_fake_live_page(
-            self,
-            native_page,
-            events=events,
-            fallback_snapshot_json=fallback_snapshot_json,
-        )
+    def open_login() -> journey_playwright.JourneyPlaywrightPage:
+        page = journey_playwright.open_page("http://example.test/login")
+        assert isinstance(page, journey_playwright.JourneyPlaywrightPage)
+        events.append("inside")
+        return page
 
-    class FakeContext:
-        def __init__(self) -> None:
-            self.page = _FakeNativePage(self)
-            self._cookies: list[dict[str, object]] = []
+    def journey():
+        journey_sdk.step(open_login)
 
-        def add_cookies(self, cookies: list[dict[str, object]]) -> None:
-            self._cookies = list(cookies)
-            events.append(("add_cookies", list(cookies)))
+    journey_sdk.execute(journey)
 
-        def new_page(self) -> _FakeNativePage:
-            events.append("new_page")
-            return self.page
+    assert events == [
+        "playwright_enter",
+        ("launch", True),
+        "new_context",
+        "new_page",
+        ("goto", "http://example.test/login", "load"),
+        "inside",
+        ("capture_state", "http://example.test/login"),
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
 
-        def cookies(self) -> list[dict[str, object]]:
-            return list(self._cookies)
 
-        def close(self) -> None:
-            events.append("context_close")
+def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(monkeypatch, events)
 
-    class FakeBrowser:
-        def __init__(self) -> None:
-            self.context = FakeContext()
-
-        def new_context(self) -> FakeContext:
-            events.append("new_context")
-            return self.context
-
-        def close(self) -> None:
-            events.append("browser_close")
-
-    class FakeBrowserType:
-        def launch(self, *, headless: bool) -> FakeBrowser:
-            events.append(("launch", headless))
-            return FakeBrowser()
-
-    class FakePlaywright:
-        chromium = FakeBrowserType()
-
-    class FakeManager:
-        def __enter__(self) -> FakePlaywright:
-            events.append("playwright_enter")
-            return FakePlaywright()
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            events.append("playwright_exit")
-            return False
-
-    monkeypatch.setattr(journey_playwright, "sync_playwright", lambda: FakeManager())
-    monkeypatch.setattr(
-        journey_playwright.JourneyPlaywrightPage,
-        "_attach_live_page",
-        attach_live_page,
-    )
-
-    saved_page = journey_playwright.JourneyPlaywrightPage._from_snapshot_json(
-        _state_json(
+    saved_page = journey_playwright.JourneyPlaywrightPage.__restore__(
+        _state_payload(
             cookies=[
                 {
                     "name": "journey_session",
@@ -225,14 +314,19 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
                 }
             ],
             local_storage={"journey_session_token": "demo-token"},
-        )
+        ),
+        journey_sdk.JourneyRestoreContext(
+            artifact_root=Path("."),
+            boundary_kind="binding",
+            boundary_id="step:n_1",
+        ),
     )
 
-    def open_dashboard() -> bool:
+    def open_dashboard() -> dict[str, object]:
         page = journey_playwright.open_page(saved_page, headless=False)
         assert isinstance(page, journey_playwright.JourneyPlaywrightPage)
         events.append("inside")
-        return True
+        return {"page": page}
 
     def journey():
         journey_sdk.step(open_dashboard)
@@ -266,6 +360,32 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
     ]
 
 
+def test_open_page_cleans_partial_allocations_on_failure(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(monkeypatch, events, fail_new_page=True)
+
+    def open_fails() -> bool:
+        journey_playwright.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    assert "new page failed" in str(exc_info.value)
+    assert events == [
+        "playwright_enter",
+        ("launch", True),
+        "new_context",
+        "new_page",
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
+
+
 def test_open_page_rejects_outside_step():
     with pytest.raises(InvalidBranchUsageError):
         journey_playwright.open_page("http://example.test/login")
@@ -276,69 +396,23 @@ def test_open_page_rejects_unsupported_input_type():
         journey_playwright.open_page(object())
 
 
+def test_journey_playwright_page_rejects_legacy_json_payload(tmp_path: Path):
+    with pytest.raises(TypeError, match="dictionary payload"):
+        journey_playwright.JourneyPlaywrightPage.__restore__(
+            '{"url":"http://example.test"}',
+            journey_sdk.JourneyRestoreContext(
+                artifact_root=tmp_path,
+                boundary_kind="binding",
+                boundary_id="step:n_1",
+            ),
+        )
+
+
 def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monkeypatch):
     state_file = tmp_path / "journey.state"
     attempts = {"count": 0}
     events: list[object] = []
-
-    def attach_live_page(
-        self: journey_playwright.JourneyPlaywrightPage,
-        native_page: object,
-        *,
-        fallback_snapshot_json: str,
-    ) -> None:
-        _attach_fake_live_page(
-            self,
-            native_page,
-            events=events,
-            fallback_snapshot_json=fallback_snapshot_json,
-        )
-
-    class FakeContext:
-        def __init__(self) -> None:
-            self.page = _FakeNativePage(self)
-            self._cookies: list[dict[str, object]] = []
-
-        def add_cookies(self, cookies: list[dict[str, object]]) -> None:
-            self._cookies = list(cookies)
-
-        def new_page(self) -> _FakeNativePage:
-            return self.page
-
-        def cookies(self) -> list[dict[str, object]]:
-            return list(self._cookies)
-
-        def close(self) -> None:
-            events.append("context_close")
-
-    class FakeBrowser:
-        def new_context(self) -> FakeContext:
-            return FakeContext()
-
-        def close(self) -> None:
-            events.append("browser_close")
-
-    class FakeBrowserType:
-        def launch(self, *, headless: bool) -> FakeBrowser:
-            return FakeBrowser()
-
-    class FakePlaywright:
-        chromium = FakeBrowserType()
-
-    class FakeManager:
-        def __enter__(self) -> FakePlaywright:
-            return FakePlaywright()
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            events.append("playwright_exit")
-            return False
-
-    monkeypatch.setattr(journey_playwright, "sync_playwright", lambda: FakeManager())
-    monkeypatch.setattr(
-        journey_playwright.JourneyPlaywrightPage,
-        "_attach_live_page",
-        attach_live_page,
-    )
+    _install_fake_playwright(monkeypatch, events)
 
     def login() -> journey_playwright.JourneyPlaywrightPage:
         page = journey_playwright.open_page("http://example.test/login")
@@ -350,15 +424,16 @@ def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monke
     ) -> journey_playwright.JourneyPlaywrightPage:
         attempts["count"] += 1
         events.append(f"continue:{attempts['count']}:{saved_page.url}")
-        page = journey_playwright.open_page(saved_page)
         if attempts["count"] == 1:
             raise KeyboardInterrupt()
-        return page
+        return journey_playwright.open_page(saved_page)
 
-    def assert_page(saved_page: journey_playwright.JourneyPlaywrightPage) -> bool:
+    def assert_page(
+        saved_page: journey_playwright.JourneyPlaywrightPage,
+    ) -> journey_playwright.JourneyPlaywrightPage:
         page = journey_playwright.open_page(saved_page)
         events.append(f"assert:{page.url}")
-        return True
+        return page
 
     def journey():
         page = journey_sdk.step(login)
@@ -370,7 +445,11 @@ def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monke
 
     report = journey_sdk.execute(journey, state=state_file)
 
-    assert [record.label for record in report.case_reports[0].records if record.label is not None] == [
+    assert [
+        record.label
+        for record in report.case_reports[0].records
+        if record.label is not None
+    ] == [
         "login",
         "continue_from_page",
         "assert_page",

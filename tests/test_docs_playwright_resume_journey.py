@@ -55,6 +55,8 @@ def test_playwright_resume_example_compiles_with_explicit_playwright_dependency(
     assert "capture" + "_page_state" not in source
     assert "register" + "_step_exit_callback" not in readme
     assert "register" + "_step_exit_callback" not in contributing
+    assert "_register" + "_step_exit_object" not in readme
+    assert "_register" + "_step_exit_object" not in contributing
     assert "## Step-Exit Tool Lifecycle" in readme
     assert "## Step-Exit Tool Lifecycle" not in contributing
     assert _case_labels(first_plan) == [
