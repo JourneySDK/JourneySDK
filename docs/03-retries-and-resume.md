@@ -58,8 +58,9 @@ Those three journeys represent the three most common retry strategies:
 
 Checkpoint replay follows the same rule as `--state`: Journey reuses the stored
 step inputs and outputs that cross the replay boundary. If one of those values
-needs custom side effects, put that logic on the value itself with
-`__store__` / `__restore__`.
+needs custom side effects, put that logic on a module-level value type with
+`__store__` / `__restore__` as described in the README's Journey Rehydration
+Protocol section.
 
 That matters when the replayable value wraps external state instead of being a
 plain pickleable object:

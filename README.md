@@ -116,16 +116,46 @@ Write one journey in sequential Python with `step`, `checkpoint`, and optional s
 workflows without duplicating test code. Step functions are plain callables: pass every required input as explicit
 arguments, and return any value that later steps or resumed runs must reuse.
 
-When retries, persisted state, or checkpoint-started branches need to replay a
-step, Journey rehydrates that step from SDK-managed saved inputs and outputs.
-Any step argument or return value that may be replayed that way must be either
-pickle-serializable or implement the Journey rehydration protocol with
-`__store__(context)` and `__restore__(payload, context)`.
-
 Retryable steps can poll for async effects, rerun from the step itself, or replay from an earlier step/checkpoint.
 They are retried when they raise an exception and `retry` is greater than 0. The explicit defaults are `retry=0`,
 `retry_delay=5`, and `retry_from=None`; when retries are enabled and `retry_from` is omitted, the current step is
 retried.
+
+## Journey Rehydration Protocol
+
+When retries, `--state`, checkpoint replay, or checkpoint-started branches need
+to reuse a step value, Journey rehydrates that step from SDK-managed saved
+inputs and outputs. Any step argument or return value that may cross one of
+those boundaries must be pickle-serializable or implement the Journey
+rehydration protocol:
+
+```python
+class ExternalState:
+    def __store__(self, context):
+        return {"payload": "pickle-serializable"}
+
+    @classmethod
+    def __restore__(cls, payload, context):
+        return cls(...)
+```
+
+`__store__(context)` returns a pickle-serializable payload. Journey stores the
+payload together with an importable reference to the value's class, so custom
+rehydratable classes must be defined at module top level, not inside a function.
+`__restore__(payload, context)` receives that payload and returns the restored
+step value.
+
+The context object describes where and why the value is being stored or
+restored. Use `context.artifact_root` for larger file artifacts. Inspect
+`context.boundary_kind`, `context.boundary_id`, and `context.checkpoint_name`
+when a value needs different behavior for active state, step bindings, or
+checkpoint snapshots.
+
+Restored values should be usable as later step inputs. For values backed by live
+external resources, store enough data to reopen the resource explicitly in the
+next step instead of trying to pickle the live resource itself. Official tools
+follow this pattern: `JourneyPlaywrightPage` stores browser state, and later
+steps reopen it with `open_page(saved_page)`.
 
 Official tools are ordinary Python helpers that return step callables or serializable helper values. For example, the
 webhook tool can host a local endpoint before the app under test sends to it:

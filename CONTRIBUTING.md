@@ -93,8 +93,8 @@ Callbacks run in LIFO order when the step exits on success, failure, retry,
 develop-step pause, or interruption. Keep callbacks idempotent, and close only
 resources owned by that tool call. If a step returns a value that must survive
 retries, `--state`, or checkpoint replay, the returned value must implement the
-Journey rehydration protocol with `__store__` / `__restore__`; do not rely on
-pickling live resources.
+Journey rehydration protocol documented in the README; do not rely on pickling
+live resources.
 
 Tests for lifecycle-aware tools should cover successful cleanup, cleanup after
 failure, cleanup on retry or interruption, the outside-step guard, and

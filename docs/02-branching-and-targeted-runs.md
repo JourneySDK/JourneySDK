@@ -36,8 +36,8 @@ Why this shape matters:
 
 `checkpoint()` is marker-only. External system state belongs on the values that
 cross that boundary, not on the checkpoint itself. If a step result needs
-custom replay behavior, make that value implement the Journey rehydration
-protocol:
+custom replay behavior, define it at module top level and make that value
+implement the Journey rehydration protocol:
 
 ```python
 class BrowserSession:
@@ -54,7 +54,8 @@ after_login = checkpoint()
 ```
 
 Journey stores and restores replayable step values whenever execution truly
-rewinds to that boundary, such as a checkpoint-started later branch.
+rewinds to that boundary, such as a checkpoint-started later branch. The
+protocol is documented in the README's Journey Rehydration Protocol section.
 
 Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
 targeted run uses the compiled labels to choose one path.

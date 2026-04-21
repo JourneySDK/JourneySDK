@@ -36,8 +36,8 @@ def _fake_journey_page(
     events: list[object],
     initial_url: str = "about:blank",
 ) -> journey_playwright.JourneyPlaywrightPage:
-    page = journey_playwright.JourneyPlaywrightPage._from_state(
-        journey_playwright.PlaywrightPageState.from_url(initial_url)
+    page = journey_playwright.JourneyPlaywrightPage._from_snapshot_json(
+        journey_playwright._snapshot_json_from_url(initial_url)
     )
     page._journey_step_closed = False
     page._fake_context = context
@@ -65,86 +65,68 @@ def _fake_journey_page(
     def reload(self, *, wait_until: str) -> None:
         events.append(("reload", wait_until))
 
-    def state_for_storage(self) -> journey_playwright.PlaywrightPageState:
+    def snapshot_for_storage(self) -> str:
         events.append(("capture_state", self._fake_url))
-        self._journey_page_state = journey_playwright.PlaywrightPageState.from_json(
-            _state_json(
-                url=self._fake_url,
-                cookies=self._fake_context.cookies(),
-                local_storage=self._fake_local_storage,
-            )
+        self._journey_snapshot_json = _state_json(
+            url=self._fake_url,
+            cookies=self._fake_context.cookies(),
+            local_storage=self._fake_local_storage,
         )
-        return self._journey_page_state
+        return self._journey_snapshot_json
 
     page.goto = MethodType(goto, page)
     page.evaluate = MethodType(evaluate, page)
     page.reload = MethodType(reload, page)
-    page._state_for_storage = MethodType(state_for_storage, page)
+    page._snapshot_for_storage = MethodType(snapshot_for_storage, page)
     return page
 
 
-def test_playwright_page_state_round_trips_json():
-    state = journey_playwright.PlaywrightPageState.from_json(
-        _state_json(
-            cookies=[
-                {
-                    "name": "journey_session",
-                    "value": "demo-session",
-                    "domain": "example.test",
-                    "path": "/",
-                }
-            ],
-            local_storage={
-                "journey_session_token": "demo-token",
-            },
+def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path):
+    assert issubclass(journey_playwright.JourneyPlaywrightPage, PlaywrightPage)
+
+    state_json = _state_json(
+        cookies=[
+            {
+                "name": "journey_session",
+                "value": "demo-session",
+                "domain": "example.test",
+                "path": "/",
+            }
+        ],
+        local_storage={
+            "journey_session_token": "demo-token",
+        },
+    )
+    page = journey_playwright.JourneyPlaywrightPage._from_snapshot_json(state_json)
+
+    payload = page.__store__(
+        journey_sdk.JourneyStoreContext(
+            artifact_root=tmp_path,
+            boundary_kind="binding",
+            boundary_id="step:n_1",
         )
     )
-
-    assert state.url == "http://example.test/dashboard"
-    assert state.cookies == (
-        {
-            "name": "journey_session",
-            "value": "demo-session",
-            "domain": "example.test",
-            "path": "/",
-        },
+    restored = journey_playwright.JourneyPlaywrightPage.__restore__(
+        payload,
+        journey_sdk.JourneyRestoreContext(
+            artifact_root=tmp_path,
+            boundary_kind="binding",
+            boundary_id="step:n_1",
+        ),
     )
-    assert state.local_storage == {"journey_session_token": "demo-token"}
-    assert journey_playwright.PlaywrightPageState.from_json(state.to_json()) == state
 
-
-def test_capture_page_state_reads_url_cookies_and_local_storage():
-    class FakeContext:
-        def cookies(self) -> list[dict[str, str]]:
-            return [
-                {
-                    "name": "journey_session",
-                    "value": "demo-session",
-                    "domain": "127.0.0.1",
-                    "path": "/",
-                }
-            ]
-
-    class FakePage:
-        url = "http://127.0.0.1:8765/dashboard"
-        context = FakeContext()
-
-        def evaluate(self, script: str) -> dict[str, str]:
-            assert "window.localStorage" in script
-            return {"journey_session_token": "demo-token"}
-
-    state = journey_playwright.capture_page_state(FakePage())
-
-    assert state.url == "http://127.0.0.1:8765/dashboard"
-    assert state.cookies == (
-        {
-            "name": "journey_session",
-            "value": "demo-session",
-            "domain": "127.0.0.1",
-            "path": "/",
-        },
-    )
-    assert state.local_storage == {"journey_session_token": "demo-token"}
+    assert isinstance(payload, str)
+    assert isinstance(restored, journey_playwright.JourneyPlaywrightPage)
+    assert restored.url == "http://example.test/dashboard"
+    assert json.loads(
+        restored.__store__(
+            journey_sdk.JourneyStoreContext(
+                artifact_root=tmp_path,
+                boundary_kind="binding",
+                boundary_id="step:n_1",
+            )
+        )
+    ) == json.loads(state_json)
 
 
 def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
@@ -199,7 +181,7 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
 
     monkeypatch.setattr(journey_playwright, "sync_playwright", lambda: FakeManager())
 
-    state = journey_playwright.PlaywrightPageState.from_json(
+    saved_page = journey_playwright.JourneyPlaywrightPage._from_snapshot_json(
         _state_json(
             cookies=[
                 {
@@ -214,7 +196,7 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_up(monkeypatch):
     )
 
     def open_dashboard() -> bool:
-        page = journey_playwright.open_page(state.to_json(), headless=False)
+        page = journey_playwright.open_page(saved_page, headless=False)
         assert isinstance(page, journey_playwright.JourneyPlaywrightPage)
         events.append("inside")
         return True
@@ -256,105 +238,9 @@ def test_open_page_rejects_outside_step():
         journey_playwright.open_page("http://example.test/login")
 
 
-def test_journey_playwright_page_is_native_page_subclass_and_rehydrates(tmp_path: Path):
-    assert issubclass(journey_playwright.JourneyPlaywrightPage, PlaywrightPage)
-
-    state = journey_playwright.PlaywrightPageState.from_json(
-        _state_json(
-            cookies=[
-                {
-                    "name": "journey_session",
-                    "value": "demo-session",
-                    "domain": "example.test",
-                    "path": "/",
-                }
-            ],
-            local_storage={"journey_session_token": "demo-token"},
-        )
-    )
-    page = journey_playwright.JourneyPlaywrightPage._from_state(state)
-    payload = page.__store__(
-        journey_sdk.JourneyStoreContext(
-            artifact_root=tmp_path,
-            boundary_kind="binding",
-            boundary_id="step:n_1",
-        )
-    )
-
-    restored = journey_playwright.JourneyPlaywrightPage.__restore__(
-        payload,
-        journey_sdk.JourneyRestoreContext(
-            artifact_root=tmp_path,
-            boundary_kind="binding",
-            boundary_id="step:n_1",
-        ),
-    )
-
-    assert isinstance(restored, journey_playwright.JourneyPlaywrightPage)
-    assert restored.url == "http://example.test/dashboard"
-    assert journey_playwright.capture_page_state(restored) == state
-
-
-def test_playwright_tool_builds_empty_state_from_url():
-    state = journey_playwright.PlaywrightPageState.from_url("http://example.test/login")
-    assert state.url == "http://example.test/login"
-    assert state.cookies == ()
-    assert state.local_storage == {}
-
-
-def test_execute_resume_rehydrates_saved_playwright_page_state(tmp_path):
-    state_file = tmp_path / "journey.state"
-    attempts = {"count": 0}
-    events: list[str] = []
-
-    def create_page_state() -> journey_playwright.PlaywrightPageState:
-        events.append("create_page_state")
-        return journey_playwright.PlaywrightPageState.from_json(
-            json.dumps(
-                {
-                    "url": "http://example.test/dashboard",
-                    "cookies": [],
-                    "local_storage": {
-                        "journey_session_token": "demo-token",
-                    },
-                }
-            )
-        )
-
-    def continue_from_state(page_state: journey_playwright.PlaywrightPageState) -> str:
-        attempts["count"] += 1
-        events.append(f"continue:{attempts['count']}:{page_state.url}")
-        if attempts["count"] == 1:
-            raise KeyboardInterrupt()
-        return page_state.to_json()
-
-    def assert_page_state(result: str) -> bool:
-        restored = journey_playwright.PlaywrightPageState.from_json(result)
-        events.append(f"assert:{restored.url}")
-        assert restored.local_storage == {"journey_session_token": "demo-token"}
-        return True
-
-    def journey():
-        session = journey_sdk.step(create_page_state)
-        result = journey_sdk.step(continue_from_state, session)
-        journey_sdk.step(assert_page_state, result)
-
-    with pytest.raises(KeyboardInterrupt):
-        journey_sdk.execute(journey, state=state_file)
-
-    report = journey_sdk.execute(journey, state=state_file)
-
-    assert [record.label for record in report.case_reports[0].records if record.label is not None] == [
-        "create_page_state",
-        "continue_from_state",
-        "assert_page_state",
-    ]
-    assert events == [
-        "create_page_state",
-        "continue:1:http://example.test/dashboard",
-        "continue:2:http://example.test/dashboard",
-        "assert:http://example.test/dashboard",
-    ]
+def test_open_page_rejects_unsupported_input_type():
+    with pytest.raises(TypeError, match="URL string or JourneyPlaywrightPage"):
+        journey_playwright.open_page(object())
 
 
 def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monkeypatch):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Literal, TypedDict, cast
 
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
@@ -24,7 +23,7 @@ class PlaywrightCookie(TypedDict, total=False):
     sameSite: Literal["Strict", "Lax", "None"]
 
 
-class PlaywrightPagePayload(TypedDict):
+class _PlaywrightPageSnapshotPayload(TypedDict):
     url: str
     cookies: list[PlaywrightCookie]
     local_storage: dict[str, str]
@@ -53,24 +52,28 @@ _REHYDRATE_STORAGE_SCRIPT = """
 """
 
 
-def _normalize_payload(payload: Mapping[str, object]) -> PlaywrightPagePayload:
+def _normalize_snapshot_payload(
+    payload: Mapping[str, object],
+) -> _PlaywrightPageSnapshotPayload:
     if set(payload) != {"url", "cookies", "local_storage"}:
         raise ValueError(
-            "PlaywrightPageState expects exactly 'url', 'cookies', and 'local_storage'."
+            "JourneyPlaywrightPage state expects exactly 'url', 'cookies', and 'local_storage'."
         )
 
     url = payload["url"]
     if not isinstance(url, str) or not url:
-        raise TypeError("PlaywrightPageState url must be a non-empty string.")
+        raise TypeError("JourneyPlaywrightPage state url must be a non-empty string.")
 
     cookies = payload["cookies"]
     if not isinstance(cookies, list):
-        raise TypeError("PlaywrightPageState cookies must be a list of cookie objects.")
+        raise TypeError(
+            "JourneyPlaywrightPage state cookies must be a list of cookie objects."
+        )
     normalized_cookies: list[PlaywrightCookie] = []
     for cookie in cookies:
         if not isinstance(cookie, dict):
             raise TypeError(
-                "PlaywrightPageState cookies must contain only cookie dictionaries."
+                "JourneyPlaywrightPage state cookies must contain only cookie dictionaries."
             )
         normalized_cookie = cast(
             PlaywrightCookie,
@@ -81,13 +84,13 @@ def _normalize_payload(payload: Mapping[str, object]) -> PlaywrightPagePayload:
     local_storage = payload["local_storage"]
     if not isinstance(local_storage, dict):
         raise TypeError(
-            "PlaywrightPageState local_storage must be a dictionary of strings."
+            "JourneyPlaywrightPage state local_storage must be a dictionary of strings."
         )
     normalized_local_storage: dict[str, str] = {}
     for key, value in local_storage.items():
         if not isinstance(key, str) or not isinstance(value, str):
             raise TypeError(
-                "PlaywrightPageState local_storage must contain only string keys and values."
+                "JourneyPlaywrightPage state local_storage must contain only string keys and values."
             )
         normalized_local_storage[key] = value
 
@@ -98,103 +101,63 @@ def _normalize_payload(payload: Mapping[str, object]) -> PlaywrightPagePayload:
     }
 
 
-@dataclass(frozen=True)
-class PlaywrightPageState:
-    """Serializable page snapshot for resumable Playwright steps."""
+def _snapshot_json_from_payload(payload: Mapping[str, object]) -> str:
+    normalized = _normalize_snapshot_payload(payload)
+    return json.dumps(
+        normalized,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
-    _payload_json: str
 
-    @classmethod
-    def from_url(cls, url: str) -> PlaywrightPageState:
-        """Create an empty page state that opens a fresh page at one URL."""
+def _snapshot_json_from_url(url: str) -> str:
+    return _snapshot_json_from_payload(
+        {
+            "url": url,
+            "cookies": [],
+            "local_storage": {},
+        }
+    )
 
-        return cls._from_payload(
-            {
-                "url": url,
-                "cookies": [],
-                "local_storage": {},
-            }
-        )
 
-    @classmethod
-    def from_page(cls, page: PlaywrightPage) -> PlaywrightPageState:
-        """Capture the current page URL, cookies, and local storage."""
-
-        payload = {
+def _snapshot_json_from_page(page: PlaywrightPage) -> str:
+    return _snapshot_json_from_payload(
+        {
             "url": getattr(page, "url"),
             "cookies": list(page.context.cookies()),
             "local_storage": dict(page.evaluate(_STORAGE_SCRIPT)),
         }
-        return cls._from_payload(payload)
+    )
 
-    @classmethod
-    def from_json(cls, value: str) -> PlaywrightPageState:
-        """Restore a page state from its JSON representation."""
 
-        if not isinstance(value, str):
-            raise TypeError("PlaywrightPageState.from_json(...) expects a JSON string.")
-        try:
-            payload = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "PlaywrightPageState.from_json(...) received invalid JSON."
-            ) from exc
-        if not isinstance(payload, dict):
-            raise TypeError(
-                "PlaywrightPageState.from_json(...) expects a JSON object."
-            )
-        return cls._from_payload(cast(Mapping[str, object], payload))
+def _snapshot_payload_from_json(value: str) -> _PlaywrightPageSnapshotPayload:
+    if not isinstance(value, str):
+        raise TypeError("JourneyPlaywrightPage state expects a JSON string.")
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("JourneyPlaywrightPage state received invalid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise TypeError("JourneyPlaywrightPage state expects a JSON object.")
+    return _normalize_snapshot_payload(cast(Mapping[str, object], payload))
 
-    @classmethod
-    def _from_payload(cls, payload: Mapping[str, object]) -> PlaywrightPageState:
-        normalized = _normalize_payload(payload)
-        return cls(
-            _payload_json=json.dumps(
-                normalized,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+
+def _snapshot_url(snapshot_json: str) -> str:
+    return cast(str, _snapshot_payload_from_json(snapshot_json)["url"])
+
+
+def _snapshot_cookies(snapshot_json: str) -> tuple[PlaywrightCookie, ...]:
+    cookies = _snapshot_payload_from_json(snapshot_json)["cookies"]
+    return tuple(cast(PlaywrightCookie, dict(cookie)) for cookie in cookies)
+
+
+def _snapshot_local_storage(snapshot_json: str) -> dict[str, str]:
+    return dict(
+        cast(
+            dict[str, str],
+            _snapshot_payload_from_json(snapshot_json)["local_storage"],
         )
-
-    def to_json(self) -> str:
-        """Return the canonical JSON representation of the saved page state."""
-
-        return self._payload_json
-
-    def __store__(self, context: JourneyStoreContext) -> object:
-        """Store the page snapshot for Journey replay."""
-
-        del context
-        return self._payload_json
-
-    @classmethod
-    def __restore__(
-        cls,
-        payload: object,
-        context: JourneyRestoreContext,
-    ) -> PlaywrightPageState:
-        """Restore the page snapshot from Journey replay state."""
-
-        del context
-        if not isinstance(payload, str):
-            raise TypeError("PlaywrightPageState.__restore__(...) expects a JSON string.")
-        return cls.from_json(payload)
-
-    @property
-    def url(self) -> str:
-        return cast(str, self._payload()["url"])
-
-    @property
-    def cookies(self) -> tuple[PlaywrightCookie, ...]:
-        cookies = self._payload()["cookies"]
-        return tuple(cast(PlaywrightCookie, dict(cookie)) for cookie in cookies)
-
-    @property
-    def local_storage(self) -> dict[str, str]:
-        return dict(cast(dict[str, str], self._payload()["local_storage"]))
-
-    def _payload(self) -> PlaywrightPagePayload:
-        return cast(PlaywrightPagePayload, json.loads(self._payload_json))
+    )
 
 
 class JourneyPlaywrightPage(PlaywrightPage):
@@ -204,13 +167,16 @@ class JourneyPlaywrightPage(PlaywrightPage):
         self,
         impl_obj: object | None = None,
         *,
-        state: PlaywrightPageState | None = None,
+        snapshot_json: str | None = None,
     ) -> None:
         if impl_obj is None:
-            if state is None:
+            if snapshot_json is None:
                 raise TypeError(
                     "JourneyPlaywrightPage needs either a live Playwright page or saved state."
                 )
+            snapshot_json = _snapshot_json_from_payload(
+                _snapshot_payload_from_json(snapshot_json)
+            )
             self._impl_obj = None
             self._loop = None
             self._dispatcher_fiber = None
@@ -218,38 +184,38 @@ class JourneyPlaywrightPage(PlaywrightPage):
         else:
             super().__init__(impl_obj)
             self._journey_step_closed = False
-        self._journey_page_state = state
+        self._journey_snapshot_json = snapshot_json
 
     @classmethod
     def _from_live_page(
         cls,
         page: PlaywrightPage,
         *,
-        fallback_state: PlaywrightPageState,
+        fallback_snapshot_json: str,
     ) -> JourneyPlaywrightPage:
         if isinstance(page, cls):
-            page._journey_page_state = fallback_state
+            page._journey_snapshot_json = fallback_snapshot_json
             page._journey_step_closed = False
             return page
 
         impl_obj = getattr(page, "_impl_obj", None)
         if impl_obj is None:
             raise TypeError("open_page(...) expected Playwright to return a sync Page.")
-        return cls(impl_obj, state=fallback_state)
+        return cls(impl_obj, snapshot_json=fallback_snapshot_json)
 
     @classmethod
-    def _from_state(cls, state: PlaywrightPageState) -> JourneyPlaywrightPage:
-        return cls(state=state)
+    def _from_snapshot_json(cls, snapshot_json: str) -> JourneyPlaywrightPage:
+        return cls(snapshot_json=snapshot_json)
 
     @classmethod
-    def _restore_pickle(cls, state_json: str) -> JourneyPlaywrightPage:
-        return cls._from_state(PlaywrightPageState.from_json(state_json))
+    def _restore_pickle(cls, snapshot_json: str) -> JourneyPlaywrightPage:
+        return cls._from_snapshot_json(snapshot_json)
 
     @property
     def url(self) -> str:
         if self._is_live:
             return cast(str, super().url)
-        return self._state_for_storage().url
+        return _snapshot_url(self._snapshot_for_storage())
 
     @property
     def _is_live(self) -> bool:
@@ -262,12 +228,12 @@ class JourneyPlaywrightPage(PlaywrightPage):
         live = "live" if self._is_live else "saved"
         return f"JourneyPlaywrightPage(url={self.url!r}, state={live})"
 
-    def _state_for_storage(self) -> PlaywrightPageState:
+    def _snapshot_for_storage(self) -> str:
         if self._is_live:
-            self._journey_page_state = PlaywrightPageState.from_page(self)
-        if self._journey_page_state is None:
+            self._journey_snapshot_json = _snapshot_json_from_page(self)
+        if self._journey_snapshot_json is None:
             raise RuntimeError("JourneyPlaywrightPage has no saved page state.")
-        return self._journey_page_state
+        return self._journey_snapshot_json
 
     def _mark_step_closed(self) -> None:
         self._journey_step_closed = True
@@ -276,7 +242,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         """Store the current page state for Journey replay."""
 
         del context
-        return self._state_for_storage().to_json()
+        return self._snapshot_for_storage()
 
     @classmethod
     def __restore__(
@@ -289,29 +255,25 @@ class JourneyPlaywrightPage(PlaywrightPage):
         del context
         if not isinstance(payload, str):
             raise TypeError("JourneyPlaywrightPage.__restore__(...) expects a JSON string.")
-        return cls._from_state(PlaywrightPageState.from_json(payload))
+        return cls._from_snapshot_json(payload)
 
     def __reduce__(self) -> tuple[object, tuple[str]]:
-        return (type(self)._restore_pickle, (self._state_for_storage().to_json(),))
-
-
-def capture_page_state(page: PlaywrightPage) -> PlaywrightPageState:
-    """Capture one live Playwright page as resumable state."""
-
-    if isinstance(page, JourneyPlaywrightPage):
-        return page._state_for_storage()
-    return PlaywrightPageState.from_page(page)
+        return (type(self)._restore_pickle, (self._snapshot_for_storage(),))
 
 
 def open_page(
-    page_state: JourneyPlaywrightPage | PlaywrightPageState | str,
+    page_or_url: JourneyPlaywrightPage | str,
     *,
     browser: Literal["chromium", "firefox", "webkit"] = "chromium",
     headless: bool = True,
 ) -> JourneyPlaywrightPage:
-    """Open a fresh Playwright page from saved page state."""
+    """Open a fresh Playwright page from a URL or saved Journey page."""
 
-    state = _normalize_open_page_state(page_state)
+    state = _normalize_open_page_input(page_or_url)
+    state_snapshot_json = state._snapshot_for_storage()
+    state_url = _snapshot_url(state_snapshot_json)
+    state_cookies = _snapshot_cookies(state_snapshot_json)
+    state_local_storage = _snapshot_local_storage(state_snapshot_json)
     manager = None
     launched_browser = None
     context = None
@@ -327,7 +289,7 @@ def open_page(
 
         if page is not None:
             try:
-                page._state_for_storage()
+                page._snapshot_for_storage()
             except Exception as exc:  # pragma: no cover - surfaced through executor
                 failures.append(exc)
             finally:
@@ -361,18 +323,18 @@ def open_page(
         if browser_type is None:
             raise ValueError(
                 "open_page(..., browser=...) expects 'chromium', 'firefox', or 'webkit'."
-            )
+        )
         launched_browser = browser_type.launch(headless=headless)
         context = launched_browser.new_context()
-        if state.cookies:
-            context.add_cookies(list(state.cookies))
+        if state_cookies:
+            context.add_cookies(list(state_cookies))
         native_page = context.new_page()
         page = JourneyPlaywrightPage._from_live_page(
             cast(PlaywrightPage, native_page),
-            fallback_state=state,
+            fallback_snapshot_json=state_snapshot_json,
         )
-        page.goto(state.url, wait_until="load")
-        page.evaluate(_REHYDRATE_STORAGE_SCRIPT, state.local_storage)
+        page.goto(state_url, wait_until="load")
+        page.evaluate(_REHYDRATE_STORAGE_SCRIPT, state_local_storage)
         page.reload(wait_until="load")
         return page
     except Exception as exc:
@@ -385,20 +347,16 @@ def open_page(
         raise
 
 
-def _normalize_open_page_state(
-    page_state: JourneyPlaywrightPage | PlaywrightPageState | str,
-) -> PlaywrightPageState:
-    if isinstance(page_state, JourneyPlaywrightPage):
-        return page_state._state_for_storage()
-    if isinstance(page_state, PlaywrightPageState):
-        return page_state
-    if isinstance(page_state, str):
-        if page_state.lstrip().startswith("{"):
-            return PlaywrightPageState.from_json(page_state)
-        return PlaywrightPageState.from_url(page_state)
-    raise TypeError(
-        "open_page(...) expects a URL string, PlaywrightPageState, or JourneyPlaywrightPage."
-    )
+def _normalize_open_page_input(
+    page_or_url: JourneyPlaywrightPage | str,
+) -> JourneyPlaywrightPage:
+    if isinstance(page_or_url, JourneyPlaywrightPage):
+        return page_or_url
+    if isinstance(page_or_url, str):
+        return JourneyPlaywrightPage._from_snapshot_json(
+            _snapshot_json_from_url(page_or_url)
+        )
+    raise TypeError("open_page(...) expects a URL string or JourneyPlaywrightPage.")
 
 
 def _cleanup_failure_message(failures: list[Exception]) -> str:
@@ -418,8 +376,5 @@ def _cleanup_failure_message(failures: list[Exception]) -> str:
 __all__ = [
     "PlaywrightCookie",
     "JourneyPlaywrightPage",
-    "PlaywrightPagePayload",
-    "PlaywrightPageState",
-    "capture_page_state",
     "open_page",
 ]
