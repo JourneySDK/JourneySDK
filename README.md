@@ -203,20 +203,19 @@ The Playwright tool packages one page into a resumable step value:
 
 ```python
 from journeysdk.tools.playwright import (
-    PlaywrightPageState,
-    capture_page_state,
+    JourneyPlaywrightPage,
     open_page,
 )
 
 def login_and_capture_session():
-    with open_page(PlaywrightPageState.from_url("https://app.example/login")) as page:
-        page.get_by_role("button", name="Sign in").click()
-        page.wait_for_url("**/dashboard")
-        return capture_page_state(page)
+    page = open_page("https://app.example/login")
+    page.get_by_role("button", name="Sign in").click()
+    page.wait_for_url("**/dashboard")
+    return page
 
-def assert_dashboard(session):
-    with open_page(session) as page:
-        assert page.url.endswith("/dashboard")
+def assert_dashboard(session: JourneyPlaywrightPage):
+    page = open_page(session)
+    assert page.url.endswith("/dashboard")
 ```
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is

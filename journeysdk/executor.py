@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 from types import FrameType
-from typing import Any, ParamSpec, TypeVar, cast
+from typing import Any, NoReturn, ParamSpec, TypeVar, cast
 
 from .errors import (
     AmbiguousStepSelectionError,
@@ -280,21 +281,48 @@ def _callable_execution_error_for_step(
     node: StepNode,
     exc: Exception,
 ) -> CallableExecutionError:
+    details = str(exc)
+    notes = getattr(exc, "__notes__", None)
+    if notes:
+        details = f"{details} {' '.join(str(note) for note in notes)}"
     message = (
         f"Step '{node.label or node.node_id}' failed while it was running: "
-        f"{type(exc).__name__}: {exc}"
+        f"{type(exc).__name__}: {details}"
     )
     hint = "Inspect the step implementation or rerun after fixing the underlying failure."
     if node.retry is not None:
         message = (
             f"Step '{node.label or node.node_id}' failed while it was running "
-            f"and its retry attempts were exhausted: {type(exc).__name__}: {exc}"
+            f"and its retry attempts were exhausted: {type(exc).__name__}: {details}"
         )
         hint = (
             "Inspect the step implementation, or increase step(..., retry=...) if "
             "the failure is expected to clear on its own."
         )
     return CallableExecutionError(message, hint=hint)
+
+
+def _cleanup_failure_message(failures: list[BaseException]) -> str:
+    if len(failures) == 1:
+        failure = failures[0]
+        return (
+            "Step-exit cleanup failed: "
+            f"{type(failure).__name__}: {failure}"
+        )
+    joined = "; ".join(
+        f"{type(failure).__name__}: {failure}"
+        for failure in failures
+    )
+    return f"{len(failures)} step-exit cleanup callbacks failed: {joined}"
+
+
+def _add_cleanup_failure_notes(exc: BaseException, failures: list[BaseException]) -> None:
+    if not failures:
+        return
+    add_note = getattr(exc, "add_note", None)
+    message = _cleanup_failure_message(failures)
+    if callable(add_note):
+        add_note(message)
 
 
 class _StateController:
@@ -836,6 +864,7 @@ class _RunSession:
         self._pending_checkpoint_restore_name = checkpoint_restore_name
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
+        self._active_step_exit_callbacks: list[Callable[[], None]] | None = None
         (
             self._step_key_by_id,
             self._checkpoint_key_by_name,
@@ -1260,9 +1289,73 @@ class _RunSession:
                 context=base_context.child("result"),
                 description=f"step result for '{node.label or node.node_id}'",
             )
-        if self._state_controller is not None and self._rehydration_enabled:
-            self._state_controller.promote_successful_binding(binding_key, binding)
         return binding
+
+    def _discard_step_result(self, node: StepNode) -> None:
+        binding_key = self._step_key_by_id[node.node_id]
+        binding = self._step_bindings.get(binding_key)
+        if binding is not None:
+            binding.has_result = False
+            binding.result = None
+        self._step_result_cache.pop(binding_key, None)
+
+    def _promote_step_result(
+        self,
+        node: StepNode,
+        binding: StepBindingState,
+    ) -> None:
+        if self._state_controller is None or not self._rehydration_enabled:
+            return
+        binding_key = self._step_key_by_id[node.node_id]
+        self._state_controller.promote_successful_binding(binding_key, binding)
+
+    def _handle_step_exception(
+        self,
+        node: StepNode,
+        *,
+        node_index: int,
+        attempt: int,
+        started_at: float,
+        exc: Exception,
+    ) -> NoReturn:
+        duration_seconds = time.perf_counter() - started_at
+        sleep_for = self._schedule_retry(node, node_index)
+        if sleep_for is not None:
+            self._dirty_node_id = None
+            self._persist_state()
+            self._observer.on_retry(
+                case_plan=self.case_plan,
+                node=node,
+                node_index=node_index,
+                attempt=attempt,
+                duration_seconds=duration_seconds,
+                delay_seconds=sleep_for,
+                remaining_retries=self._retry_remaining[node.node_id],
+                error=exc,
+            )
+            raise _RetryRequested(sleep_for=sleep_for)
+        self._retry_remaining.pop(node.node_id, None)
+        self._dirty_node_id = None
+        should_stop = self._record(node_index, node, ok=False, error=str(exc))
+        self._observer.on_step_failure(
+            case_plan=self.case_plan,
+            node=node,
+            node_index=node_index,
+            attempt=attempt,
+            duration_seconds=duration_seconds,
+            error=exc,
+        )
+        failure = _callable_execution_error_for_step(node, exc)
+        if should_stop and self._develop_step_enabled:
+            self._pause_after_step(
+                node,
+                node_index=node_index,
+                attempt=attempt,
+                ok=False,
+                error=str(exc),
+                failure=failure,
+            )
+        raise failure from exc
 
     def _resolve_binding_value(self, template: Any, restored_value: Any) -> Any:
         if isinstance(template, PlannedValue) and template.kind == "step":
@@ -1507,6 +1600,41 @@ class _RunSession:
             )
         return self._state_controller
 
+    def register_step_exit_callback(self, callback: Callable[[], None]) -> None:
+        """Register one callback for the currently executing step attempt."""
+
+        if self._active_step_exit_callbacks is None:
+            raise InvalidBranchUsageError(
+                "Step-exit cleanup can only be registered while a journey step is running.",
+                hint=(
+                    "Call lifecycle-aware tools from inside a function passed to "
+                    "step(...), not during planning, module import, or between steps."
+                ),
+            )
+        self._active_step_exit_callbacks.append(callback)
+
+    def _start_step_exit_lifecycle(self) -> None:
+        if self._active_step_exit_callbacks is not None:
+            raise InvalidBranchUsageError(
+                "A journey step started while another step was already running.",
+                hint="Do not call step(...) from inside another step function.",
+            )
+        self._active_step_exit_callbacks = []
+
+    def _finish_step_exit_lifecycle(self) -> list[BaseException]:
+        callbacks = self._active_step_exit_callbacks
+        self._active_step_exit_callbacks = None
+        if callbacks is None:
+            return []
+
+        failures: list[BaseException] = []
+        for callback in reversed(callbacks):
+            try:
+                callback()
+            except BaseException as exc:  # pragma: no cover - exercised through callers
+                failures.append(exc)
+        return failures
+
     def step(
         self,
         fn: StepFunction[P, R],
@@ -1580,9 +1708,12 @@ class _RunSession:
         )
         started_at = time.perf_counter()
 
+        self._start_step_exit_lifecycle()
         try:
             output = fn(*bound_args, **bound_kwargs)
         except KeyboardInterrupt as exc:
+            cleanup_failures = self._finish_step_exit_lifecycle()
+            _add_cleanup_failure_notes(exc, cleanup_failures)
             self._observer.on_step_interrupted(
                 case_plan=self.case_plan,
                 node=node,
@@ -1593,46 +1724,36 @@ class _RunSession:
             )
             raise
         except Exception as exc:  # pragma: no cover - surfaced to caller
-            duration_seconds = time.perf_counter() - started_at
-            sleep_for = self._schedule_retry(node, node_index)
-            if sleep_for is not None:
-                self._dirty_node_id = None
-                self._persist_state()
-                self._observer.on_retry(
-                    case_plan=self.case_plan,
-                    node=node,
-                    node_index=node_index,
-                    attempt=attempt,
-                    duration_seconds=duration_seconds,
-                    delay_seconds=sleep_for,
-                    remaining_retries=self._retry_remaining[node.node_id],
-                    error=exc,
-                )
-                raise _RetryRequested(sleep_for=sleep_for)
-            self._retry_remaining.pop(node.node_id, None)
-            self._dirty_node_id = None
-            should_stop = self._record(node_index, node, ok=False, error=str(exc))
-            self._observer.on_step_failure(
-                case_plan=self.case_plan,
-                node=node,
+            cleanup_failures = self._finish_step_exit_lifecycle()
+            _add_cleanup_failure_notes(exc, cleanup_failures)
+            self._handle_step_exception(
+                node,
                 node_index=node_index,
                 attempt=attempt,
-                duration_seconds=duration_seconds,
-                error=exc,
+                started_at=started_at,
+                exc=exc,
             )
-            failure = _callable_execution_error_for_step(node, exc)
-            if should_stop and self._develop_step_enabled:
-                self._pause_after_step(
-                    node,
-                    node_index=node_index,
-                    attempt=attempt,
-                    ok=False,
-                    error=str(exc),
-                    failure=failure,
-                )
-            raise failure from exc
 
-        binding = self._set_step_result(node, output)
+        try:
+            binding = self._set_step_result(node, output)
+        except Exception as exc:
+            cleanup_failures = self._finish_step_exit_lifecycle()
+            _add_cleanup_failure_notes(exc, cleanup_failures)
+            raise
+
+        cleanup_failures = self._finish_step_exit_lifecycle()
+        if cleanup_failures:
+            self._discard_step_result(node)
+            cleanup_error = RuntimeError(_cleanup_failure_message(cleanup_failures))
+            self._handle_step_exception(
+                node,
+                node_index=node_index,
+                attempt=attempt,
+                started_at=started_at,
+                exc=cleanup_error,
+            )
+
+        self._promote_step_result(node, binding)
         self._retry_remaining.pop(node.node_id, None)
         self._dirty_node_id = None
         should_stop = self._record(node_index, node, ok=True, result=output)

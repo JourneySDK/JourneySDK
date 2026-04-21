@@ -97,7 +97,7 @@ def test_playwright_resume_example_runs_and_resumes_authenticated_session(
 
         assert state_file.exists()
         assert live_stderr.prompt_seen.is_set()
-        assert "Signed in and captured PlaywrightPageState" in first_capture.err
+        assert "Signed in and returned JourneyPlaywrightPage" in first_capture.err
         assert INTERRUPT_PROMPT_PREFIX in first_capture.err
 
         report = journey.execute(

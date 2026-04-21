@@ -314,7 +314,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         assert live_stderr.prompt_seen.is_set()
         assert "Interrupted." in first_output
         assert "step continue_authenticated_dashboard attempt=1 interrupted duration=" in first_output
-        assert "Signed in and captured PlaywrightPageState" in first_error
+        assert "Signed in and returned JourneyPlaywrightPage" in first_error
         assert INTERRUPT_PROMPT_PREFIX in first_error
 
         second_exit = main(

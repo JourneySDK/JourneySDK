@@ -212,31 +212,30 @@ Read `docs/playwright_resume_journey/playwright_resume_journey.py`.
 The first helper logs in once and serializes the browser state:
 
 ```python
-def login_and_capture_session() -> PlaywrightPageState:
+def login_and_capture_session() -> JourneyPlaywrightPage:
     login_url = f"{ensure_demo_server()}/login"
-    with open_page(PlaywrightPageState.from_url(login_url)) as page:
-        page.get_by_role("button", name="Sign in").click()
-        page.wait_for_url("**/dashboard")
-        page.wait_for_function(
-            "() => document.getElementById('auth-state').textContent === 'authenticated'"
-        )
-        session = capture_page_state(page)
-    return session
+    page = open_page(login_url)
+    page.get_by_role("button", name="Sign in").click()
+    page.wait_for_url("**/dashboard")
+    page.wait_for_function(
+        "() => document.getElementById('auth-state').textContent === 'authenticated'"
+    )
+    return page
 ```
 
 The second helper reopens that saved state and keeps working from there:
 
 ```python
 def continue_authenticated_dashboard(
-    session: PlaywrightPageState,
+    session: JourneyPlaywrightPage,
     pause_seconds: float,
 ) -> dict[str, str]:
-    with open_page(session) as page:
-        auth_state = page.locator("#auth-state").text_content()
-        ...
-        time.sleep(pause_seconds)
-        page.get_by_role("button", name="Complete protected action").click()
-        ...
+    page = open_page(session)
+    auth_state = page.locator("#auth-state").text_content()
+    ...
+    time.sleep(pause_seconds)
+    page.get_by_role("button", name="Complete protected action").click()
+    ...
     return {
         "auth_state": auth_state,
         "status": status_text or "",
@@ -293,8 +292,8 @@ Interrupted.
 Expected stderr:
 
 ```console
-[tutorial] Signed in and captured PlaywrightPageState for http://127.0.0.1:.../dashboard. The next step can reopen this authenticated dashboard from saved state without logging in again.
-[tutorial] continue_authenticated_dashboard() reopened the saved dashboard at http://127.0.0.1:.../dashboard. journey resumes at the step boundary, so this step restarts from the top on resume with the same saved PlaywrightPageState.
+[tutorial] Signed in and returned JourneyPlaywrightPage for http://127.0.0.1:.../dashboard. The next step can reopen this authenticated dashboard from saved state without logging in again.
+[tutorial] continue_authenticated_dashboard() reopened the saved dashboard at http://127.0.0.1:.../dashboard. journey resumes at the step boundary, so this step restarts from the top on resume with the same saved JourneyPlaywrightPage.
 [tutorial] Press Ctrl-C during the next 2.0 seconds to interrupt after the authenticated browser state has already been saved.
 ```
 
@@ -327,14 +326,14 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 Expected stderr:
 
 ```console
-[tutorial] The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved PlaywrightPageState instead of logging in again.
+[tutorial] The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved JourneyPlaywrightPage instead of logging in again.
 ```
 
 ## What To Notice
 
 - Browser logic stays inside normal Python functions. Journey does not wrap Playwright in a separate DSL.
 - The same journey can branch into a webhook case and a local file case.
-- `PlaywrightPageState` is just another step value. That is why Journey can save it, resume it, and pass it into later steps.
+- `JourneyPlaywrightPage` is just another step value. That is why Journey can save it, resume it, and pass it into later steps.
 - Targeted execution is especially useful for UI work because you can rerun only the branch you are debugging.
 
 Continue with [05 Journey Cloud Integrations](05-journey-cloud-integrations.md) when the external resource should be hosted by Journey Cloud instead of the local test process.
