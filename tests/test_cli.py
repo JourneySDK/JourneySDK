@@ -129,9 +129,11 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "journeys.py",
             "--develop-step",
             "target",
+            "--interactive",
         ]
     )
     assert pause_args.develop_step == "target"
+    assert pause_args.interactive is True
     assert pause_args.step is None
 
     with pytest.raises(SystemExit):
@@ -159,6 +161,17 @@ def test_execute_develop_step_rejects_json_mode(
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
     assert "--develop-step cannot be used with --json" in captured.err
+
+
+def test_execute_interactive_requires_develop_step(
+    capsys: pytest.CaptureFixture[str],
+):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--interactive"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "--interactive requires --develop-step" in captured.err
 
 
 def test_pause_choice_reads_one_key_from_tty(
@@ -648,7 +661,7 @@ def test_execute_develop_step_steps_forward_with_continue(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -664,6 +677,208 @@ def test_execute_develop_step_steps_forward_with_continue(
     assert "  step cleanup attempt=1 ok duration=" in output
     assert "Paused after step cleanup attempt=1 ok." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+
+
+def test_execute_develop_step_exits_after_target_without_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+        def prepare():
+            return True
+
+        def publish():
+            return True
+
+        def cleanup():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+            journey.step(cleanup)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "  step prepare attempt=1 ok duration=" in output
+    assert "  step publish attempt=1 ok duration=" in output
+    assert "Paused after step publish attempt=1 ok." in output
+    assert "  step cleanup attempt=1 ok duration=" not in output
+    assert "Press c to continue or r to retry" not in output
+    assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
+
+
+def test_execute_develop_step_state_retries_same_target_by_default_and_later_target_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    state_file = tmp_path / "dev.state"
+    events_file = tmp_path / "events.log"
+    _write(
+        tmp_path / "flow.py",
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare")
+            return True
+
+        def publish():
+            _append("publish")
+            return True
+
+        def cleanup():
+            _append("cleanup")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+            journey.step(cleanup)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    first_exit = main(
+        ["--file", "flow.py", "--develop-step", "publish", "--state", str(state_file)]
+    )
+    first_output = capsys.readouterr().out
+
+    assert first_exit == 0
+    assert "Paused after step publish attempt=1 ok." in first_output
+    assert _event_lines(events_file) == ["prepare", "publish"]
+
+    second_exit = main(
+        ["--file", "flow.py", "--develop-step", "publish", "--state", str(state_file)]
+    )
+    second_output = capsys.readouterr().out
+
+    assert second_exit == 0
+    assert "Paused after step publish attempt=2 ok." in second_output
+    assert _event_lines(events_file) == ["prepare", "publish", "publish"]
+
+    third_exit = main(
+        ["--file", "flow.py", "--develop-step", "cleanup", "--state", str(state_file)]
+    )
+    third_output = capsys.readouterr().out
+
+    assert third_exit == 0
+    assert "Paused after step cleanup attempt=1 ok." in third_output
+    assert _event_lines(events_file) == ["prepare", "publish", "publish", "cleanup"]
+
+
+def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    state_file = tmp_path / "dev.state"
+    attempts_file = tmp_path / "attempts.count"
+    _write(
+        tmp_path / "flow.py",
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        ATTEMPTS = Path({str(attempts_file)!r})
+
+        def _read_attempts():
+            if not ATTEMPTS.exists():
+                return 0
+            return int(ATTEMPTS.read_text(encoding="utf-8"))
+
+        def poll():
+            attempts = _read_attempts() + 1
+            ATTEMPTS.write_text(str(attempts), encoding="utf-8")
+            if attempts < 2:
+                raise RuntimeError("pending")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(poll, retry=10, retry_delay=0)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    first_exit = main(
+        ["--file", "flow.py", "--develop-step", "poll", "--state", str(state_file)]
+    )
+    first_output = capsys.readouterr().out
+
+    assert first_exit == 1
+    assert "Paused after step poll attempt=1 failed (pending)." in first_output
+    assert "retry attempts were exhausted" not in first_output
+    assert state_file.exists()
+
+    second_exit = main(
+        ["--file", "flow.py", "--develop-step", "poll", "--state", str(state_file)]
+    )
+    second_output = capsys.readouterr().out
+
+    assert second_exit == 0
+    assert "Paused after step poll attempt=2 ok." in second_output
+
+
+def test_execute_develop_step_cannot_continue_later_from_failed_pause(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    state_file = tmp_path / "dev.state"
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+
+        def poll():
+            raise RuntimeError("pending")
+
+        def finish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(poll, retry=10, retry_delay=0)
+            journey.step(finish)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    first_exit = main(
+        ["--file", "flow.py", "--develop-step", "poll", "--state", str(state_file)]
+    )
+    capsys.readouterr()
+
+    assert first_exit == 1
+
+    second_exit = main(
+        ["--file", "flow.py", "--develop-step", "finish", "--state", str(state_file)]
+    )
+    second_output = capsys.readouterr().out
+
+    assert second_exit == 1
+    assert "cannot continue to develop step 'finish'" in second_output
+    assert "Rerun the same --develop-step target to retry the failed step" in second_output
 
 
 def test_execute_develop_step_closes_returned_handles_after_continue_prompt(
@@ -695,7 +910,7 @@ def test_execute_develop_step_closes_returned_handles_after_continue_prompt(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     capsys.readouterr()
     assert exit_code == 0
@@ -734,7 +949,7 @@ def test_execute_develop_step_closes_returned_handles_after_retry_prompt(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     capsys.readouterr()
     assert exit_code == 0
@@ -777,7 +992,7 @@ def test_execute_develop_step_closes_returned_handles_when_prompt_is_interrupted
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 130
@@ -807,7 +1022,7 @@ def test_execute_develop_step_cleanup_failure_after_prompt_stops_before_continue
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -862,6 +1077,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
             "publish",
             "--state",
             str(state_file),
+            "--interactive",
         ]
     )
     first_output = capsys.readouterr().out
@@ -880,6 +1096,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
             "publish",
             "--state",
             str(state_file),
+            "--interactive",
         ]
     )
     second_output = capsys.readouterr().out
@@ -931,7 +1148,7 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
         """,
     )
 
-    prompts = iter(["r", "c", "c"])
+    prompts = iter(["r", "r", "c", "c"])
 
     def fake_input(prompt: str = "") -> str:
         print(prompt, end="")
@@ -939,11 +1156,12 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "poll"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "poll", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "  step poll attempt=1 retry duration=" in output
+    assert "  step poll attempt=1 failed duration=" in output
+    assert "Paused after step poll attempt=1 failed (pending)." in output
     assert "  step poll attempt=2 failed duration=" in output
     assert "Paused after step poll attempt=2 failed (pending)." in output
     assert "  step poll attempt=3 ok duration=" in output
@@ -1007,7 +1225,7 @@ def test_execute_develop_step_retry_reloads_changed_step(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -1096,7 +1314,7 @@ def test_execute_develop_step_continue_reloads_later_step_without_rerunning_prio
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -1179,7 +1397,7 @@ def test_execute_develop_step_restarts_when_already_run_step_changes(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -1278,7 +1496,7 @@ def test_execute_develop_step_accepts_future_plan_changes_after_continue(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -1346,6 +1564,7 @@ def test_execute_develop_step_state_resume_reloads_future_change(
             "publish",
             "--state",
             str(state_file),
+            "--interactive",
         ]
     )
     capsys.readouterr()
@@ -1400,6 +1619,7 @@ def test_execute_develop_step_state_resume_reloads_future_change(
             "publish",
             "--state",
             str(state_file),
+            "--interactive",
         ]
     )
 
@@ -1442,14 +1662,14 @@ def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "poll"])
+    exit_code = main(["--file", "flow.py", "--develop-step", "poll", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
-    assert "Paused after step poll attempt=2 failed (pending)." in output
+    assert "Paused after step poll attempt=1 failed (pending)." in output
     assert "ERROR [execute] " in output
     assert "CallableExecutionError" in output
-    assert "retry attempts were exhausted" in output
+    assert "retry attempts were exhausted" not in output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in output
 
 

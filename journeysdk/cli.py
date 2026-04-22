@@ -12,6 +12,7 @@ from pathlib import Path
 from .discovery import DiscoveredJourney, discover_journeys
 from .errors import (
     AmbiguousStepSelectionError,
+    ExecutionStateMismatchError,
     JourneyError,
     JourneySelectionError,
     NoJourneysFoundError,
@@ -27,6 +28,7 @@ from .models import (
     StepNode,
 )
 from .planner import compile_journey
+from .state import load_execution_state
 from .types import JourneyEntrypoint
 
 
@@ -433,21 +435,22 @@ def _select_targeted_journey(
 
 
 def _paused_prompt(paused: _PausedExecution) -> str:
+    status = _paused_status(paused)
+    if paused.paused_step.ok:
+        return f"{status} Press c to continue or r to retry: "
+    return f"{status} Press c to exit with failure or r to retry: "
+
+
+def _paused_status(paused: _PausedExecution) -> str:
     step_name = paused.paused_step.label or paused.paused_step.node_id
     if paused.paused_step.ok:
-        return (
-            f"Paused after step {step_name} attempt={paused.paused_step.attempt} ok. "
-            "Press c to continue or r to retry: "
-        )
+        return f"Paused after step {step_name} attempt={paused.paused_step.attempt} ok."
     if paused.paused_step.error:
         return (
             f"Paused after step {step_name} attempt={paused.paused_step.attempt} "
-            f"failed ({paused.paused_step.error}). Press c to exit with failure or r to retry: "
+            f"failed ({paused.paused_step.error})."
         )
-    return (
-        f"Paused after step {step_name} attempt={paused.paused_step.attempt} failed. "
-        "Press c to exit with failure or r to retry: "
-    )
+    return f"Paused after step {step_name} attempt={paused.paused_step.attempt} failed."
 
 
 def _read_pause_choice(prompt: str) -> str:
@@ -519,6 +522,69 @@ def _temporary_pause_state_path() -> Path:
         path = Path(handle.name)
     path.unlink(missing_ok=True)
     return path
+
+
+def _selected_develop_match(
+    plan: JourneyPlan,
+    develop_step: str,
+) -> tuple[CasePlan, int] | None:
+    matches = _locate_step_matches(plan, develop_step)
+    if not matches:
+        return None
+    matching_case_ids = {case.case_id for case, _ in matches}
+    if len(matching_case_ids) != 1:
+        return None
+    return min(matches, key=lambda item: item[1])
+
+
+def _infer_develop_pause_action(
+    state_path: Path,
+    *,
+    selected: _CompiledJourney,
+    develop_step: str,
+) -> str | None:
+    state = load_execution_state(state_path)
+    if state is None or state.active_case is None:
+        return None
+    paused_step = state.active_case.paused_step
+    if paused_step is None:
+        return None
+
+    match = _selected_develop_match(selected.plan, develop_step)
+    if match is None:
+        return None
+    case_plan, target_index = match
+    if state.active_case.case_id != case_plan.case_id:
+        return None
+
+    paused_name = paused_step.label or paused_step.node_id
+    if paused_name == develop_step:
+        return "retry"
+    if target_index > paused_step.node_index:
+        if not paused_step.ok:
+            raise ExecutionStateMismatchError(
+                (
+                    f"The journey state file '{state_path}' is paused after failed step "
+                    f"{paused_name!r}, so it cannot continue to develop step "
+                    f"{develop_step!r}."
+                ),
+                hint=(
+                    "Rerun the same --develop-step target to retry the failed step, "
+                    "or delete the state file to start fresh."
+                ),
+            )
+        return "continue"
+    raise ExecutionStateMismatchError(
+        (
+            f"The journey state file '{state_path}' is paused after step "
+            f"{paused_name!r}, which is not before requested develop step "
+            f"{develop_step!r}."
+        ),
+        hint=(
+            "Rerun the paused --develop-step target to retry it, target the next "
+            "later step to continue, or delete the state file to start fresh."
+        ),
+    )
 
 
 def _execute_all_targets(
@@ -674,6 +740,7 @@ def _execute_target_pause(
     develop_step: str,
     state: str | None = None,
     stream_live: bool = False,
+    interactive: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     selected, errors = _select_targeted_journey(compiled, step=develop_step)
     if selected is None:
@@ -694,6 +761,38 @@ def _execute_target_pause(
             else None
         )
         pause_action: str | None = None
+
+        if not interactive:
+            if state is not None:
+                pause_action = _infer_develop_pause_action(
+                    Path(state),
+                    selected=selected,
+                    develop_step=develop_step,
+                )
+            outcome = _execute_plan(
+                selected.function,
+                plan=selected.plan,
+                develop_step=develop_step,
+                pause_action=pause_action,
+                state=str(managed_state),
+                observer=observer,
+            )
+            if isinstance(outcome, _PausedExecution):
+                outcome.close_pending_exits()
+                if stream_live:
+                    print(_paused_status(outcome), flush=True)
+                if not outcome.paused_step.ok:
+                    return [], [_paused_failure_error(selected, outcome)]
+                return [], []
+
+            return [
+                _ExecutedJourney(
+                    file_path=selected.file_path,
+                    journey_name=selected.journey_name,
+                    plan=selected.plan,
+                    report=outcome,
+                )
+            ], []
 
         while True:
             outcome = _execute_plan(
@@ -940,6 +1039,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     develop_step=args.develop_step,
                     state=args.state,
                     stream_live=not args.json,
+                    interactive=args.interactive,
                 )
             else:
                 run_results, run_errors = _execute_target_step(
@@ -985,7 +1085,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     target_group.add_argument(
         "--develop-step",
-        help="Interactively pause after one target step label and each later step in that case",
+        help="Run one target step label in development mode and pause after it",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Prompt to continue or retry after each --develop-step pause",
     )
     parser.add_argument("--state", help="Persist and resume execution state in one file")
     parser.add_argument("--json", action="store_true", help="Emit execution JSON")
@@ -1001,6 +1106,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.interactive and getattr(args, "develop_step", None) is None:
+        parser.error("--interactive requires --develop-step")
     if getattr(args, "develop_step", None) is not None and args.json:
         parser.error("--develop-step cannot be used with --json")
     return _cmd_execute(args)

@@ -342,6 +342,8 @@ def _case_rehydration_maps(
 def _callable_execution_error_for_step(
     node: StepNode,
     exc: Exception,
+    *,
+    retry_attempts_exhausted: bool = True,
 ) -> CallableExecutionError:
     details = str(exc)
     notes = getattr(exc, "__notes__", None)
@@ -352,7 +354,7 @@ def _callable_execution_error_for_step(
         f"{type(exc).__name__}: {details}"
     )
     hint = "Inspect the step implementation or rerun after fixing the underlying failure."
-    if node.retry is not None:
+    if node.retry is not None and retry_attempts_exhausted:
         message = (
             f"Step '{node.label or node.node_id}' failed while it was running "
             f"and its retry attempts were exhausted: {type(exc).__name__}: {details}"
@@ -1090,11 +1092,22 @@ class _RunSession:
 
         paused_step = self._paused_step
         if action == "continue":
+            if not paused_step.ok:
+                step_name = paused_step.label or paused_step.node_id
+                raise ExecutionStateMismatchError(
+                    f"Cannot continue past failed develop step '{step_name}'.",
+                    hint="Retry the failed develop step first, or delete the state file to start fresh.",
+                )
             self.replay_from_index = paused_step.node_index + 1
-            self.stop_after_index = _next_step_index_after(
+            next_step_index = _next_step_index_after(
                 self.case_plan,
                 paused_step.node_index,
             )
+            if (
+                self.stop_after_index is None
+                or self.stop_after_index <= paused_step.node_index
+            ):
+                self.stop_after_index = next_step_index
             self._pending_checkpoint_restore_name = None
             self._paused_step = None
             self._persist_state()
@@ -1382,6 +1395,39 @@ class _RunSession:
         exc: Exception,
     ) -> NoReturn:
         duration_seconds = time.perf_counter() - started_at
+        should_pause_without_retry = (
+            self._develop_step_enabled
+            and self.stop_after_index is not None
+            and node_index == self.stop_after_index
+        )
+        if should_pause_without_retry:
+            self._retry_remaining.pop(node.node_id, None)
+            self._dirty_node_id = None
+            should_stop = self._record(node_index, node, ok=False, error=str(exc))
+            self._observer.on_step_failure(
+                case_plan=self.case_plan,
+                node=node,
+                node_index=node_index,
+                attempt=attempt,
+                duration_seconds=duration_seconds,
+                error=exc,
+            )
+            failure = _callable_execution_error_for_step(
+                node,
+                exc,
+                retry_attempts_exhausted=False,
+            )
+            if should_stop:
+                self._pause_after_step(
+                    node,
+                    node_index=node_index,
+                    attempt=attempt,
+                    ok=False,
+                    error=str(exc),
+                    failure=failure,
+                )
+            raise failure from exc
+
         sleep_for = self._schedule_retry(node, node_index)
         if sleep_for is not None:
             self._dirty_node_id = None
@@ -2373,7 +2419,7 @@ def _refresh_develop_state_for_plan(
         or state.journey_id != journey_plan.journey_id
         or state.function_ref != journey_plan.function_ref
         or state.step != step
-        or state.develop_step != develop_step
+        or state.develop_step is None
         or state.active_case is None
         or state.active_case.paused_step is None
         or not 0 <= state.current_case_index < len(selected_cases)
@@ -2436,7 +2482,10 @@ def _refresh_develop_state_for_plan(
         label=paused_node.label,
         node_index=paused_index,
     )
-    active_case.stop_after_index = paused_index
+    if pause_action == "continue":
+        active_case.stop_after_index = selected_case.stop_after_index
+    else:
+        active_case.stop_after_index = paused_index
     if trim_boundary is not None:
         active_case.snapshot = _trim_snapshot_to_prefix(
             active_case.snapshot,
@@ -2447,6 +2496,7 @@ def _refresh_develop_state_for_plan(
         active_case.dirty_node_id = None
 
     state.plan_signature = new_signature
+    state.develop_step = develop_step
     state.selected_cases = expected_cases
     save_execution_state(path, state)
     return _DevelopStateRefresh()

@@ -102,18 +102,11 @@ def test_branching_readme_target_command_reports_replay_anchor(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
-def test_branching_readme_develop_step_command_pauses_then_completes(
+def test_branching_readme_develop_step_command_pauses_and_exits(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    prompts = iter(["c"])
-
-    def fake_input(prompt: str = "") -> str:
-        print(prompt, end="")
-        return next(prompts)
-
     monkeypatch.chdir(_repo_root())
-    monkeypatch.setattr("builtins.input", fake_input)
 
     exit_code = main(
         [
@@ -127,7 +120,7 @@ def test_branching_readme_develop_step_command_pauses_then_completes(
 
     assert exit_code == 0
     assert "Paused after step assert_manual_review_path attempt=1 ok." in output
-    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+    assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
 
 
 def test_retry_readme_commands_show_retry_behavior(

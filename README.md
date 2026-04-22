@@ -163,9 +163,11 @@ Official tools that open live resources inside a step should return an object
 with the standard context-manager `__exit__(exc_type, exc, traceback)` method.
 After a step function returns, Journey stores the returned value, discovers
 returned `__exit__` handles, and closes them before the next step runs. In
-`--develop-step` mode, Journey stores the returned value and shows the
-continue/retry prompt while those handles are still live, then closes them
-after the user chooses `continue` or `retry`, or cancels the prompt.
+noninteractive `--develop-step` mode, Journey stores the returned value and
+closes returned handles before the command exits. With
+`--develop-step --interactive`, Journey stores the returned value and shows the
+continue/retry prompt while those handles are still live, then closes them after
+the user chooses `continue` or `retry`, or cancels the prompt.
 
 Use this pattern when a tool owns a resource that should not outlive the step
 attempt:
@@ -321,10 +323,13 @@ each case start, branch selection, step attempt, retry, step status, and case co
 
 CLI commands discover functions annotated with `@journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
-flow that reaches a target step label. Use `--develop-step` to run that same single case interactively, pausing
-after the target step and each later step so you can continue or retry while iterating on one part of the journey.
-Each continue or retry reloads and recompiles the journey file first, so edits to the current step, later steps, or
-future journey structure are picked up without restarting the CLI. If the already-run part of the selected case
+flow that reaches a target step label. Use `--develop-step` to run that same single case in development mode. By
+default it executes one target step, stores state, prints the paused result, and exits so coding agents can iterate
+with synchronous command calls. Run the same `--develop-step LABEL --state dev.state` command to retry that step, or
+target the next step with the same state file to continue. Add `--interactive` to keep the current process open and
+prompt after each paused step. Develop-step retries are unlimited and do not spend the step's configured
+`step(..., retry=...)` budget. Each retry or continue reloads and recompiles the journey file first, so edits to the
+current step, later steps, or future journey structure are picked up. If the already-run part of the selected case
 changed, Journey starts that case over so the reused prefix is not stale.
 
 ## Core principles
@@ -334,7 +339,7 @@ changed, Journey starts that case over so the reused prefix is not stale.
 - **Tool-friendly**: integrate external systems and domain-specific tools without forcing them into a custom DSL
 - **Journey-centric**: optimize around the full business process rather than isolated pages or API calls
 - **Single-step execution**: make it cheap to run only the flow that reaches a target step label during development
-- **Interactive step retries**: pause on one target step and each later step so local iteration feels fast
+- **Fast step iteration**: retry one paused develop step from saved state without replaying the whole journey
 
 ## Quick start
 
@@ -359,10 +364,18 @@ Execute only the path that reaches a target step label:
 uv run journey --step assert_local_file_contents
 ```
 
-Execute one target path interactively and pause after that step and each later step:
+Execute one target path in development mode and stop after the target step:
 
 ```bash
-uv run journey --develop-step assert_local_file_contents
+uv run journey --develop-step assert_local_file_contents --state dev.state
+```
+
+Rerun that command to retry the same step after editing code. To continue, target
+the next step with the same state file. For a human prompt loop, add
+`--interactive`:
+
+```bash
+uv run journey --develop-step assert_local_file_contents --state dev.state --interactive
 ```
 
 The cloud webhook helpers use `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL` at execution time. Point those

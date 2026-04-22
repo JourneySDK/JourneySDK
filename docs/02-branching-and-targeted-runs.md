@@ -91,10 +91,10 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 
 That output is the reason `--step` is so useful during development: Journey chooses the single case that reaches the label you care about.
 
-### Pause After the Target Step While You Iterate
+### Stop After the Target Step While You Iterate
 
 ```bash
-uv run journey --file docs/branching_journey/branching_journey.py --develop-step assert_manual_review_path
+uv run journey --file docs/branching_journey/branching_journey.py --develop-step assert_manual_review_path --state dev.state
 ```
 
 ```console
@@ -107,10 +107,10 @@ Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
 Paused after step assert_manual_review_path attempt=1 ok.
-Summary: 1 journey executed, 1 case executed, 0 failed
+Summary: 0 journeys executed, 0 cases executed, 0 failed
 ```
 
-Use `--develop-step` when you are actively editing one branch and want Journey to stop at the point you care about instead of rerunning the whole world every time. After every continue or retry choice, Journey reloads and recompiles the selected journey file before it runs more code. Edits to the retried step or later steps are picked up immediately; if code that Journey would have reused from the already-run prefix changed, the selected case starts again from the beginning.
+Use `--develop-step` when you are actively editing one branch and want Journey to stop at the point you care about instead of rerunning the whole world every time. Rerun the same command to retry the paused step after editing code, or target the next step with the same state file to continue. Develop-step retries are unlimited and do not spend the step's configured `step(..., retry=...)` budget. Add `--interactive` when you want Journey to keep the process open and prompt after each paused step. Journey reloads and recompiles the selected journey file before each retry or continue, so edits to the retried step or later steps are picked up immediately; if code that Journey would have reused from the already-run prefix changed, the selected case starts again from the beginning.
 
 ## Rehydrate Later Cases from a Checkpoint
 
@@ -173,7 +173,7 @@ The `replay_anchor=cp_1` part is what matters. It tells you which checkpoint Jou
 - Authoring stays sequential, even when execution becomes multi-case.
 - `checkpoint()` is not just a marker for humans. It is a replay anchor for targeted runs and later branch execution.
 - External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, checkpoint rewinds, and `--state` all use the same rehydration path.
-- `--step` picks one case. `--develop-step` picks one case and then pauses so you can iterate faster.
+- `--step` picks one case. `--develop-step` picks one case and stops after the target so you can iterate faster.
 - Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.
 
 Continue with [03 Retries and Resume](03-retries-and-resume.md) when the path is linear but the world around it is not ready yet.
