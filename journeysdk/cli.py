@@ -705,7 +705,21 @@ def _execute_target_pause(
                 observer=observer,
             )
             if isinstance(outcome, _PausedExecution):
-                choice = _prompt_for_pause_action(outcome)
+                try:
+                    choice = _prompt_for_pause_action(outcome)
+                except KeyboardInterrupt as exc:
+                    try:
+                        outcome.close_pending_exits()
+                    except Exception as cleanup_exc:
+                        exc.add_note(str(cleanup_exc))
+                    raise
+                except EOFError as exc:
+                    try:
+                        outcome.close_pending_exits()
+                    except Exception as cleanup_exc:
+                        exc.add_note(str(cleanup_exc))
+                    raise
+                outcome.close_pending_exits()
                 if choice == "c":
                     if not outcome.paused_step.ok:
                         return [], [_paused_failure_error(selected, outcome)]

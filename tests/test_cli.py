@@ -24,6 +24,81 @@ def _assert_ordered(output: str, *needles: str) -> None:
         position = next_position
 
 
+def _append_line(path: Path, line: str) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def _event_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def _write_develop_lifecycle_flow(
+    flow_file: Path,
+    events_file: Path,
+    *,
+    include_cleanup: bool,
+    fail_exit: bool = False,
+) -> None:
+    cleanup_step = """
+        def cleanup():
+            _append("cleanup")
+            return True
+    """ if include_cleanup else ""
+    cleanup_call = "journey.step(cleanup)" if include_cleanup else ""
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        class LifecycleValue:
+            def __init__(self, name: str, closed: bool = False):
+                self.name = name
+                self.closed = closed
+
+            def __store__(self, context):
+                del context
+                state = "closed" if self.closed else "open"
+                _append(f"store_{{self.name}}_{{state}}")
+                return {{"name": self.name, "closed": self.closed}}
+
+            @classmethod
+            def __restore__(cls, payload, context):
+                del context
+                return cls(payload["name"], closed=payload["closed"])
+
+            def __exit__(self, exc_type, exc, traceback):
+                del exc_type, exc, traceback
+                if self.closed:
+                    return
+                self.closed = True
+                _append(f"exit_{{self.name}}")
+                if {fail_exit!r}:
+                    raise RuntimeError("close failed")
+
+        def publish():
+            _append("publish")
+            return LifecycleValue("publish")
+
+        {cleanup_step}
+
+        @journey.journey
+        def flow():
+            journey.step(publish)
+            {cleanup_call}
+        """,
+    )
+
+
 def test_parser_accepts_new_flags_and_rejects_removed_forms():
     parser = build_parser()
 
@@ -589,6 +664,158 @@ def test_execute_develop_step_steps_forward_with_continue(
     assert "  step cleanup attempt=1 ok duration=" in output
     assert "Paused after step cleanup attempt=1 ok." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
+
+
+def test_execute_develop_step_closes_returned_handles_after_continue_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write_develop_lifecycle_flow(
+        flow_file,
+        events_file,
+        include_cleanup=True,
+    )
+
+    prompts = iter(["c", "c"])
+    prompt_count = {"value": 0}
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        prompt_count["value"] += 1
+        lines = _event_lines(events_file)
+        if prompt_count["value"] == 1:
+            assert "exit_publish" not in lines
+            _append_line(events_file, "prompt_publish")
+        else:
+            _append_line(events_file, "prompt_cleanup")
+        return next(prompts)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    capsys.readouterr()
+    assert exit_code == 0
+    lines = _event_lines(events_file)
+    assert lines.index("prompt_publish") < lines.index("exit_publish")
+    assert lines.index("exit_publish") < lines.index("cleanup")
+
+
+def test_execute_develop_step_closes_returned_handles_after_retry_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write_develop_lifecycle_flow(
+        flow_file,
+        events_file,
+        include_cleanup=False,
+    )
+
+    prompts = iter(["r", "c"])
+    prompt_count = {"value": 0}
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        prompt_count["value"] += 1
+        lines = _event_lines(events_file)
+        if prompt_count["value"] == 1:
+            assert "exit_publish" not in lines
+            _append_line(events_file, "prompt_retry")
+        else:
+            assert lines.count("exit_publish") == 1
+            _append_line(events_file, "prompt_continue")
+        return next(prompts)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    capsys.readouterr()
+    assert exit_code == 0
+    lines = _event_lines(events_file)
+    publish_indices = [
+        index
+        for index, line in enumerate(lines)
+        if line == "publish"
+    ]
+    exit_indices = [
+        index
+        for index, line in enumerate(lines)
+        if line == "exit_publish"
+    ]
+    assert len(publish_indices) == 2
+    assert len(exit_indices) == 2
+    assert lines.index("prompt_retry") < exit_indices[0] < publish_indices[1]
+    assert lines.index("prompt_continue") < exit_indices[1]
+
+
+def test_execute_develop_step_closes_returned_handles_when_prompt_is_interrupted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write_develop_lifecycle_flow(
+        flow_file,
+        events_file,
+        include_cleanup=False,
+    )
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        lines = _event_lines(events_file)
+        assert "exit_publish" not in lines
+        _append_line(events_file, "prompt_interrupt")
+        raise KeyboardInterrupt()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 130
+    assert "Interrupted." in output
+    lines = _event_lines(events_file)
+    assert lines.index("prompt_interrupt") < lines.index("exit_publish")
+
+
+def test_execute_develop_step_cleanup_failure_after_prompt_stops_before_continue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write_develop_lifecycle_flow(
+        flow_file,
+        events_file,
+        include_cleanup=True,
+        fail_exit=True,
+    )
+
+    def fake_input(prompt: str = "") -> str:
+        print(prompt, end="")
+        _append_line(events_file, "prompt_continue")
+        return "c"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("builtins.input", fake_input)
+    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "Step-exit cleanup failed" in output
+    assert "close failed" in output
+    lines = _event_lines(events_file)
+    assert lines.index("prompt_continue") < lines.index("exit_publish")
+    assert "cleanup" not in lines
 
 
 def test_execute_develop_step_resume_reopens_prompt_after_interrupt(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from types import FrameType, TracebackType
 from typing import Any, NoReturn, ParamSpec, Protocol, TypeVar, cast
@@ -75,6 +75,7 @@ class _RetryRequested(Exception):
 @dataclass
 class _PauseRequested(Exception):
     paused_step: PausedStepState
+    pending_exit_objects: tuple["_StepExitObject", ...] = ()
 
 
 class _StepExitObject(Protocol):
@@ -123,9 +124,25 @@ def _step_exit_objects_from_value(value: Any) -> list[_StepExitObject]:
     return objects
 
 
-@dataclass(frozen=True)
+@dataclass
 class _PausedExecution:
     paused_step: PausedStepState
+    _pending_exit_objects: tuple[_StepExitObject, ...] = ()
+    _pending_exits_closed: bool = field(default=False, init=False, repr=False)
+
+    def close_pending_exits(self) -> None:
+        if self._pending_exits_closed:
+            return
+        self._pending_exits_closed = True
+
+        failures: list[BaseException] = []
+        for value in reversed(self._pending_exit_objects):
+            try:
+                value.__exit__(None, None, None)
+            except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
+                failures.append(cleanup_exc)
+        if failures:
+            raise RuntimeError(_cleanup_failure_message(failures))
 
 
 @dataclass(frozen=True)
@@ -1260,6 +1277,7 @@ class _RunSession:
         ok: bool,
         error: str | None = None,
         failure: CallableExecutionError | None = None,
+        pending_exit_objects: tuple[_StepExitObject, ...] = (),
     ) -> None:
         paused_step = PausedStepState(
             node_id=node.node_id,
@@ -1274,7 +1292,7 @@ class _RunSession:
         self._paused_step = paused_step
         self._dirty_node_id = None
         self._persist_state()
-        raise _PauseRequested(paused_step)
+        raise _PauseRequested(paused_step, pending_exit_objects)
 
     def _store_step_inputs(
         self,
@@ -1787,6 +1805,45 @@ class _RunSession:
             )
             _add_cleanup_failure_notes(exc, cleanup_failures)
             raise
+
+        pending_exit_objects = tuple(_step_exit_objects_from_value(output))
+        should_pause_for_develop = (
+            self._develop_step_enabled
+            and self.stop_after_index is not None
+            and node_index == self.stop_after_index
+        )
+        if should_pause_for_develop:
+            try:
+                self._promote_step_result(node, binding)
+                self._retry_remaining.pop(node.node_id, None)
+                self._dirty_node_id = None
+                should_stop = self._record(node_index, node, ok=True, result=output)
+                self._observer.on_step_success(
+                    case_plan=self.case_plan,
+                    node=node,
+                    node_index=node_index,
+                    attempt=attempt,
+                    duration_seconds=time.perf_counter() - started_at,
+                )
+                if should_stop:
+                    self._pause_after_step(
+                        node,
+                        node_index=node_index,
+                        attempt=attempt,
+                        ok=True,
+                        pending_exit_objects=pending_exit_objects,
+                    )
+            except _PauseRequested:
+                raise
+            except Exception as exc:
+                cleanup_failures = self._exit_step_return_values(
+                    output,
+                    type(exc),
+                    exc,
+                    exc.__traceback__,
+                )
+                _add_cleanup_failure_notes(exc, cleanup_failures)
+                raise
 
         cleanup_failures = self._exit_step_return_values(output)
         if cleanup_failures:
@@ -2529,7 +2586,10 @@ def _execute_plan(
                         time.sleep(retry_request.sleep_for)
                     continue
                 except _PauseRequested as pause_request:
-                    return _PausedExecution(pause_request.paused_step)
+                    return _PausedExecution(
+                        pause_request.paused_step,
+                        pause_request.pending_exit_objects,
+                    )
                 except _StopCase:
                     stopped_label = step
                 if (

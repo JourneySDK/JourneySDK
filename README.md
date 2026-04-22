@@ -162,7 +162,10 @@ steps reopen it with `open_page(saved_page)`.
 Official tools that open live resources inside a step should return an object
 with the standard context-manager `__exit__(exc_type, exc, traceback)` method.
 After a step function returns, Journey stores the returned value, discovers
-returned `__exit__` handles, and closes them before the next step runs.
+returned `__exit__` handles, and closes them before the next step runs. In
+`--develop-step` mode, Journey stores the returned value and shows the
+continue/retry prompt while those handles are still live, then closes them
+after the user chooses `continue` or `retry`, or cancels the prompt.
 
 Use this pattern when a tool owns a resource that should not outlive the step
 attempt:

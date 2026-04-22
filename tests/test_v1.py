@@ -1250,7 +1250,7 @@ def test_execute_does_not_cleanup_unreturned_values_on_failure_retry_and_interru
     ]
 
 
-def test_execute_returned_step_exit_objects_run_before_develop_step_pause(tmp_path):
+def test_execute_returned_step_exit_objects_defer_during_develop_step_pause(tmp_path):
     events: list[str] = []
     state_file = tmp_path / "pause.state"
 
@@ -1271,11 +1271,13 @@ def test_execute_returned_step_exit_objects_run_before_develop_step_pause(tmp_pa
     )
 
     assert isinstance(paused, journey_executor._PausedExecution)
-    assert _without_closed_store_events(events) == [
-        "publish",
-        "cleanup:store_open",
-        "cleanup:None",
-    ]
+    assert "publish" in events
+    assert "cleanup:store_open" in events
+    assert "cleanup:None" not in events
+    paused.close_pending_exits()
+    assert events[-1] == "cleanup:None"
+    paused.close_pending_exits()
+    assert events[-1] == "cleanup:None"
 
 
 def test_execute_step_exit_cleanup_failure_fails_successful_step(tmp_path):
