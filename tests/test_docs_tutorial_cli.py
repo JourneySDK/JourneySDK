@@ -119,7 +119,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
     output = capsys.readouterr().out
 
     assert exit_code == 0
-    assert "Paused after step assert_manual_review_path attempt=1 ok." in output
+    assert "Development mode stopped after step assert_manual_review_path attempt=1 ok." in output
     assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
 
 

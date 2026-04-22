@@ -669,13 +669,13 @@ def test_execute_develop_step_steps_forward_with_continue(
         output,
         "Plan",
         "Execution",
-        "Paused after step publish attempt=1 ok.",
+        "Development mode paused after step publish attempt=1 ok.",
     )
     assert "  step prepare attempt=1 ok duration=" in output
     assert "  step publish attempt=1 ok duration=" in output
-    assert "Paused after step publish attempt=1 ok." in output
+    assert "Development mode paused after step publish attempt=1 ok." in output
     assert "  step cleanup attempt=1 ok duration=" in output
-    assert "Paused after step cleanup attempt=1 ok." in output
+    assert "Development mode paused after step cleanup attempt=1 ok." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -712,7 +712,7 @@ def test_execute_develop_step_exits_after_target_without_prompt(
     assert exit_code == 0
     assert "  step prepare attempt=1 ok duration=" in output
     assert "  step publish attempt=1 ok duration=" in output
-    assert "Paused after step publish attempt=1 ok." in output
+    assert "Development mode stopped after step publish attempt=1 ok." in output
     assert "  step cleanup attempt=1 ok duration=" not in output
     assert "Press c to continue or r to retry" not in output
     assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
@@ -764,7 +764,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     first_output = capsys.readouterr().out
 
     assert first_exit == 0
-    assert "Paused after step publish attempt=1 ok." in first_output
+    assert "Development mode stopped after step publish attempt=1 ok." in first_output
     assert _event_lines(events_file) == ["prepare", "publish"]
 
     second_exit = main(
@@ -773,7 +773,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     second_output = capsys.readouterr().out
 
     assert second_exit == 0
-    assert "Paused after step publish attempt=2 ok." in second_output
+    assert "Development mode stopped after step publish attempt=2 ok." in second_output
     assert _event_lines(events_file) == ["prepare", "publish", "publish"]
 
     third_exit = main(
@@ -782,7 +782,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     third_output = capsys.readouterr().out
 
     assert third_exit == 0
-    assert "Paused after step cleanup attempt=1 ok." in third_output
+    assert "Development mode stopped after step cleanup attempt=1 ok." in third_output
     assert _event_lines(events_file) == ["prepare", "publish", "publish", "cleanup"]
 
 
@@ -826,7 +826,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     first_output = capsys.readouterr().out
 
     assert first_exit == 1
-    assert "Paused after step poll attempt=1 failed (pending)." in first_output
+    assert "Development mode stopped after step poll attempt=1 failed (pending)." in first_output
     assert "retry attempts were exhausted" not in first_output
     assert state_file.exists()
 
@@ -836,7 +836,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     second_output = capsys.readouterr().out
 
     assert second_exit == 0
-    assert "Paused after step poll attempt=2 ok." in second_output
+    assert "Development mode stopped after step poll attempt=2 ok." in second_output
 
 
 def test_execute_develop_step_cannot_continue_later_from_failed_pause(
@@ -1084,7 +1084,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
 
     assert first_exit == 130
     assert state_file.exists()
-    assert "Paused after step publish attempt=1 ok." in first_output
+    assert "Development mode paused after step publish attempt=1 ok." in first_output
     assert "Interrupted." in first_output
 
     monkeypatch.setattr("builtins.input", resume_input)
@@ -1103,7 +1103,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
 
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_output
-    assert "Paused after step publish attempt=1 ok." in second_output
+    assert "Development mode paused after step publish attempt=1 ok." in second_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in second_output
 
 
@@ -1161,13 +1161,13 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "  step poll attempt=1 failed duration=" in output
-    assert "Paused after step poll attempt=1 failed (pending)." in output
+    assert "Development mode paused after step poll attempt=1 failed (pending)." in output
     assert "  step poll attempt=2 failed duration=" in output
-    assert "Paused after step poll attempt=2 failed (pending)." in output
+    assert "Development mode paused after step poll attempt=2 failed (pending)." in output
     assert "  step poll attempt=3 ok duration=" in output
-    assert "Paused after step poll attempt=3 ok." in output
+    assert "Development mode paused after step poll attempt=3 ok." in output
     assert "  step finish attempt=1 ok duration=" in output
-    assert "Paused after step finish attempt=1 ok." in output
+    assert "Development mode paused after step finish attempt=1 ok." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -1501,7 +1501,7 @@ def test_execute_develop_step_accepts_future_plan_changes_after_continue(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "restarting case_1" not in output
-    assert "Paused after step extra attempt=1 ok." in output
+    assert "Development mode paused after step extra attempt=1 ok." in output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
         "prepare",
         "publish",
@@ -1666,7 +1666,7 @@ def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
 
     output = capsys.readouterr().out
     assert exit_code == 1
-    assert "Paused after step poll attempt=1 failed (pending)." in output
+    assert "Development mode paused after step poll attempt=1 failed (pending)." in output
     assert "ERROR [execute] " in output
     assert "CallableExecutionError" in output
     assert "retry attempts were exhausted" not in output

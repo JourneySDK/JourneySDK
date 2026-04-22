@@ -435,22 +435,30 @@ def _select_targeted_journey(
 
 
 def _paused_prompt(paused: _PausedExecution) -> str:
-    status = _paused_status(paused)
+    status = _step_stop_status(paused, verb="Paused")
     if paused.paused_step.ok:
         return f"{status} Press c to continue or r to retry: "
     return f"{status} Press c to exit with failure or r to retry: "
 
 
-def _paused_status(paused: _PausedExecution) -> str:
+def _step_stop_status(paused: _PausedExecution, *, verb: str) -> str:
+    action = verb.lower()
     step_name = paused.paused_step.label or paused.paused_step.node_id
     if paused.paused_step.ok:
-        return f"Paused after step {step_name} attempt={paused.paused_step.attempt} ok."
+        return (
+            f"Development mode {action} after step "
+            f"{step_name} attempt={paused.paused_step.attempt} ok."
+        )
     if paused.paused_step.error:
         return (
-            f"Paused after step {step_name} attempt={paused.paused_step.attempt} "
+            f"Development mode {action} after step "
+            f"{step_name} attempt={paused.paused_step.attempt} "
             f"failed ({paused.paused_step.error})."
         )
-    return f"Paused after step {step_name} attempt={paused.paused_step.attempt} failed."
+    return (
+        f"Development mode {action} after step "
+        f"{step_name} attempt={paused.paused_step.attempt} failed."
+    )
 
 
 def _read_pause_choice(prompt: str) -> str:
@@ -780,7 +788,7 @@ def _execute_target_pause(
             if isinstance(outcome, _PausedExecution):
                 outcome.close_pending_exits()
                 if stream_live:
-                    print(_paused_status(outcome), flush=True)
+                    print(_step_stop_status(outcome, verb="Stopped"), flush=True)
                 if not outcome.paused_step.ok:
                     return [], [_paused_failure_error(selected, outcome)]
                 return [], []

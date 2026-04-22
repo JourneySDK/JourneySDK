@@ -106,7 +106,7 @@ journey_id=branching_journey function_ref=...
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Paused after step assert_manual_review_path attempt=1 ok.
+Development mode stopped after step assert_manual_review_path attempt=1 ok.
 Summary: 0 journeys executed, 0 cases executed, 0 failed
 ```
 
