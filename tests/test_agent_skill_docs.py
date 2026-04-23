@@ -26,6 +26,22 @@ def test_journey_developer_skill_covers_agent_development_loop():
     assert "non-human agent runs" in lower_skill_text
 
 
+def test_journey_developer_skill_explains_when_journey_sdk_applies():
+    skill_text = (
+        _public_root() / "skills" / "journey-developer" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    lower_skill_text = skill_text.lower()
+
+    assert "workflow-as-code QA toolkit" in skill_text
+    assert "testing long, branching, async, cross-system user journeys" in skill_text
+    assert "browsers" in lower_skill_text
+    assert "apis" in lower_skill_text
+    assert "webhooks" in lower_skill_text
+    assert "delayed side effects" in lower_skill_text
+    assert "generic python scripts" in lower_skill_text
+    assert "unrelated workflow automation" in lower_skill_text
+
+
 def test_public_agents_reminds_authors_to_keep_skill_aligned():
     agents_text = (_public_root() / "AGENTS.md").read_text(encoding="utf-8")
 

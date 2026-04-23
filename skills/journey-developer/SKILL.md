@@ -1,9 +1,15 @@
 ---
 name: journey-developer
-description: Develop, execute, debug, and maintain Journey SDK journey files. Use when creating or updating Python journeys that use journeysdk primitives, running Journey CLI full or targeted executions, iterating with --develop-step and --state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
+description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives, running Journey CLI full or targeted step executions, iterating with --develop-step and --state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
 ---
 
 # Journey Developer
+
+## Journey SDK Context
+
+Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys. Use this skill when a Journey SDK journey tests product or business flows that touch browsers, APIs, mobile or edge devices, background jobs, third-party services, webhooks, email, AI or voice systems, or delayed side effects.
+
+Do not use this skill for generic Python scripts, generic unit tests, or unrelated workflow automation that is not authored as a Journey SDK journey.
 
 ## Core Workflow
 
