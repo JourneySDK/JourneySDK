@@ -31,6 +31,11 @@ That makes Journey SDK useful for flows such as:
   steps and third-party integrations
 - AI coding agents that need to generate, run, and iterate on journey tests while implementing features
 
+## AI Agent Support
+
+Use the [`journey-developer` skill](skills/journey-developer/SKILL.md) when an AI coding agent needs to create,
+execute, debug, or maintain Journey SDK journeys.
+
 ## Install
 
 ### Install The Python Package

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Journey Developer"
+  short_description: "Develop and maintain Journey SDK journeys."
+  default_prompt: "Use this skill to create, run, debug, and maintain Journey SDK journeys with the Journey CLI."

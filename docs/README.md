@@ -13,6 +13,8 @@ Run every command in this handbook from the repository root.
 
 - Start with [00 Installation and CLI](00-installation-and-cli.md) if you need to install the package, install the
   persistent `journey` command, or work from a local checkout.
+- AI coding agents can use the source-distributed
+  [`journey-developer` skill](../skills/journey-developer/SKILL.md) for Journey authoring and CLI iteration guidance.
 - Use `uv run journey --file ...` when you want to run one journey file.
 - Install Playwright only for the browser chapter:
 

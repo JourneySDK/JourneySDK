@@ -100,3 +100,10 @@ journey --help
 
 For the full contributor workflow, including package smoke tests and manual publishing, see
 [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+## AI Agent Skill
+
+AI coding agents can use the source-distributed
+[`journey-developer` skill](../skills/journey-developer/SKILL.md) for Journey authoring, targeted `--step` runs,
+`--develop-step` loops, and persistent `--state` guidance. See [`../skills/README.md`](../skills/README.md) for the
+minimal install notes.
