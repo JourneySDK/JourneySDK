@@ -1,6 +1,6 @@
 ---
 name: journey-developer
-description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives, running Journey CLI full or targeted step executions, iterating with --develop-step and --state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
+description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives or official journeysdk.tools integrations, running Journey CLI full or targeted step executions, iterating with --develop-step and --state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
 ---
 
 # Journey Developer
@@ -10,6 +10,15 @@ description: Develop, execute, debug, and maintain Journey SDK workflow-as-code 
 Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys. Use this skill when a Journey SDK journey tests product or business flows that touch browsers, APIs, mobile or edge devices, background jobs, third-party services, webhooks, email, AI or voice systems, or delayed side effects.
 
 Do not use this skill for generic Python scripts, generic unit tests, or unrelated workflow automation that is not authored as a Journey SDK journey.
+
+## Official Tools
+
+Official tools live under `journeysdk.tools`. They are ordinary Python helpers that return step callables or serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted resources while steps execute, and make returned values serializable or rehydratable when they cross retry, checkpoint, branch, or `--state` boundaries.
+
+- `journeysdk.tools.webhook`: host a local webhook endpoint or acquire a cloud-hosted endpoint, then wait for received webhook requests.
+- `journeysdk.tools.email`: get an inbox, send email, and wait for received email using direct SMTP/IMAP settings or hosted email access.
+- `journeysdk.tools.docker`: start local Docker Compose apps and pair checkpoints with exact snapshots for supported container and volume state.
+- `journeysdk.tools.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
 
 ## Core Workflow
 

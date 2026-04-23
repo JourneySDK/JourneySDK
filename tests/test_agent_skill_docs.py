@@ -42,6 +42,22 @@ def test_journey_developer_skill_explains_when_journey_sdk_applies():
     assert "unrelated workflow automation" in lower_skill_text
 
 
+def test_journey_developer_skill_explains_official_tools():
+    skill_text = (
+        _public_root() / "skills" / "journey-developer" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    lower_skill_text = skill_text.lower()
+
+    assert "journeysdk.tools" in skill_text
+    assert "step callables or serializable helper values" in lower_skill_text
+    assert "planning side-effect free" in lower_skill_text
+    assert "journeysdk.tools.webhook" in skill_text
+    assert "journeysdk.tools.email" in skill_text
+    assert "journeysdk.tools.docker" in skill_text
+    assert "journeysdk.tools.playwright" in skill_text
+    assert "JourneyPlaywrightPage" in skill_text
+
+
 def test_public_agents_reminds_authors_to_keep_skill_aligned():
     agents_text = (_public_root() / "AGENTS.md").read_text(encoding="utf-8")
 
