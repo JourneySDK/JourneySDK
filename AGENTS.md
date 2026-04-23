@@ -55,6 +55,8 @@ flow that reaches a target step label.
 ## Change guidance
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.
+- Do not add tests that assert exact prose inside `*.md` files; prefer behavior-level checks for runnable examples,
+  CLI behavior, repository boundaries, or relevant file existence.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
 - Whenever Journey CLI behavior, docs, examples, or journey authoring guidance changes, update
   `skills/journey-developer/SKILL.md` in the same change.

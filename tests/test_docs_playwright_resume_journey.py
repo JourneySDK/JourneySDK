@@ -45,20 +45,11 @@ def _require_playwright_browser() -> None:
 def test_playwright_resume_example_compiles_with_explicit_playwright_dependency():
     reloaded = importlib.reload(playwright_resume_module)
     source = Path(reloaded.__file__).read_text(encoding="utf-8")
-    public_root = Path(reloaded.__file__).resolve().parents[2]
-    readme = (public_root / "README.md").read_text(encoding="utf-8")
-    contributing = (public_root / "CONTRIBUTING.md").read_text(encoding="utf-8")
     first_plan = journey.compile_journey(reloaded.playwright_resume_journey)
     second_plan = journey.compile_journey(reloaded.playwright_resume_journey)
 
     assert "Playwright" + "PageState" not in source
     assert "capture" + "_page_state" not in source
-    assert "register" + "_step_exit_callback" not in readme
-    assert "register" + "_step_exit_callback" not in contributing
-    assert "_register" + "_step_exit_object" not in readme
-    assert "_register" + "_step_exit_object" not in contributing
-    assert "## Step-Exit Tool Lifecycle" in readme
-    assert "## Step-Exit Tool Lifecycle" not in contributing
     assert _case_labels(first_plan) == [
         [
             "login_and_capture_session",
