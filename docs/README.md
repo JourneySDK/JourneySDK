@@ -16,12 +16,7 @@ Run every command in this handbook from the repository root.
 - AI coding agents can use the source-distributed
   [`journey-developer` skill](../skills/journey-developer/SKILL.md) for Journey authoring and CLI iteration guidance.
 - Use `uv run journey --file ...` when you want to run one journey file.
-- Install Playwright only for the browser chapter:
-
-```bash
-uv run --with playwright python -m playwright install chromium
-```
-
+- The browser chapter auto-installs Chromium the first time a browser step runs.
 - Journey Cloud examples need execution-time environment variables:
 
 ```bash
@@ -63,6 +58,7 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 - `docs/simple_journey/simple_journey.py`
 - `docs/docker_compose_journey/docker_compose_journey.py`
 - `docs/playwright_resume_journey/playwright_resume_journey.py`
+- `docs/playwright_prompt_journey/playwright_prompt_journey.py`
 - `docs/cloud_webhook_journey/cloud_webhook_journey.py`
 - `docs/cloud_email_journey/cloud_email_journey.py`
 - `docs/fail_fast_journeys/fail_fast_journeys.py`

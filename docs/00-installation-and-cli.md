@@ -57,25 +57,10 @@ uv add journey-sdk
 uv run journey --help
 ```
 
-## Optional Browser Support
+## Browser Setup
 
-Install the persistent CLI with Playwright available:
-
-```bash
-uv tool install journey-sdk --with playwright
-```
-
-Run the CLI once with Playwright available:
-
-```bash
-uvx --from journey-sdk --with playwright journey --help
-```
-
-Install the browser binaries when you need them:
-
-```bash
-uv run --with playwright python -m playwright install chromium
-```
+Playwright and LiteLLM are included in the default package install. The first Journey browser step automatically
+downloads Chromium in the active environment. That first launch needs network access and can take a moment.
 
 ## Local Development Installs
 

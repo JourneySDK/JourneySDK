@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+from threading import Lock
 from types import TracebackType
 from typing import Literal, TypedDict, cast
 
@@ -10,6 +14,13 @@ from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import _require_executing_step
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
+
+from ._playwright_prompt import (
+    JourneyPlaywrightPromptPage,
+    JourneyPlaywrightPromptResult,
+    JourneyPlaywrightPromptStep,
+    prompt_page,
+)
 
 
 class PlaywrightCookie(TypedDict, total=False):
@@ -46,6 +57,7 @@ _REHYDRATE_STORAGE_SCRIPT = """
 """
 
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
+_PLAYWRIGHT_INSTALL_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -288,6 +300,29 @@ class JourneyPlaywrightPage(PlaywrightPage):
     def __reduce__(self) -> tuple[object, tuple[object]]:
         return (type(self)._restore_pickle, (self._snapshot_for_storage().to_payload(),))
 
+    def prompt(
+        self,
+        instruction: str,
+        *,
+        model: str | None = None,
+        max_steps: int = 8,
+        action_timeout_seconds: float = 5.0,
+    ) -> JourneyPlaywrightPromptResult:
+        """Use an LLM to inspect and interact with the live page."""
+
+        if not self._is_live:
+            raise RuntimeError(
+                "JourneyPlaywrightPage.prompt(...) requires a live Playwright page. "
+                "Call open_page(saved_page) first."
+            )
+        return prompt_page(
+            self,
+            instruction=instruction,
+            model=model,
+            max_steps=max_steps,
+            action_timeout_seconds=action_timeout_seconds,
+        )
+
 
 def open_page(
     page_or_url: JourneyPlaywrightPage | str,
@@ -314,7 +349,11 @@ def open_page(
         page._set_step_resources(manager=manager)
         playwright = manager.__enter__()
         browser_type = getattr(playwright, browser)
-        launched_browser = browser_type.launch(headless=headless)
+        launched_browser = _launch_browser_with_auto_install(
+            browser_type,
+            browser=browser,
+            headless=headless,
+        )
         page._set_step_resources(browser=launched_browser)
         context = launched_browser.new_context()
         page._set_step_resources(context=context)
@@ -348,6 +387,97 @@ def _snapshot_from_open_page_input(
     return _PageSnapshot.from_url(page_or_url)
 
 
+def ensure_browser_installed(
+    browser: Literal["chromium", "firefox", "webkit"] = "chromium",
+) -> None:
+    """Install the requested Playwright browser in the current environment if needed."""
+
+    if browser not in _SUPPORTED_BROWSERS:
+        raise ValueError(
+            "ensure_browser_installed(..., browser=...) expects "
+            "'chromium', 'firefox', or 'webkit'."
+        )
+
+    with sync_playwright() as playwright:
+        _ensure_browser_type_installed(
+            getattr(playwright, browser),
+            browser=browser,
+        )
+
+
+def _launch_browser_with_auto_install(
+    browser_type: object,
+    *,
+    browser: Literal["chromium", "firefox", "webkit"],
+    headless: bool,
+) -> object:
+    attempted_install = _ensure_browser_type_installed(
+        browser_type,
+        browser=browser,
+    )
+    launch = getattr(browser_type, "launch")
+    try:
+        return launch(headless=headless)
+    except BaseException as exc:
+        if attempted_install or not _looks_like_missing_browser_error(exc):
+            raise
+        _install_playwright_browser(browser)
+        return launch(headless=headless)
+
+
+def _ensure_browser_type_installed(
+    browser_type: object,
+    *,
+    browser: Literal["chromium", "firefox", "webkit"],
+) -> bool:
+    executable_path = _browser_executable_path(browser_type)
+    if executable_path is None or executable_path.exists():
+        return False
+    _install_playwright_browser(
+        browser,
+        executable_path=executable_path,
+    )
+    return True
+
+
+def _browser_executable_path(browser_type: object) -> Path | None:
+    executable_path = getattr(browser_type, "executable_path", None)
+    if not isinstance(executable_path, str) or not executable_path:
+        return None
+    return Path(executable_path)
+
+
+def _install_playwright_browser(
+    browser: Literal["chromium", "firefox", "webkit"],
+    *,
+    executable_path: Path | None = None,
+) -> None:
+    command = [sys.executable, "-m", "playwright", "install", browser]
+    with _PLAYWRIGHT_INSTALL_LOCK:
+        if executable_path is not None and executable_path.exists():
+            return
+        result = subprocess.run(command, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Journey SDK could not automatically install the Playwright {browser!r} browser. "
+                "Retry after restoring network access, or run the Playwright installer manually "
+                f"in the same environment: {' '.join(command)}"
+            )
+        if executable_path is not None and not executable_path.exists():
+            raise RuntimeError(
+                f"Journey SDK installed the Playwright {browser!r} browser, "
+                f"but the executable is still missing at {executable_path}."
+            )
+
+
+def _looks_like_missing_browser_error(exc: BaseException) -> bool:
+    message = str(exc)
+    return (
+        "Executable doesn't exist" in message
+        or "Please run the following command to download new browsers" in message
+    )
+
+
 def _cleanup_failure_message(failures: list[BaseException]) -> str:
     if len(failures) == 1:
         failure = failures[0]
@@ -365,5 +495,9 @@ def _cleanup_failure_message(failures: list[BaseException]) -> str:
 __all__ = [
     "PlaywrightCookie",
     "JourneyPlaywrightPage",
+    "JourneyPlaywrightPromptPage",
+    "JourneyPlaywrightPromptResult",
+    "JourneyPlaywrightPromptStep",
+    "ensure_browser_installed",
     "open_page",
 ]

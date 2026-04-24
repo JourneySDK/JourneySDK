@@ -12,6 +12,7 @@ def _tracked_text_files(root: Path) -> list[Path]:
         path
         for path in root.rglob("*")
         if path.is_file()
+        and ".venv" not in path.parts
         and "__pycache__" not in path.parts
         and path.suffix in {".py", ".md", ".toml", ".txt"}
         and path.name != "test_repository_boundaries.py"

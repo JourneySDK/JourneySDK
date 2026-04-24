@@ -20,7 +20,9 @@ The browser helper is still just a normal Python function:
 ```python
 def assert_demo_homepage() -> bool:
     from playwright.sync_api import sync_playwright
+    from journeysdk.tools.playwright import ensure_browser_installed
 
+    ensure_browser_installed()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page()
@@ -67,16 +69,13 @@ def simple_journey() -> None:
         step(assert_local_file_contents, file_info)
 ```
 
-### One-Time Playwright Setup
-
-```bash
-uv run --with playwright python -m playwright install chromium
-```
+`ensure_browser_installed()` and `open_page()` automatically download Chromium the first time they need it in the
+current environment. That first browser launch needs network access and can take a moment.
 
 ### Execute Only the File Branch
 
 ```bash
-uv run --with playwright journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents
+uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents
 ```
 
 ```console
@@ -268,7 +267,7 @@ uv run python -c "from docs.playwright_resume_journey import reset_demo_state; r
 ### First Run: Interrupt After the Session Is Saved
 
 ```bash
-uv run --with playwright journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
+uv run journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
 ```
 
 Press `Ctrl-C` when the tutorial note tells you to.
@@ -303,7 +302,7 @@ Expected stderr:
 ### Second Run: Reopen the Same Saved Session
 
 ```bash
-uv run --with playwright journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
+uv run journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
 ```
 
 Expected stdout:
@@ -332,11 +331,46 @@ Expected stderr:
 [tutorial] The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved JourneyPlaywrightPage instead of logging in again.
 ```
 
+## Prompt a Live Page with an LLM
+
+Read `docs/playwright_prompt_journey/playwright_prompt_journey.py`.
+
+Journey SDK already includes Playwright and LiteLLM. Set your provider credentials with the normal provider
+environment variables such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Pick a multimodal model explicitly with
+`model=...`, or set `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
+
+The helper can stay small:
+
+```python
+def capture_popup_title() -> JourneyPlaywrightPromptResult:
+    page = open_page(f"{ensure_demo_server()}/login")
+    try:
+        return page.prompt(
+            'click on a "Sign in" button and get the title of the opened popup',
+            model="anthropic/claude-sonnet-4-5",
+        )
+    finally:
+        page.__exit__(None, None, None)
+```
+
+The next step can assert against the structured result:
+
+```python
+def assert_prompt_result(result: JourneyPlaywrightPromptResult) -> bool:
+    assert result.text
+    assert result.pages
+    return True
+```
+
+`result.text` is the model's final user-facing answer. `result.pages` reports the original page plus any popup or tab
+the prompt loop discovered, and `result.steps` records the bounded action history without storing hidden reasoning.
+
 ## What To Notice
 
 - Browser logic stays inside normal Python functions. Journey does not wrap Playwright in a separate DSL.
 - The same journey can branch into a webhook case and a local file case.
 - `JourneyPlaywrightPage` is just another step value. Returning it lets Journey save it, close it, resume it, and pass it into later steps.
+- `JourneyPlaywrightPage.prompt(...)` works on a live page handle and returns a structured result instead of mutating the saved-page semantics of the original handle.
 - Steps that open a page but return other data should close the page explicitly, as shown in `continue_authenticated_dashboard()`.
 - Targeted execution is especially useful for UI work because you can rerun only the branch you are debugging.
 

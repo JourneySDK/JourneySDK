@@ -12,8 +12,8 @@ Each step is just plain Python, so teams can use existing testing tools and scri
 framework. A `step` can run browser automation, mobile checks, API assertions, or service-specific validation logic.
 Official tools live under `journeysdk.tools`; today that includes the `webhook` tool for hosting a local webhook
 endpoint or acquiring a cloud-hosted one, the `email` tool for direct or cloud-hosted inbox access, the `docker`
-tool for local Compose-backed snapshots, and the `playwright` tool for resumable page state. Retryable steps can poll
-for async effects or replay from an earlier step or checkpoint.
+tool for local Compose-backed snapshots, and the `playwright` tool for resumable page state plus bounded LLM-driven
+page interaction. Retryable steps can poll for async effects or replay from an earlier step or checkpoint.
 
 That makes Journey SDK useful for flows such as:
 
@@ -93,12 +93,8 @@ uv add journey-sdk
 uv run journey --help
 ```
 
-Install the CLI with Playwright support when you need browser steps:
-
-```bash
-uv tool install journey-sdk --with playwright
-uvx --from journey-sdk --with playwright journey --help
-```
+Playwright and LiteLLM are included in the default install. The first browser step automatically downloads Chromium
+in the active environment, so there is no separate `playwright install` step for the standard Journey SDK flow.
 
 See [`docs/00-installation-and-cli.md`](docs/00-installation-and-cli.md) for the full CLI installation guide, local
 editable installs, and local wheel smoke testing.
@@ -310,6 +306,25 @@ def assert_dashboard(session: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
     assert page.url.endswith("/dashboard")
     return page
 ```
+
+The same live page can also run a bounded LLM action loop and return a structured result:
+
+```python
+from journeysdk.tools.playwright import JourneyPlaywrightPromptResult, open_page
+
+def capture_popup_title() -> JourneyPlaywrightPromptResult:
+    page = open_page("https://app.example/login")
+    try:
+        return page.prompt(
+            'click on a "Sign in" button and get the title of the opened popup',
+            model="anthropic/claude-sonnet-4-5",
+        )
+    finally:
+        page.__exit__(None, None, None)
+```
+
+Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY`, and either pass `model=...` or set `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
 enabled, journey stores the step inputs and outputs it may need to replay later, so those values must be

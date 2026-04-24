@@ -16,7 +16,9 @@ _STORED_FILE = Path(tempfile.gettempdir()) / "journey-demo-downloads" / _STORED_
 
 def assert_demo_homepage() -> bool:
     from playwright.sync_api import sync_playwright
+    from journeysdk.tools.playwright import ensure_browser_installed
 
+    ensure_browser_installed()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page()
@@ -37,7 +39,9 @@ def assert_demo_homepage() -> bool:
 
 def click_trigger_endpoint_a() -> bool:
     from playwright.sync_api import sync_playwright
+    from journeysdk.tools.playwright import ensure_browser_installed
 
+    ensure_browser_installed()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page()
@@ -59,7 +63,9 @@ def click_store_local_file() -> bool:
         _STORED_FILE.unlink()
 
     from playwright.sync_api import sync_playwright
+    from journeysdk.tools.playwright import ensure_browser_installed
 
+    ensure_browser_installed()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         context = browser.new_context(accept_downloads=True)
