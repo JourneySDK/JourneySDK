@@ -789,8 +789,9 @@ def test_journey_playwright_prompt_reports_broken_litellm_install(monkeypatch):
 
     monkeypatch.setattr(journey_playwright_prompt.importlib, "import_module", fail_import)
 
-    with pytest.raises(RuntimeError, match="installation is incomplete or broken"):
+    with pytest.raises(RuntimeError, match="project environment") as exc_info:
         page.prompt("click sign in", model="openai/gpt-4.1-mini")
+    assert sys.executable in str(exc_info.value)
 
 
 def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(monkeypatch):

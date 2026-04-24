@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import importlib
 import json
 import os
+import sys
 from typing import Protocol, cast
 
 from playwright.sync_api import Page as PlaywrightPage
@@ -608,7 +609,9 @@ def _load_litellm_completion() -> _CompletionCallable:
     except ImportError as exc:
         raise RuntimeError(
             "JourneyPlaywrightPage.prompt(...) could not import `litellm`. "
-            "This Journey SDK installation is incomplete or broken."
+            f"The active Python interpreter is {sys.executable!r}; run Journey "
+            "through the project environment or reinstall/sync this interpreter "
+            "so it includes Journey SDK runtime dependencies."
         ) from exc
     completion = getattr(module, "completion", None)
     if not callable(completion):
