@@ -329,7 +329,17 @@ def _prompt_element(
     tag_name: str = "button",
     element_type: str = "",
     placeholder: str = "",
-) -> dict[str, str]:
+    actions: list[str] | None = None,
+) -> dict[str, object]:
+    if actions is None:
+        actions = ["click", "press"]
+        if tag_name in {"input", "select", "textarea"} or role in {
+            "combobox",
+            "searchbox",
+            "spinbutton",
+            "textbox",
+        }:
+            actions = ["click", "fill", "press"]
     return {
         "selector": selector,
         "role": role,
@@ -338,6 +348,7 @@ def _prompt_element(
         "tag_name": tag_name,
         "type": element_type,
         "placeholder": placeholder,
+        "actions": actions,
     }
 
 
@@ -347,7 +358,7 @@ def _make_prompt_page(
     url: str,
     context: _FakePromptContext,
     events: list[object],
-    elements: list[dict[str, str]] | None = None,
+    elements: list[dict[str, object]] | None = None,
     visible_texts: set[str] | None = None,
     click_handlers: dict[str, Callable[[], None]] | None = None,
 ) -> journey_playwright.JourneyPlaywrightPage:
@@ -374,7 +385,7 @@ def _make_prompt_page(
         return f"png:{self._fake_prompt_title}".encode("utf-8")
 
     def evaluate(self, script: str, items: object | None = None) -> object:
-        if "const MAX_ELEMENTS = 25;" in script:
+        if "const MAX_ELEMENTS =" in script:
             events.append(("prompt_collect_elements", self._fake_prompt_title))
             return [dict(element) for element in self._fake_prompt_elements]
         if items is None and "window.localStorage" in script:
@@ -901,6 +912,75 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(mo
         ("prompt_collect_elements", "Login page"),
         ("prompt_collect_elements", "Welcome popup"),
         ("prompt_screenshot", "Welcome popup"),
+    ]
+
+
+def test_journey_playwright_prompt_retries_non_fillable_target(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Chat",
+        url="http://example.test/chat",
+        context=context,
+        events=events,
+        elements=[
+            _prompt_element("#attach", name="Attach file"),
+            _prompt_element(
+                "#composer",
+                name="Message",
+                role="textbox",
+                tag_name="div",
+                text="",
+            ),
+        ],
+    )
+    context.pages.append(page)
+
+    fake_completion = _FakeCompletion(
+        [
+            '{"action":"fill","target":"e1","value":"I need to fix a toilet"}',
+            '{"action":"fill","target":"e2","value":"I need to fix a toilet"}',
+            '{"action":"finish","target":"","value":"Started the chat."}',
+        ]
+    )
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: fake_completion,
+    )
+
+    result = page.prompt("say you need to fix a toilet", model="openai/gpt-4.1-mini")
+
+    assert result.text == "Started the chat."
+    assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
+        index=1,
+        page_index=0,
+        action="fill",
+        target="e1",
+        status="rejected",
+        detail="Element e1 Attach file does not allow 'fill'; available actions: click, press.",
+    )
+    assert result.steps[1] == journey_playwright.JourneyPlaywrightPromptStep(
+        index=2,
+        page_index=0,
+        action="fill",
+        target="e2",
+        status="ok",
+        detail="Filled e2 Message with 'I need to fix a toilet'.",
+    )
+    assert page._fake_prompt_field_values == {"#composer": "I need to fix a toilet"}
+    assert '"actions": [' in fake_completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert '"status": "rejected"' in fake_completion.calls[1]["messages"][1]["content"][0]["text"]
+    assert events == [
+        ("prompt_collect_elements", "Chat"),
+        ("prompt_screenshot", "Chat"),
+        ("prompt_collect_elements", "Chat"),
+        ("prompt_collect_elements", "Chat"),
+        ("prompt_screenshot", "Chat"),
+        ("prompt_collect_elements", "Chat"),
+        ("prompt_fill", "Chat", "#composer", "I need to fix a toilet", 5000),
+        ("prompt_collect_elements", "Chat"),
+        ("prompt_screenshot", "Chat"),
     ]
 
 

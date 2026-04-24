@@ -27,6 +27,7 @@ JSON schema:
 
 Rules:
 - For click/fill/press, target must be an element id from observation.elements[].id.
+- Elements include an actions list; only choose an action that appears in that list.
 - For switch_page, target must be a page index rendered as a string.
 - For wait_for_url, target must be the expected URL or Playwright URL pattern.
 - For wait_for_text, target must be the visible text to wait for.
@@ -38,20 +39,43 @@ Rules:
 
 _COLLECT_ELEMENTS_SCRIPT = r"""
 () => {
-    const MAX_ELEMENTS = 25;
+    const MAX_ELEMENTS = 50;
     const SELECTOR = [
         'a[href]',
         'button',
         'input:not([type="hidden"])',
         'textarea',
         'select',
+        '[contenteditable]:not([contenteditable="false"])',
         '[role="button"]',
         '[role="link"]',
         '[role="checkbox"]',
         '[role="radio"]',
         '[role="tab"]',
+        '[role="textbox"]',
+        '[role="searchbox"]',
+        '[role="combobox"]',
+        '[role="spinbutton"]',
         '[tabindex]',
     ].join(',');
+    const NON_FILLABLE_INPUT_TYPES = new Set([
+        'button',
+        'checkbox',
+        'color',
+        'file',
+        'hidden',
+        'image',
+        'radio',
+        'range',
+        'reset',
+        'submit',
+    ]);
+    const FILLABLE_ROLES = new Set([
+        'combobox',
+        'searchbox',
+        'spinbutton',
+        'textbox',
+    ]);
 
     const escapeCss = (value) => {
         if (window.CSS && typeof window.CSS.escape === 'function') {
@@ -85,7 +109,7 @@ _COLLECT_ELEMENTS_SCRIPT = r"""
     const inferredRole = (element) => {
         const explicit = element.getAttribute('role');
         if (explicit) {
-            return explicit;
+            return explicit.toLowerCase();
         }
         const tag = element.tagName.toLowerCase();
         if (tag === 'button') {
@@ -107,6 +131,44 @@ _COLLECT_ELEMENTS_SCRIPT = r"""
             }
         }
         return '';
+    };
+
+    const isDisabled = (element) =>
+        element.hasAttribute('disabled') ||
+        (element.getAttribute('aria-disabled') || '').toLowerCase() === 'true';
+
+    const isReadonly = (element) =>
+        element.hasAttribute('readonly') ||
+        (element.getAttribute('aria-readonly') || '').toLowerCase() === 'true';
+
+    const canFill = (element, role) => {
+        if (isDisabled(element) || isReadonly(element)) {
+            return false;
+        }
+        const tag = element.tagName.toLowerCase();
+        if (tag === 'textarea' || tag === 'select') {
+            return true;
+        }
+        if (tag === 'input') {
+            const type = (element.getAttribute('type') || 'text').toLowerCase();
+            return !NON_FILLABLE_INPUT_TYPES.has(type);
+        }
+        if (element.isContentEditable) {
+            return true;
+        }
+        return FILLABLE_ROLES.has(role);
+    };
+
+    const actionsFor = (element, role) => {
+        if (isDisabled(element)) {
+            return [];
+        }
+        const actions = ['click'];
+        if (canFill(element, role)) {
+            actions.push('fill');
+        }
+        actions.push('press');
+        return actions;
     };
 
     const buildSelector = (element) => {
@@ -141,7 +203,7 @@ _COLLECT_ELEMENTS_SCRIPT = r"""
     };
 
     const seen = new Set();
-    const items = [];
+    const candidates = [];
     for (const element of document.querySelectorAll(SELECTOR)) {
         if (!isVisible(element)) {
             continue;
@@ -160,20 +222,41 @@ _COLLECT_ELEMENTS_SCRIPT = r"""
                 ? normalizeText(element.value)
                 : '';
         const ariaLabel = normalizeText(element.getAttribute('aria-label') || '');
-        items.push({
+        const role = inferredRole(element);
+        const actions = actionsFor(element, role);
+        if (actions.length === 0) {
+            continue;
+        }
+        const rect = element.getBoundingClientRect();
+        candidates.push({
             selector,
             tag_name: tagName,
             type,
-            role: inferredRole(element),
+            role,
             name: ariaLabel || text || value || normalizeText(placeholder),
             text,
             placeholder,
+            actions,
+            _journey_sort_top: rect.top,
+            _journey_sort_left: rect.left,
         });
-        if (items.length >= MAX_ELEMENTS) {
-            break;
-        }
     }
-    return items;
+    candidates.sort((left, right) => {
+        const leftFillable = left.actions.includes('fill') ? 0 : 1;
+        const rightFillable = right.actions.includes('fill') ? 0 : 1;
+        if (leftFillable !== rightFillable) {
+            return leftFillable - rightFillable;
+        }
+        if (left._journey_sort_top !== right._journey_sort_top) {
+            return left._journey_sort_top - right._journey_sort_top;
+        }
+        return left._journey_sort_left - right._journey_sort_left;
+    });
+    return candidates.slice(0, MAX_ELEMENTS).map((item) => {
+        delete item._journey_sort_top;
+        delete item._journey_sort_left;
+        return item;
+    });
 }
 """
 
@@ -217,6 +300,7 @@ class _ObservedElement:
     element_id: str
     page_index: int
     selector: str
+    actions: tuple[str, ...]
     role: str
     name: str
     text: str
@@ -235,6 +319,10 @@ class _CompletionCallable(Protocol):
         temperature: float,
     ) -> object:
         ...
+
+
+class _PromptActionRejected(RuntimeError):
+    """A model-selected action was invalid for the current observation."""
 
 
 class _PromptSession:
@@ -286,13 +374,30 @@ class _PromptSession:
                     pages=pages,
                     steps=tuple(self._steps),
                 )
-            step = self._execute_action(step_index=step_index, action=action)
+            try:
+                step = self._execute_action(step_index=step_index, action=action)
+            except _PromptActionRejected as exc:
+                step = JourneyPlaywrightPromptStep(
+                    index=step_index,
+                    page_index=self._active_page_index,
+                    action=action.action,
+                    target=action.target,
+                    status="rejected",
+                    detail=str(exc),
+                )
             self._steps.append(step)
 
-        raise RuntimeError(
+        message = (
             "JourneyPlaywrightPage.prompt(...) reached "
             f"max_steps={self._max_steps} without a finish action."
         )
+        if self._steps:
+            last_step = self._steps[-1]
+            message += (
+                f" Last step was {last_step.status}: "
+                f"{last_step.action} {last_step.target!r} ({last_step.detail})."
+            )
+        raise RuntimeError(message)
 
     def _build_observation(self) -> dict[str, object]:
         self._discover_pages()
@@ -321,6 +426,7 @@ class _PromptSession:
                     "tag_name": element.tag_name,
                     "type": element.input_type,
                     "placeholder": element.placeholder,
+                    "actions": list(element.actions),
                     "locator_hint": element.selector,
                 }
                 for element in elements
@@ -362,16 +468,27 @@ class _PromptSession:
                     element_id = f"e{self._next_element_id}"
                     self._next_element_id += 1
                     self._element_ids[element_key] = element_id
+                role = _normalize_optional_text(raw_element.get("role"))
+                tag_name = _normalize_optional_text(raw_element.get("tag_name"))
+                input_type = _normalize_optional_text(raw_element.get("type"))
+                actions = _normalize_actions(raw_element.get("actions"))
+                if not actions:
+                    actions = _infer_element_actions(
+                        role=role,
+                        tag_name=tag_name,
+                        input_type=input_type,
+                    )
                 observed.append(
                     _ObservedElement(
                         element_id=element_id,
                         page_index=page_index,
                         selector=selector,
-                        role=_normalize_optional_text(raw_element.get("role")),
+                        actions=actions,
+                        role=role,
                         name=_normalize_optional_text(raw_element.get("name")),
                         text=_normalize_optional_text(raw_element.get("text")),
-                        tag_name=_normalize_optional_text(raw_element.get("tag_name")),
-                        input_type=_normalize_optional_text(raw_element.get("type")),
+                        tag_name=tag_name,
+                        input_type=input_type,
                         placeholder=_normalize_optional_text(raw_element.get("placeholder")),
                     )
                 )
@@ -490,12 +607,13 @@ class _PromptSession:
 
         element = self._find_target_element(action.target)
         if element.page_index != self._active_page_index:
-            raise RuntimeError(
-                "JourneyPlaywrightPage.prompt(...) must switch to page "
+            raise _PromptActionRejected(
+                "Must switch to page "
                 f"{element.page_index} before targeting element {element.element_id!r}."
             )
-        locator = active_page.locator(element.selector).first
         if action.action == "click":
+            _require_element_action(element, "click")
+            locator = active_page.locator(element.selector).first
             locator.click(timeout=self._timeout_ms)
             self._discover_pages()
             return JourneyPlaywrightPromptStep(
@@ -511,6 +629,8 @@ class _PromptSession:
                 action.value,
                 "JourneyPlaywrightPage.prompt(...) fill action requires a non-empty value.",
             )
+            _require_element_action(element, "fill")
+            locator = active_page.locator(element.selector).first
             locator.fill(value, timeout=self._timeout_ms)
             self._discover_pages()
             return JourneyPlaywrightPromptStep(
@@ -526,6 +646,8 @@ class _PromptSession:
                 action.value,
                 "JourneyPlaywrightPage.prompt(...) press action requires a non-empty value.",
             )
+            _require_element_action(element, "press")
+            locator = active_page.locator(element.selector).first
             locator.press(value, timeout=self._timeout_ms)
             self._discover_pages()
             return JourneyPlaywrightPromptStep(
@@ -549,8 +671,8 @@ class _PromptSession:
         for element in self._collect_elements():
             if element.element_id == normalized_id:
                 return element
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) action referenced unknown element "
+        raise _PromptActionRejected(
+            "The action referenced unknown element "
             f"{normalized_id!r}."
         )
 
@@ -798,10 +920,60 @@ def _normalize_optional_text(value: object) -> str:
     return value.strip()
 
 
+def _normalize_actions(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    actions: list[str] = []
+    for item in value:
+        if item in {"click", "fill", "press"} and item not in actions:
+            actions.append(item)
+    return tuple(actions)
+
+
+def _infer_element_actions(
+    *,
+    role: str,
+    tag_name: str,
+    input_type: str,
+) -> tuple[str, ...]:
+    fillable_roles = {"combobox", "searchbox", "spinbutton", "textbox"}
+    non_fillable_input_types = {
+        "button",
+        "checkbox",
+        "color",
+        "file",
+        "hidden",
+        "image",
+        "radio",
+        "range",
+        "reset",
+        "submit",
+    }
+    actions = ["click"]
+    if (
+        tag_name in {"select", "textarea"}
+        or role in fillable_roles
+        or (tag_name == "input" and input_type not in non_fillable_input_types)
+    ):
+        actions.append("fill")
+    actions.append("press")
+    return tuple(actions)
+
+
 def _require_text_value(value: object, message: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(message)
     return value.strip()
+
+
+def _require_element_action(element: _ObservedElement, action: str) -> None:
+    if action in element.actions:
+        return
+    available = ", ".join(element.actions) or "none"
+    raise _PromptActionRejected(
+        f"Element { _element_label(element) } does not allow {action!r}; "
+        f"available actions: {available}."
+    )
 
 
 def _safe_page_title(page: PlaywrightPage) -> str:
