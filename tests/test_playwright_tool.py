@@ -839,7 +839,10 @@ def test_journey_playwright_prompt_reports_broken_litellm_install(monkeypatch):
     assert sys.executable in str(exc_info.value)
 
 
-def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(monkeypatch):
+def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
     events: list[object] = []
     context = _FakePromptContext()
     popup_page: journey_playwright.JourneyPlaywrightPage | None = None
@@ -885,6 +888,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(mo
         'click on a "Sign in" button and get the title of the opened popup',
         model="anthropic/claude-sonnet-4-5",
     )
+    log_output = capsys.readouterr().err
 
     assert result.text == "The opened popup title is Welcome popup."
     assert result.model == "anthropic/claude-sonnet-4-5"
@@ -950,9 +954,25 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(mo
         ("prompt_rendered_html", "Welcome popup"),
         ("prompt_screenshot", "Welcome popup"),
     ]
+    assert "[journey-playwright] prompt start:" in log_output
+    assert 'instruction=\'click on a "Sign in" button and get the title' in log_output
+    assert "model='anthropic/claude-sonnet-4-5'" in log_output
+    assert "active=page 0 'Login page' at http://example.test/login" in log_output
+    assert "step 1/8: inspecting page 0 'Login page'" in log_output
+    assert "step 1/8: AI will click selector '#sign-in'" in log_output
+    assert 'step 1/8 code: page.locator("#sign-in").click(timeout=timeout_ms)' in log_output
+    assert "discovered page 1 'Welcome popup' at http://example.test/sign-in-popup" in log_output
+    assert "active page changed to page 1 'Welcome popup'" in log_output
+    assert (
+        "step 3/8: finished with answer: The opened popup title is Welcome popup."
+        in log_output
+    )
 
 
-def test_journey_playwright_prompt_retries_rejected_python(monkeypatch):
+def test_journey_playwright_prompt_retries_rejected_python(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -987,6 +1007,7 @@ def test_journey_playwright_prompt_retries_rejected_python(monkeypatch):
     )
 
     result = page.prompt("say you need to fix a toilet", model="openai/gpt-4.1-mini")
+    log_output = capsys.readouterr().err
 
     assert result.text == "Started the chat."
     assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
@@ -1020,9 +1041,24 @@ def test_journey_playwright_prompt_retries_rejected_python(monkeypatch):
         ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
     ]
+    assert "step 1/8: AI will click selector '#attach'" in log_output
+    assert 'step 1/8 code: page.locator("#attach").click(timeout=timeout_ms)' in log_output
+    assert "step 1/8: rejected on page 0 'Chat'" in log_output
+    assert "AssertionError: No click handler registered for '#attach'" in log_output
+    assert (
+        "step 2/8: AI will fill selector '#composer' with "
+        "'I need to fix a toilet'"
+    ) in log_output
+    assert (
+        'step 2/8 code: page.locator("#composer").fill'
+        '("I need to fix a toilet", timeout=timeout_ms)'
+    ) in log_output
 
 
-def test_journey_playwright_prompt_enforces_max_steps(monkeypatch):
+def test_journey_playwright_prompt_enforces_max_steps(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1044,6 +1080,11 @@ def test_journey_playwright_prompt_enforces_max_steps(monkeypatch):
 
     with pytest.raises(RuntimeError, match="reached max_steps=1"):
         page.prompt("click sign in", model="openai/gpt-4.1-mini", max_steps=1)
+    log_output = capsys.readouterr().err
+
+    assert "step 1/1: AI will click selector '#sign-in'" in log_output
+    assert "step 1/1: succeeded on page 0 'Login'" in log_output
+    assert "prompt stopped: JourneyPlaywrightPage.prompt(...) reached max_steps=1" in log_output
 
 
 def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):

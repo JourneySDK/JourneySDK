@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 from dataclasses import dataclass
 import importlib
@@ -35,6 +36,7 @@ Rules:
 """
 
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
+_PROMPT_LOG_PREFIX = "[journey-playwright]"
 
 
 @dataclass(frozen=True)
@@ -103,10 +105,15 @@ class _PromptSession:
         self._steps: list[JourneyPlaywrightPromptStep] = []
 
     def run(self) -> JourneyPlaywrightPromptResult:
+        self._log_start()
         for step_index in range(1, self._max_steps + 1):
             observation = self._build_observation()
+            self._log_inspection(step_index=step_index, observation=observation)
             code = self._request_code(observation=observation)
             target = _first_code_line(code)
+            previous_page_count = len(self._pages)
+            previous_active_page_index = self._active_page_index
+            self._log_action(step_index=step_index, code=code)
             try:
                 step = self._execute_python_step(
                     step_index=step_index,
@@ -114,6 +121,10 @@ class _PromptSession:
                     target=target,
                 )
             except _PromptFinished as finished:
+                self._log_new_pages(previous_page_count=previous_page_count)
+                self._log_active_page_change(
+                    previous_active_page_index=previous_active_page_index,
+                )
                 self._steps.append(
                     JourneyPlaywrightPromptStep(
                         index=step_index,
@@ -124,6 +135,10 @@ class _PromptSession:
                         detail=finished.text,
                     )
                 )
+                _emit_prompt_log(
+                    f"step {step_index}/{self._max_steps}: finished with "
+                    f"answer: {finished.text}"
+                )
                 pages = tuple(self._prompt_pages())
                 return JourneyPlaywrightPromptResult(
                     text=finished.text,
@@ -133,6 +148,10 @@ class _PromptSession:
                     steps=tuple(self._steps),
                 )
             except Exception as exc:
+                self._log_new_pages(previous_page_count=previous_page_count)
+                self._log_active_page_change(
+                    previous_active_page_index=previous_active_page_index,
+                )
                 step = JourneyPlaywrightPromptStep(
                     index=step_index,
                     page_index=self._active_page_index,
@@ -141,6 +160,21 @@ class _PromptSession:
                     status="rejected",
                     detail=_format_python_error(exc),
                 )
+                self._steps.append(step)
+                _emit_prompt_log(
+                    f"step {step_index}/{self._max_steps}: rejected on "
+                    f"{_page_summary(self._prompt_pages()[self._active_page_index])}: "
+                    f"{step.detail}"
+                )
+                continue
+            self._log_new_pages(previous_page_count=previous_page_count)
+            self._log_active_page_change(
+                previous_active_page_index=previous_active_page_index,
+            )
+            _emit_prompt_log(
+                f"step {step_index}/{self._max_steps}: succeeded on "
+                f"{_page_summary(self._prompt_pages()[self._active_page_index])}"
+            )
             self._steps.append(step)
 
         message = (
@@ -153,7 +187,57 @@ class _PromptSession:
                 f" Last step was {last_step.status}: "
                 f"{last_step.action} {last_step.target!r} ({last_step.detail})."
             )
+        _emit_prompt_log(f"prompt stopped: {message}")
         raise RuntimeError(message)
+
+    def _log_start(self) -> None:
+        self._discover_pages()
+        active_page = self._prompt_pages()[self._active_page_index]
+        timeout_seconds = self._timeout_ms / 1000
+        _emit_prompt_log(
+            "prompt start: "
+            f"instruction={self._instruction!r}; "
+            f"model={self._model!r}; "
+            f"max_steps={self._max_steps}; "
+            f"timeout={timeout_seconds:g}s; "
+            f"active={_page_summary(active_page)}"
+        )
+
+    def _log_inspection(
+        self,
+        *,
+        step_index: int,
+        observation: dict[str, object],
+    ) -> None:
+        active_page_index = cast(int, observation["active_page_index"])
+        pages = cast(list[dict[str, object]], observation["pages"])
+        active_page = pages[active_page_index]
+        _emit_prompt_log(
+            f"step {step_index}/{self._max_steps}: inspecting "
+            f"{_page_dict_summary(active_page)}"
+        )
+
+    def _log_action(self, *, step_index: int, code: str) -> None:
+        normalized_code = code.strip()
+        _emit_prompt_log(
+            f"step {step_index}/{self._max_steps}: AI will "
+            f"{_describe_prompt_action(normalized_code)}"
+        )
+        _emit_prompt_code_log(
+            step_label=f"step {step_index}/{self._max_steps}",
+            code=normalized_code,
+        )
+
+    def _log_new_pages(self, *, previous_page_count: int) -> None:
+        current_pages = self._prompt_pages()
+        for page in current_pages[previous_page_count:]:
+            _emit_prompt_log(f"discovered {_page_summary(page)}")
+
+    def _log_active_page_change(self, *, previous_active_page_index: int) -> None:
+        if previous_active_page_index == self._active_page_index:
+            return
+        active_page = self._prompt_pages()[self._active_page_index]
+        _emit_prompt_log(f"active page changed to {_page_summary(active_page)}")
 
     def _build_observation(self) -> dict[str, object]:
         self._discover_pages()
@@ -345,6 +429,162 @@ def prompt_page(
         action_timeout_seconds=normalized_timeout,
     )
     return session.run()
+
+
+def _emit_prompt_log(message: str) -> None:
+    print(f"{_PROMPT_LOG_PREFIX} {message}", file=sys.stderr, flush=True)
+
+
+def _emit_prompt_code_log(*, step_label: str, code: str) -> None:
+    if not code:
+        _emit_prompt_log(f"{step_label} code: <blank>")
+        return
+    if "\n" not in code:
+        _emit_prompt_log(f"{step_label} code: {code}")
+        return
+    _emit_prompt_log(f"{step_label} code:")
+    for line in code.splitlines():
+        _emit_prompt_log(f"  {line}")
+
+
+def _page_summary(page: JourneyPlaywrightPromptPage) -> str:
+    return _format_page_summary(index=page.index, title=page.title, url=page.url)
+
+
+def _page_dict_summary(page: dict[str, object]) -> str:
+    return _format_page_summary(
+        index=page.get("index"),
+        title=page.get("title"),
+        url=page.get("url"),
+    )
+
+
+def _format_page_summary(*, index: object, title: object, url: object) -> str:
+    page_label = f"page {index}" if isinstance(index, int) else "page ?"
+    title_text = title.strip() if isinstance(title, str) else ""
+    url_text = url.strip() if isinstance(url, str) else ""
+    if title_text and url_text:
+        return f"{page_label} {title_text!r} at {url_text}"
+    if title_text:
+        return f"{page_label} {title_text!r}"
+    if url_text:
+        return f"{page_label} at {url_text}"
+    return page_label
+
+
+def _describe_prompt_action(code: str) -> str:
+    if not code:
+        return "run an empty Python snippet"
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return "run Python snippet"
+    call = _first_statement_call(tree)
+    if call is None:
+        return "run Python snippet"
+    direct_description = _describe_direct_function_call(call)
+    if direct_description is not None:
+        return direct_description
+    if isinstance(call.func, ast.Attribute):
+        method_description = _describe_method_call(call)
+        if method_description is not None:
+            return method_description
+    return "run Python snippet"
+
+
+def _first_statement_call(tree: ast.Module) -> ast.Call | None:
+    for statement in tree.body:
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+            return statement.value
+        if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Call):
+            return statement.value
+        if isinstance(statement, ast.AnnAssign) and isinstance(statement.value, ast.Call):
+            return statement.value
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Call):
+                return node
+    return None
+
+
+def _describe_direct_function_call(call: ast.Call) -> str | None:
+    if not isinstance(call.func, ast.Name):
+        return None
+    if call.func.id == "switch_page":
+        return f"switch to page {_call_arg_description(call, 0)}"
+    if call.func.id == "finish":
+        if call.args:
+            return f"finish with answer {_node_description(call.args[0])}"
+        return "finish the prompt"
+    return None
+
+
+def _describe_method_call(call: ast.Call) -> str | None:
+    if not isinstance(call.func, ast.Attribute):
+        return None
+    method = call.func.attr
+    target = _target_description(call.func.value)
+    if method == "click":
+        return f"click {target}"
+    if method == "fill":
+        return f"fill {target} with {_call_arg_description(call, 0)}"
+    if method == "press":
+        return f"press {_call_arg_description(call, 0)} on {target}"
+    if method == "goto":
+        return f"navigate to {_call_arg_description(call, 0)}"
+    if method == "wait_for_url":
+        return f"wait for URL {_call_arg_description(call, 0)}"
+    if method == "wait_for_load_state":
+        return f"wait for load state {_call_arg_description(call, 0)}"
+    if method == "wait_for":
+        return f"wait for {target}"
+    return None
+
+
+def _target_description(node: ast.AST) -> str:
+    if isinstance(node, ast.Name) and node.id == "page":
+        return "the active page"
+    if isinstance(node, ast.Attribute) and node.attr == "first":
+        return _target_description(node.value)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        method = node.func.attr
+        if method == "locator":
+            return f"selector {_call_arg_description(node, 0)}"
+        if method == "get_by_text":
+            return f"text {_call_arg_description(node, 0)}"
+        if method == "get_by_label":
+            return f"label {_call_arg_description(node, 0)}"
+        if method == "get_by_placeholder":
+            return f"placeholder {_call_arg_description(node, 0)}"
+        if method == "get_by_role":
+            role = _call_arg_description(node, 0)
+            name = _call_keyword_description(node, "name")
+            if name is not None:
+                return f"role {role} named {name}"
+            return f"role {role}"
+    return "the selected element"
+
+
+def _call_arg_description(call: ast.Call, index: int) -> str:
+    if index >= len(call.args):
+        return "value"
+    return _node_description(call.args[index])
+
+
+def _call_keyword_description(call: ast.Call, keyword_name: str) -> str | None:
+    for keyword in call.keywords:
+        if keyword.arg == keyword_name:
+            return _node_description(keyword.value)
+    return None
+
+
+def _node_description(node: ast.AST) -> str:
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return repr(node.value)
+        return str(node.value)
+    if isinstance(node, ast.Name):
+        return node.id
+    return ast.unparse(node)
 
 
 def _load_litellm_completion() -> _CompletionCallable:
