@@ -6,7 +6,8 @@ from journeysdk.tools.playwright import open_page
 
 def first():
     page = open_page("https://app.staging.heyalfie.com/", headless=False)
-    page.prompt('start chatting with Alfie - say you need to fix a toilet', model='claude-sonnet-4-6')
+    # page.prompt('sign up as e2etest@heyalfie.com')
+    page.prompt('start chatting with Alfie - say you need to fix a toilet')
     # page.wait_for_selector('button:has-text("Log in")').click()
     return page
 
