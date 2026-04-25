@@ -352,6 +352,34 @@ def _prompt_element(
     }
 
 
+def _prompt_html(
+    *,
+    title: str,
+    elements: list[dict[str, object]],
+    visible_texts: set[str],
+) -> str:
+    rendered_elements: list[str] = []
+    for element in elements:
+        selector = element["selector"]
+        if not isinstance(selector, str) or not selector.startswith("#"):
+            continue
+        element_id = selector.removeprefix("#")
+        tag_name = element.get("tag_name")
+        if not isinstance(tag_name, str) or not tag_name:
+            tag_name = "button"
+        role = element.get("role")
+        role_attr = f' role="{role}"' if isinstance(role, str) and role else ""
+        name = element.get("name")
+        text = str(name) if isinstance(name, str) else ""
+        if tag_name == "input":
+            rendered_elements.append(f'<input id="{element_id}" aria-label="{text}" />')
+        else:
+            rendered_elements.append(f'<{tag_name} id="{element_id}"{role_attr}>{text}</{tag_name}>')
+    rendered_elements.extend(f"<p>{text}</p>" for text in sorted(visible_texts))
+    body = "".join(rendered_elements)
+    return f"<html><head><title>{title}</title></head><body>{body}</body></html>"
+
+
 def _make_prompt_page(
     *,
     title: str,
@@ -361,6 +389,7 @@ def _make_prompt_page(
     elements: list[dict[str, object]] | None = None,
     visible_texts: set[str] | None = None,
     click_handlers: dict[str, Callable[[], None]] | None = None,
+    html: str | None = None,
 ) -> journey_playwright.JourneyPlaywrightPage:
     page = journey_playwright.JourneyPlaywrightPage._from_snapshot(
         journey_playwright._PageSnapshot.from_payload(_state_payload(url=url))
@@ -375,6 +404,11 @@ def _make_prompt_page(
     page._fake_prompt_visible_texts = set(visible_texts or set())
     page._fake_prompt_click_handlers = dict(click_handlers or {})
     page._fake_prompt_field_values = {}
+    page._fake_prompt_html = html or _prompt_html(
+        title=title,
+        elements=page._fake_prompt_elements,
+        visible_texts=page._fake_prompt_visible_texts,
+    )
 
     def title_method(self) -> str:
         return self._fake_prompt_title
@@ -385,9 +419,9 @@ def _make_prompt_page(
         return f"png:{self._fake_prompt_title}".encode("utf-8")
 
     def evaluate(self, script: str, items: object | None = None) -> object:
-        if "const MAX_ELEMENTS =" in script:
-            events.append(("prompt_collect_elements", self._fake_prompt_title))
-            return [dict(element) for element in self._fake_prompt_elements]
+        if "document.documentElement.outerHTML" in script:
+            events.append(("prompt_rendered_html", self._fake_prompt_title))
+            return self._fake_prompt_html
         if items is None and "window.localStorage" in script:
             return {}
         if items is not None and "window.localStorage.clear" in script:
@@ -743,7 +777,7 @@ def test_journey_playwright_prompt_rejects_blank_instruction(monkeypatch):
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
-        lambda: _FakeCompletion(['{"action":"finish","target":"","value":"done"}']),
+        lambda: _FakeCompletion(['finish("done")']),
     )
 
     with pytest.raises(ValueError, match="non-blank instruction"):
@@ -836,9 +870,9 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(mo
 
     fake_completion = _FakeCompletion(
         [
-            '{"action":"click","target":"e1","value":null}',
-            '{"action":"switch_page","target":"1","value":null}',
-            '{"action":"finish","target":"","value":"The opened popup title is Welcome popup."}',
+            'page.locator("#sign-in").click(timeout=timeout_ms)',
+            "switch_page(1)",
+            'finish("The opened popup title is Welcome popup.")',
         ]
     )
     monkeypatch.setattr(
@@ -873,18 +907,18 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(mo
         journey_playwright.JourneyPlaywrightPromptStep(
             index=1,
             page_index=0,
-            action="click",
-            target="e1",
+            action="python",
+            target='page.locator("#sign-in").click(timeout=timeout_ms)',
             status="ok",
-            detail="Clicked e1 Sign in.",
+            detail="Executed Python snippet. Active page index is 0.",
         ),
         journey_playwright.JourneyPlaywrightPromptStep(
             index=2,
             page_index=1,
-            action="switch_page",
-            target="1",
+            action="python",
+            target="switch_page(1)",
             status="ok",
-            detail="Switched to page 1 (Welcome popup).",
+            detail="Executed Python snippet. Active page index is 1.",
         ),
         journey_playwright.JourneyPlaywrightPromptStep(
             index=3,
@@ -896,26 +930,29 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(mo
         ),
     )
     assert fake_completion.calls[0]["model"] == "anthropic/claude-sonnet-4-5"
+    assert not hasattr(journey_playwright_prompt, "_COLLECT_ELEMENTS_SCRIPT")
+    first_prompt_text = fake_completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert "<journey-rendered-html>" in first_prompt_text
+    assert '<button id="sign-in" role="button">Sign in</button>' in first_prompt_text
+    assert '"actions": [' not in first_prompt_text
+    assert '"id": "e1"' not in first_prompt_text
     assert (
         fake_completion.calls[1]["messages"][1]["content"][0]["text"].find('"title": "Welcome popup"')
         != -1
     )
     assert events == [
-        ("prompt_collect_elements", "Login page"),
+        ("prompt_rendered_html", "Login page"),
         ("prompt_screenshot", "Login page"),
-        ("prompt_collect_elements", "Login page"),
         ("prompt_click", "Login page", "#sign-in", 5000),
         ("prompt_wait_for_load_state", "Welcome popup", "load", 5000),
-        ("prompt_collect_elements", "Login page"),
-        ("prompt_collect_elements", "Welcome popup"),
+        ("prompt_rendered_html", "Login page"),
         ("prompt_screenshot", "Login page"),
-        ("prompt_collect_elements", "Login page"),
-        ("prompt_collect_elements", "Welcome popup"),
+        ("prompt_rendered_html", "Welcome popup"),
         ("prompt_screenshot", "Welcome popup"),
     ]
 
 
-def test_journey_playwright_prompt_retries_non_fillable_target(monkeypatch):
+def test_journey_playwright_prompt_retries_rejected_python(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -938,9 +975,9 @@ def test_journey_playwright_prompt_retries_non_fillable_target(monkeypatch):
 
     fake_completion = _FakeCompletion(
         [
-            '{"action":"fill","target":"e1","value":"I need to fix a toilet"}',
-            '{"action":"fill","target":"e2","value":"I need to fix a toilet"}',
-            '{"action":"finish","target":"","value":"Started the chat."}',
+            'page.locator("#attach").click(timeout=timeout_ms)',
+            'page.locator("#composer").fill("I need to fix a toilet", timeout=timeout_ms)',
+            'finish("Started the chat.")',
         ]
     )
     monkeypatch.setattr(
@@ -955,31 +992,32 @@ def test_journey_playwright_prompt_retries_non_fillable_target(monkeypatch):
     assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
         index=1,
         page_index=0,
-        action="fill",
-        target="e1",
+        action="python",
+        target='page.locator("#attach").click(timeout=timeout_ms)',
         status="rejected",
-        detail="Element e1 Attach file does not allow 'fill'; available actions: click, press.",
+        detail="AssertionError: No click handler registered for '#attach'",
     )
     assert result.steps[1] == journey_playwright.JourneyPlaywrightPromptStep(
         index=2,
         page_index=0,
-        action="fill",
-        target="e2",
+        action="python",
+        target='page.locator("#composer").fill("I need to fix a toilet", timeout=timeout_ms)',
         status="ok",
-        detail="Filled e2 Message with 'I need to fix a toilet'.",
+        detail="Executed Python snippet. Active page index is 0.",
     )
     assert page._fake_prompt_field_values == {"#composer": "I need to fix a toilet"}
-    assert '"actions": [' in fake_completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert '<div id="composer" role="textbox">Message</div>' in fake_completion.calls[0][
+        "messages"
+    ][1]["content"][0]["text"]
     assert '"status": "rejected"' in fake_completion.calls[1]["messages"][1]["content"][0]["text"]
     assert events == [
-        ("prompt_collect_elements", "Chat"),
+        ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
-        ("prompt_collect_elements", "Chat"),
-        ("prompt_collect_elements", "Chat"),
+        ("prompt_click", "Chat", "#attach", 5000),
+        ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
-        ("prompt_collect_elements", "Chat"),
         ("prompt_fill", "Chat", "#composer", "I need to fix a toilet", 5000),
-        ("prompt_collect_elements", "Chat"),
+        ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
     ]
 
@@ -1001,14 +1039,14 @@ def test_journey_playwright_prompt_enforces_max_steps(monkeypatch):
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
-        lambda: _FakeCompletion(['{"action":"click","target":"e1","value":null}']),
+        lambda: _FakeCompletion(['page.locator("#sign-in").click(timeout=timeout_ms)']),
     )
 
     with pytest.raises(RuntimeError, match="reached max_steps=1"):
         page.prompt("click sign in", model="openai/gpt-4.1-mini", max_steps=1)
 
 
-def test_journey_playwright_prompt_rejects_invalid_model_json(monkeypatch):
+def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1021,14 +1059,19 @@ def test_journey_playwright_prompt_rejects_invalid_model_json(monkeypatch):
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
-        lambda: _FakeCompletion(["not json"]),
+        lambda: _FakeCompletion(['page.locator("#sign-in"', 'finish("Recovered.")']),
     )
 
-    with pytest.raises(RuntimeError, match="return one JSON action"):
-        page.prompt("click sign in", model="openai/gpt-4.1-mini")
+    result = page.prompt("click sign in", model="openai/gpt-4.1-mini")
+
+    assert result.text == "Recovered."
+    assert result.steps[0].action == "python"
+    assert result.steps[0].target == 'page.locator("#sign-in"'
+    assert result.steps[0].status == "rejected"
+    assert result.steps[0].detail.startswith("SyntaxError:")
 
 
-def test_journey_playwright_prompt_rejects_unsupported_action(monkeypatch):
+def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1041,8 +1084,45 @@ def test_journey_playwright_prompt_rejects_unsupported_action(monkeypatch):
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
-        lambda: _FakeCompletion(['{"action":"hover","target":"e1","value":null}']),
+        lambda: _FakeCompletion(
+            ['{"action":"hover","target":"e1","value":null}', 'finish("Recovered.")']
+        ),
     )
 
-    with pytest.raises(RuntimeError, match="unsupported action 'hover'"):
-        page.prompt("click sign in", model="openai/gpt-4.1-mini")
+    result = page.prompt("click sign in", model="openai/gpt-4.1-mini")
+
+    assert result.text == "Recovered."
+    assert result.steps[0].status == "rejected"
+    assert result.steps[0].detail == "NameError: name 'null' is not defined"
+
+
+def test_journey_playwright_prompt_rejects_blank_finish_then_recovers(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: _FakeCompletion(['finish("")', 'finish("Done.")']),
+    )
+
+    result = page.prompt("finish clearly", model="openai/gpt-4.1-mini")
+
+    assert result.text == "Done."
+    assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
+        index=1,
+        page_index=0,
+        action="python",
+        target='finish("")',
+        status="rejected",
+        detail=(
+            "ValueError: JourneyPlaywrightPage.prompt(...) finish(...) requires "
+            "a non-empty string."
+        ),
+    )
