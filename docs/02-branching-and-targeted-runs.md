@@ -75,17 +75,15 @@ journey_id=branching_journey function_ref=...
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Journey docs/branching_journey/branching_journey.py:branching_journey
-journey_id=branching_journey function_ref=...
-- case_2 start branches={bg_1=branch_2}
-  step load_signup_request attempt=1 start
-  step load_signup_request attempt=1 ok duration=...
-  step classify_signup_request attempt=1 start
-  step classify_signup_request attempt=1 ok duration=...
-  branch bg_1=branch_2
-  step assert_manual_review_path attempt=1 start
-  step assert_manual_review_path attempt=1 ok duration=...
-- case_2 ok steps=3 duration=... stopped_at=assert_manual_review_path replay_anchor=cp_1
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step load_signup_request attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step load_signup_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step classify_signup_request attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step classify_signup_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  branch bg_1=branch_2"
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_manual_review_path attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_manual_review_path attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_manual_review_path replay_anchor=cp_1"
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -155,14 +153,12 @@ journey_id=rehydration_journey function_ref=...
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Journey docs/rehydration_journey/rehydration_journey.py:rehydration_journey
-journey_id=rehydration_journey function_ref=...
-- case_2 start branches={bg_1=branch_2}
-  step prepare_context attempt=1 ok duration=...
-  step shared_after_checkpoint attempt=1 ok duration=...
-  branch bg_1=branch_2
-  step assert_branch_b attempt=1 ok duration=...
-- case_2 ok steps=3 duration=... stopped_at=assert_branch_b replay_anchor=cp_1
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step prepare_context attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step shared_after_checkpoint attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  branch bg_1=branch_2"
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_branch_b attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_branch_b replay_anchor=cp_1"
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 

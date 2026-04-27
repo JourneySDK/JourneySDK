@@ -16,6 +16,8 @@ from email.utils import format_datetime, getaddresses, make_msgid, parsedate_to_
 import hashlib
 from typing import Any, Literal, Protocol, TypeAlias, TypedDict
 
+from journeysdk.logger import get_logger
+
 from ._email_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
@@ -51,6 +53,7 @@ _DIRECT_EMAIL_REQUIRED_ENV_VARS = (
     JOURNEY_EMAIL_IMAP_PASSWORD_ENV,
     JOURNEY_EMAIL_IMAP_SSL_ENV,
 )
+_LOGGER = get_logger("email")
 
 EmailTransport: TypeAlias = Literal["direct", "cloud"]
 
@@ -149,18 +152,48 @@ def get_email_inbox(
     )
 
     def acquire_email_inbox() -> EmailInbox:
+        _LOGGER.info(
+            "inbox_resolve_start",
+            "resolving email inbox",
+            explicit_server=validated_server is not None,
+        )
         if validated_server is not None:
-            return _direct_email_inbox(validated_server)
+            inbox = _direct_email_inbox(validated_server)
+            _LOGGER.info(
+                "inbox_resolve_success",
+                "resolved direct email inbox",
+                transport=inbox.transport,
+                address=inbox.address,
+                mailbox=inbox.mailbox,
+            )
+            return inbox
 
         direct_resolution = _load_direct_server_config_from_env(owner="get_email_inbox")
         if direct_resolution.server is not None:
-            return _direct_email_inbox(direct_resolution.server)
+            inbox = _direct_email_inbox(direct_resolution.server)
+            _LOGGER.info(
+                "inbox_resolve_success",
+                "resolved direct email inbox",
+                transport=inbox.transport,
+                address=inbox.address,
+                mailbox=inbox.mailbox,
+            )
+            return inbox
 
-        return _load_cloud_email_inbox(
+        inbox = _load_cloud_email_inbox(
             owner="get_email_inbox",
             direct_resolution=direct_resolution,
             api_base_url=None,
         )
+        _LOGGER.info(
+            "inbox_resolve_success",
+            "resolved cloud email inbox",
+            transport=inbox.transport,
+            address=inbox.address,
+            mailbox=inbox.mailbox,
+            api_base_url=inbox.api_base_url,
+        )
+        return inbox
 
     _set_step_metadata(
         acquire_email_inbox,
@@ -228,6 +261,13 @@ def send_email(
             owner="send_email",
             resolved=resolved,
         )
+        _LOGGER.info(
+            "email_send_start",
+            "sending email",
+            transport=resolved.transport,
+            address=resolved.address,
+            subject=normalized_subject,
+        )
         resolved_recipients = recipients
         if resolved_recipients is None:
             if not resolved.address:
@@ -256,13 +296,21 @@ def send_email(
                 message_id=message_id,
             )
             _send_smtp_message(server_config=server_config, message=outbound_message)
-            return _build_send_receipt(
+            receipt = _build_send_receipt(
                 message_id=message_id,
                 from_address=sender,
                 to=resolved_recipients,
                 subject=normalized_subject,
                 transport="direct",
             )
+            _LOGGER.info(
+                "email_send_success",
+                "email sent",
+                transport="direct",
+                message_id=receipt["message_id"],
+                to_count=len(receipt["to"]),
+            )
+            return receipt
 
         payload = {
             "to": resolved_recipients,
@@ -276,7 +324,15 @@ def send_email(
             payload=payload,
             api_base_url=resolved.api_base_url,
         )
-        return _validate_send_receipt(receipt)
+        validated_receipt = _validate_send_receipt(receipt)
+        _LOGGER.info(
+            "email_send_success",
+            "email sent",
+            transport="cloud",
+            message_id=validated_receipt["message_id"],
+            to_count=len(validated_receipt["to"]),
+        )
+        return validated_receipt
 
     _set_step_metadata(
         perform_send,
@@ -338,6 +394,14 @@ def wait_for_email(
             email_inbox=email_inbox,
             server=validated_server,
         )
+        _LOGGER.info(
+            "email_wait_start",
+            "waiting for email",
+            transport=resolved.transport,
+            address=resolved.address,
+            mailbox=resolved.mailbox,
+            timeout=timeout_seconds,
+        )
         deadline = time.monotonic() + timeout_seconds
         while True:
             if resolved.transport == "direct":
@@ -365,13 +429,34 @@ def wait_for_email(
                 )
 
             if payload is not None:
-                return _validate_received_message(payload)
+                message = _validate_received_message(payload)
+                _LOGGER.info(
+                    "email_wait_success",
+                    "received email",
+                    transport=resolved.transport,
+                    message_id=message["message_id"],
+                    subject=message["subject"],
+                )
+                return message
 
             if time.monotonic() >= deadline:
                 descriptor = resolved.address or resolved.mailbox or "the configured inbox"
+                _LOGGER.warning(
+                    "email_wait_timeout",
+                    "timed out waiting for email",
+                    transport=resolved.transport,
+                    descriptor=descriptor,
+                    timeout=timeout_seconds,
+                )
                 raise TimeoutError(
                     f"Timed out waiting for email in {descriptor} after {timeout} seconds."
                 )
+            _LOGGER.debug(
+                "email_wait_poll_empty",
+                "email poll returned no matching message",
+                transport=resolved.transport,
+                poll_interval=poll_interval_seconds,
+            )
             time.sleep(poll_interval_seconds)
 
     _set_step_metadata(
@@ -465,6 +550,11 @@ def _load_cloud_email_inbox(
     direct_resolution: _DirectEnvResolution,
     api_base_url: str | None,
 ) -> EmailInbox:
+    _LOGGER.info(
+        "cloud_inbox_resolve_start",
+        "loading cloud email inbox",
+        api_base_url=api_base_url,
+    )
     try:
         resolved_api_base_url, payload = get_cloud_default_inbox(api_base_url=api_base_url)
     except RuntimeError as exc:
@@ -474,11 +564,19 @@ def _load_cloud_email_inbox(
                 direct_resolution=direct_resolution,
             ) from exc
         raise
-    return _payload_to_inbox(
+    inbox = _payload_to_inbox(
         owner=owner,
         payload=payload,
         api_base_url=resolved_api_base_url,
     )
+    _LOGGER.info(
+        "cloud_inbox_resolve_success",
+        "loaded cloud email inbox",
+        address=inbox.address,
+        mailbox=inbox.mailbox,
+        api_base_url=inbox.api_base_url,
+    )
+    return inbox
 
 
 def _validate_server_config(
@@ -684,6 +782,13 @@ def _load_direct_server_config_from_env(*, owner: str) -> _DirectEnvResolution:
 
 
 def _send_smtp_message(*, server_config: EmailServerConfig, message: EmailMessage) -> None:
+    _LOGGER.debug(
+        "smtp_send_start",
+        "sending email through SMTP",
+        host=server_config.smtp_host,
+        port=server_config.smtp_port,
+        starttls=server_config.smtp_starttls,
+    )
     smtp_client = smtplib.SMTP(server_config.smtp_host, server_config.smtp_port, timeout=5)
     try:
         smtp_client.ehlo()
@@ -693,6 +798,13 @@ def _send_smtp_message(*, server_config: EmailServerConfig, message: EmailMessag
         smtp_client.login(server_config.smtp_username, server_config.smtp_password)
         smtp_client.send_message(message)
     except OSError as exc:
+        _LOGGER.error(
+            "smtp_send_failure",
+            "SMTP send failed",
+            host=server_config.smtp_host,
+            port=server_config.smtp_port,
+            error=_format_exception(exc),
+        )
         raise RuntimeError(
             f"Could not send email through SMTP server {server_config.smtp_host}:{server_config.smtp_port}: {exc}"
         ) from exc
@@ -701,6 +813,12 @@ def _send_smtp_message(*, server_config: EmailServerConfig, message: EmailMessag
             smtp_client.quit()
         except OSError:
             pass
+    _LOGGER.debug(
+        "smtp_send_success",
+        "SMTP send completed",
+        host=server_config.smtp_host,
+        port=server_config.smtp_port,
+    )
 
 
 def _fetch_direct_message(
@@ -712,6 +830,14 @@ def _fetch_direct_message(
     to_address: str | None,
     unread_only: bool,
 ) -> EmailReceivedMessage | None:
+    _LOGGER.debug(
+        "imap_fetch_start",
+        "fetching email through IMAP",
+        host=server_config.imap_host,
+        port=server_config.imap_port,
+        mailbox=mailbox,
+        unread_only=unread_only,
+    )
     imap_client = _build_imap_client(server_config)
     try:
         _require_imap_ok(
@@ -731,6 +857,11 @@ def _fetch_direct_message(
         )
         _require_imap_ok(status=search_status, action="search mailbox")
         if not raw_matches:
+            _LOGGER.debug(
+                "imap_fetch_empty",
+                "IMAP search returned no messages",
+                mailbox=mailbox,
+            )
             return None
 
         message_ids = raw_matches[0].split()
@@ -749,9 +880,30 @@ def _fetch_direct_message(
                 continue
             store_status, _ = imap_client.store(message_seq, "+FLAGS", "(\\Seen)")
             _require_imap_ok(status=store_status, action=f"mark email {message_seq!r} as seen")
+            _LOGGER.debug(
+                "imap_fetch_success",
+                "matched email through IMAP",
+                mailbox=mailbox,
+                message_id=normalized["message_id"],
+                subject=normalized["subject"],
+            )
             return normalized
+        _LOGGER.debug(
+            "imap_fetch_no_match",
+            "IMAP messages did not match filters",
+            mailbox=mailbox,
+            candidates=len(message_ids),
+        )
         return None
     except (imaplib.IMAP4.error, OSError) as exc:
+        _LOGGER.error(
+            "imap_fetch_failure",
+            "IMAP fetch failed",
+            host=server_config.imap_host,
+            port=server_config.imap_port,
+            mailbox=mailbox,
+            error=_format_exception(exc),
+        )
         raise RuntimeError(
             f"Could not fetch email through IMAP server {server_config.imap_host}:{server_config.imap_port}: {exc}"
         ) from exc
@@ -919,6 +1071,13 @@ def _synthetic_message_id(*, from_address: str, raw_message: bytes | None) -> st
         digest = hashlib.sha256(raw_message).hexdigest()[:24]
         return f"<journey-{digest}@{domain}>"
     return _build_message_id(from_address)
+
+
+def _format_exception(exc: BaseException) -> str:
+    message = str(exc)
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return type(exc).__name__
 
 
 def _resolve_sender_address(

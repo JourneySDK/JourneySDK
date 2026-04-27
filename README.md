@@ -28,7 +28,7 @@ That makes Journey SDK useful for flows such as:
 - developers and test engineers who want to express journey logic in plain Python instead of splitting it across
   multiple frameworks
 - platform and workflow teams building internal automations, customer lifecycle flows, or agentic products with async
-  steps and third-party integrations
+[journey] time=... level=INFO component=executor event=execution_log message="  steps and third-party integrations"
 - AI coding agents that need to generate, run, and iterate on journey tests while implementing features
 
 ## AI Agent Support
@@ -338,8 +338,15 @@ saved progress; delete the file when you want to start fresh.
 2. Run `journey`, which compiles the authored journey into linear cases and executes them.
 3. Use `--step` when you only want the case that reaches one target step label.
 
-The default human-readable CLI output prints the compiled plan first, then streams progress in real time: it prints
-each case start, branch selection, step attempt, retry, step status, and case completion as execution happens.
+The default human-readable CLI output prints the compiled plan and final summaries on stdout. Live diagnostics stream
+to stderr as structured Journey log lines, for example:
+
+```console
+[journey] time=2026-04-25T10:30:12.345Z level=INFO component=executor event=step_success message="  step create_customer_profile attempt=1 ok duration=0.012s" attempt=1 case=case_1 duration=0.012s file=docs/first_journey/first_journey.py journey=first_journey node_index=0 step=create_customer_profile
+```
+
+Use `--log-level debug|info|warning|error|off` to tune those diagnostics. The default is `info`; `--log-level off`
+keeps stdout output but suppresses Journey diagnostics.
 
 CLI commands discover functions annotated with `@journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
@@ -369,8 +376,8 @@ Execute all compiled cases:
 uv run journey
 ```
 
-The default output shows the compiled cases first, then streams one append-only log line per execution event, including
-retries and per-case durations.
+The default output shows the compiled cases first. Live execution logs are append-only stderr lines that include
+component, event, timestamp, case, step, retry, and duration fields.
 
 Execute with persisted state so Ctrl-C can be resumed later:
 

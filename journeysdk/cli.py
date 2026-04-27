@@ -19,6 +19,7 @@ from .errors import (
     StepNotFoundError,
 )
 from .executor import _ExecutionObserver, _PausedExecution, _execute_plan
+from .logger import configure_logging, get_logger
 from .models import (
     BranchMarkerNode,
     CaseExecutionReport,
@@ -30,6 +31,8 @@ from .models import (
 from .planner import compile_journey
 from .state import load_execution_state
 from .types import JourneyEntrypoint
+
+_CLI_LOGGER = get_logger("cli")
 
 
 @dataclass(frozen=True)
@@ -113,11 +116,9 @@ class _LiveTextReporter(_ExecutionObserver):
     ) -> None:
         self._display = _display_path(root, file_path)
         self._journey_name = journey_name
-        self._needs_separator = needs_separator
         self._journey_started = False
-
-    def _emit(self, line: str = "") -> None:
-        print(line, flush=True)
+        self._logger = get_logger("executor")
+        del needs_separator
 
     def on_journey_start(
         self,
@@ -125,15 +126,17 @@ class _LiveTextReporter(_ExecutionObserver):
         plan: JourneyPlan,
         selected_cases: list[object],
     ) -> None:
-        del selected_cases
         if self._journey_started:
             return
         self._journey_started = True
-        if self._needs_separator:
-            self._emit()
-        self._emit(f"Journey {self._display}:{self._journey_name}")
-        self._emit(
-            f"journey_id={plan.journey_id} function_ref={plan.function_ref}"
+        self._logger.info(
+            "journey_start",
+            "starting journey execution",
+            file=self._display,
+            journey=self._journey_name,
+            journey_id=plan.journey_id,
+            function_ref=plan.function_ref,
+            cases=len(selected_cases),
         )
 
     def on_case_start(
@@ -143,9 +146,15 @@ class _LiveTextReporter(_ExecutionObserver):
         stop_after_index: int | None,
         replay_anchor: str | None,
     ) -> None:
-        del stop_after_index, replay_anchor
-        self._emit(
-            f"- {case_plan.case_id} start branches={_format_branch_env(case_plan.branch_env)}"
+        self._logger.info(
+            "case_start",
+            f"- {case_plan.case_id} start branches={_format_branch_env(case_plan.branch_env)}",
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            branches=_format_branch_env(case_plan.branch_env),
+            replay_anchor=replay_anchor,
+            stop_after_index=stop_after_index,
         )
 
     def on_case_resume(
@@ -156,9 +165,16 @@ class _LiveTextReporter(_ExecutionObserver):
         replay_anchor: str | None,
         replay_from_index: int,
     ) -> None:
-        del stop_after_index, replay_anchor, replay_from_index
-        self._emit(
-            f"- {case_plan.case_id} resume branches={_format_branch_env(case_plan.branch_env)}"
+        self._logger.info(
+            "case_resume",
+            f"- {case_plan.case_id} resume branches={_format_branch_env(case_plan.branch_env)}",
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            branches=_format_branch_env(case_plan.branch_env),
+            replay_anchor=replay_anchor,
+            replay_from_index=replay_from_index,
+            stop_after_index=stop_after_index,
         )
 
     def on_step_start(
@@ -169,8 +185,16 @@ class _LiveTextReporter(_ExecutionObserver):
         node_index: int,
         attempt: int,
     ) -> None:
-        del case_plan, node_index
-        self._emit(f"  step {_step_name(node)} attempt={attempt} start")
+        self._logger.info(
+            "step_start",
+            f"  step {_step_name(node)} attempt={attempt} start",
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+        )
 
     def on_branch(
         self,
@@ -179,8 +203,16 @@ class _LiveTextReporter(_ExecutionObserver):
         node: BranchMarkerNode,
         node_index: int,
     ) -> None:
-        del case_plan, node_index
-        self._emit(f"  branch {node.group_id}={node.active_key}")
+        self._logger.info(
+            "branch_select",
+            f"  branch {node.group_id}={node.active_key}",
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            branch_group=node.group_id,
+            branch=node.active_key,
+            node_index=node_index,
+        )
 
     def on_retry(
         self,
@@ -194,14 +226,25 @@ class _LiveTextReporter(_ExecutionObserver):
         remaining_retries: int,
         error: Exception,
     ) -> None:
-        del case_plan, node_index
-        self._emit(
-            "  "
-            f"step {_step_name(node)} attempt={attempt} retry "
-            f"duration={_format_duration(duration_seconds)} "
-            f"delay={_format_duration(delay_seconds)} "
-            f"remaining={remaining_retries} "
-            f"error={_format_exception(error)}"
+        self._logger.warning(
+            "step_retry",
+            (
+                f"  step {_step_name(node)} attempt={attempt} retry "
+                f"duration={_format_duration(duration_seconds)} "
+                f"delay={_format_duration(delay_seconds)} "
+                f"remaining={remaining_retries} "
+                f"error={_format_exception(error)}"
+            ),
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
+            delay=_format_duration(delay_seconds),
+            remaining=remaining_retries,
+            error=_format_exception(error),
         )
 
     def on_step_success(
@@ -213,11 +256,19 @@ class _LiveTextReporter(_ExecutionObserver):
         attempt: int,
         duration_seconds: float,
     ) -> None:
-        del case_plan, node_index
-        self._emit(
-            "  "
-            f"step {_step_name(node)} attempt={attempt} ok "
-            f"duration={_format_duration(duration_seconds)}"
+        self._logger.info(
+            "step_success",
+            (
+                f"  step {_step_name(node)} attempt={attempt} ok "
+                f"duration={_format_duration(duration_seconds)}"
+            ),
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
         )
 
     def on_step_failure(
@@ -230,12 +281,21 @@ class _LiveTextReporter(_ExecutionObserver):
         duration_seconds: float,
         error: Exception,
     ) -> None:
-        del case_plan, node_index
-        self._emit(
-            "  "
-            f"step {_step_name(node)} attempt={attempt} failed "
-            f"duration={_format_duration(duration_seconds)} "
-            f"error={_format_exception(error)}"
+        self._logger.error(
+            "step_failure",
+            (
+                f"  step {_step_name(node)} attempt={attempt} failed "
+                f"duration={_format_duration(duration_seconds)} "
+                f"error={_format_exception(error)}"
+            ),
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
+            error=_format_exception(error),
         )
 
     def on_step_interrupted(
@@ -248,12 +308,21 @@ class _LiveTextReporter(_ExecutionObserver):
         duration_seconds: float,
         error: BaseException,
     ) -> None:
-        del case_plan, node_index
-        self._emit(
-            "  "
-            f"step {_step_name(node)} attempt={attempt} interrupted "
-            f"duration={_format_duration(duration_seconds)} "
-            f"error={_format_exception(error)}"
+        self._logger.warning(
+            "step_interrupted",
+            (
+                f"  step {_step_name(node)} attempt={attempt} interrupted "
+                f"duration={_format_duration(duration_seconds)} "
+                f"error={_format_exception(error)}"
+            ),
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
+            error=_format_exception(error),
         )
 
     def on_case_complete(
@@ -274,12 +343,36 @@ class _LiveTextReporter(_ExecutionObserver):
             parts.append(f"stopped_at={report.stopped_at_label}")
         if report.replay_anchor is not None:
             parts.append(f"replay_anchor={report.replay_anchor}")
-        self._emit(" ".join(parts))
+        self._logger.info(
+            "case_complete",
+            " ".join(parts),
+            file=self._display,
+            journey=self._journey_name,
+            case=report.case_id,
+            steps=_count_step_records(report),
+            duration=_format_duration(duration_seconds),
+            stopped_at=report.stopped_at_label,
+            replay_anchor=report.replay_anchor,
+        )
+
+    def on_journey_complete(self, *, report: ExecutionReport) -> None:
+        self._logger.info(
+            "journey_complete",
+            "journey execution completed",
+            file=self._display,
+            journey=self._journey_name,
+            journey_id=report.journey_id,
+            cases=len(report.case_reports),
+        )
 
     def on_develop_state_restart(self, *, case_id: str) -> None:
-        self._emit(
+        self._logger.warning(
+            "develop_state_restart",
             "Already-run journey code changed before the paused step; "
-            f"restarting {case_id} from the beginning."
+            f"restarting {case_id} from the beginning.",
+            file=self._display,
+            journey=self._journey_name,
+            case=case_id,
         )
 
 
@@ -316,6 +409,13 @@ def _discover_targets(
     args: argparse.Namespace,
 ) -> tuple[Path, list[DiscoveredJourney], list[_CommandError]]:
     root = Path.cwd().resolve()
+    _CLI_LOGGER.info(
+        "discovery_start",
+        "discovering journeys",
+        root=str(root),
+        file=args.file,
+        journey=args.journey,
+    )
     discovered, discovery_errors = discover_journeys(
         root,
         file_path=args.file,
@@ -332,12 +432,25 @@ def _discover_targets(
     ]
 
     if not discovered and not errors:
+        _CLI_LOGGER.error(
+            "discovery_failure",
+            "no journeys were found",
+            root=str(root),
+            file=args.file,
+            journey=args.journey,
+        )
         raise NoJourneysFoundError(
             root=str(root),
             file_path=args.file,
             journey_name=args.journey,
         )
 
+    _CLI_LOGGER.info(
+        "discovery_complete",
+        "journey discovery completed",
+        discovered=len(discovered),
+        errors=len(errors),
+    )
     return root, discovered, errors
 
 
@@ -350,9 +463,22 @@ def _compile_targets(
     errors: list[_CommandError] = []
 
     for target in targets:
+        _CLI_LOGGER.info(
+            "compile_start",
+            "compiling journey",
+            file=str(target.file_path),
+            journey=target.journey_name,
+        )
         try:
             plan = compile_journey(target.function)
         except Exception as exc:
+            _CLI_LOGGER.error(
+                "compile_failure",
+                "journey compilation failed",
+                file=str(target.file_path),
+                journey=target.journey_name,
+                error=_format_exception(exc),
+            )
             errors.append(
                 _error_from_exception(
                     exc,
@@ -372,6 +498,13 @@ def _compile_targets(
                 function=target.function,
                 plan=plan,
             )
+        )
+        _CLI_LOGGER.info(
+            "compile_success",
+            "journey compiled",
+            file=str(target.file_path),
+            journey=target.journey_name,
+            cases=len(plan.case_plans),
         )
 
     return compiled, errors
@@ -607,6 +740,12 @@ def _execute_all_targets(
     errors: list[_CommandError] = []
 
     for index, item in enumerate(compiled):
+        _CLI_LOGGER.info(
+            "execution_start",
+            "executing journey",
+            file=str(item.file_path),
+            journey=item.journey_name,
+        )
         try:
             observer = (
                 _LiveTextReporter(
@@ -625,6 +764,13 @@ def _execute_all_targets(
                 observer=observer,
             )
         except Exception as exc:
+            _CLI_LOGGER.error(
+                "execution_failure",
+                "journey execution failed",
+                file=str(item.file_path),
+                journey=item.journey_name,
+                error=_format_exception(exc),
+            )
             errors.append(
                 _error_from_exception(
                     exc,
@@ -645,6 +791,13 @@ def _execute_all_targets(
                 report=report,
             )
         )
+        _CLI_LOGGER.info(
+            "execution_success",
+            "journey execution succeeded",
+            file=str(item.file_path),
+            journey=item.journey_name,
+            cases=len(report.case_reports),
+        )
 
     return executed, errors
 
@@ -662,6 +815,13 @@ def _execute_target_step(
         return [], errors
 
     try:
+        _CLI_LOGGER.info(
+            "execution_start",
+            "executing targeted journey",
+            file=str(selected.file_path),
+            journey=selected.journey_name,
+            step=step,
+        )
         observer = (
             _LiveTextReporter(
                 root=root,
@@ -680,6 +840,14 @@ def _execute_target_step(
             observer=observer,
         )
     except Exception as exc:
+        _CLI_LOGGER.error(
+            "execution_failure",
+            "targeted journey execution failed",
+            file=str(selected.file_path),
+            journey=selected.journey_name,
+            step=step,
+            error=_format_exception(exc),
+        )
         return [], [
             _error_from_exception(
                 exc,
@@ -689,6 +857,14 @@ def _execute_target_step(
             )
         ]
 
+    _CLI_LOGGER.info(
+        "execution_success",
+        "targeted journey execution succeeded",
+        file=str(selected.file_path),
+        journey=selected.journey_name,
+        step=step,
+        cases=len(report.case_reports),
+    )
     return [
         _ExecutedJourney(
             file_path=selected.file_path,
@@ -758,6 +934,14 @@ def _execute_target_pause(
     cleanup_state = state is None
 
     try:
+        _CLI_LOGGER.info(
+            "execution_start",
+            "executing develop step",
+            file=str(selected.file_path),
+            journey=selected.journey_name,
+            develop_step=develop_step,
+            interactive=interactive,
+        )
         observer = (
             _LiveTextReporter(
                 root=root,
@@ -788,11 +972,27 @@ def _execute_target_pause(
             if isinstance(outcome, _PausedExecution):
                 outcome.close_pending_exits()
                 if stream_live:
-                    print(_step_stop_status(outcome, verb="Stopped"), flush=True)
+                    _CLI_LOGGER.info(
+                        "develop_step_stopped",
+                        _step_stop_status(outcome, verb="Stopped"),
+                        file=str(selected.file_path),
+                        journey=selected.journey_name,
+                        step=outcome.paused_step.label or outcome.paused_step.node_id,
+                        attempt=outcome.paused_step.attempt,
+                        ok=outcome.paused_step.ok,
+                    )
                 if not outcome.paused_step.ok:
                     return [], [_paused_failure_error(selected, outcome)]
                 return [], []
 
+            _CLI_LOGGER.info(
+                "execution_success",
+                "develop-step execution succeeded",
+                file=str(selected.file_path),
+                journey=selected.journey_name,
+                develop_step=develop_step,
+                cases=len(outcome.case_reports),
+            )
             return [
                 _ExecutedJourney(
                     file_path=selected.file_path,
@@ -843,14 +1043,25 @@ def _execute_target_pause(
                 selected = reloaded
                 if stream_live:
                     display = _display_path(root, selected.file_path)
-                    print(
+                    _CLI_LOGGER.info(
+                        "develop_step_reload",
                         f"Reloaded and recompiled {display}:{selected.journey_name} "
                         f"after {pause_action}.",
-                        flush=True,
+                        file=str(selected.file_path),
+                        journey=selected.journey_name,
+                        action=pause_action,
                     )
                 continue
 
             report = outcome
+            _CLI_LOGGER.info(
+                "execution_success",
+                "develop-step execution succeeded",
+                file=str(selected.file_path),
+                journey=selected.journey_name,
+                develop_step=develop_step,
+                cases=len(report.case_reports),
+            )
             return [
                 _ExecutedJourney(
                     file_path=selected.file_path,
@@ -860,6 +1071,14 @@ def _execute_target_pause(
                 )
             ], []
     except Exception as exc:
+        _CLI_LOGGER.error(
+            "execution_failure",
+            "develop-step execution failed",
+            file=str(selected.file_path),
+            journey=selected.journey_name,
+            develop_step=develop_step,
+            error=_format_exception(exc),
+        )
         return [], [
             _error_from_exception(
                 exc,
@@ -944,6 +1163,11 @@ def _emit_execute_output(
 
 
 def _emit_interrupt_output(*, state: str | None, as_json: bool) -> None:
+    _CLI_LOGGER.warning(
+        "execution_interrupted",
+        "journey execution was interrupted",
+        state=state,
+    )
     if as_json:
         print(
             json.dumps(
@@ -1036,7 +1260,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                 root=root,
                 fail_fast=args.fail_fast,
                 state=args.state,
-                stream_live=not args.json,
+                stream_live=True,
             )
             executed.extend(run_results)
         else:
@@ -1046,7 +1270,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     root=root,
                     develop_step=args.develop_step,
                     state=args.state,
-                    stream_live=not args.json,
+                    stream_live=True,
                     interactive=args.interactive,
                 )
             else:
@@ -1055,7 +1279,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     root=root,
                     step=args.step,
                     state=args.state,
-                    stream_live=not args.json,
+                    stream_live=True,
                 )
             executed.extend(run_results)
     except KeyboardInterrupt:
@@ -1103,6 +1327,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", help="Persist and resume execution state in one file")
     parser.add_argument("--json", action="store_true", help="Emit execution JSON")
     parser.add_argument(
+        "--log-level",
+        choices=("debug", "info", "warning", "error", "off"),
+        default="info",
+        help="Set Journey diagnostic logging level (default: info)",
+    )
+    parser.add_argument(
         "--fail-fast",
         action="store_true",
         help="Stop at the first discovery, compilation, or execution failure",
@@ -1114,6 +1344,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    configure_logging(args.log_level)
     if args.interactive and getattr(args, "develop_step", None) is None:
         parser.error("--interactive requires --develop-step")
     if getattr(args, "develop_step", None) is not None and args.json:

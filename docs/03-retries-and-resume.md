@@ -105,16 +105,14 @@ journey_id=retry_current_step_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/retry_journey/retry_journey.py:retry_current_step_journey
-journey_id=retry_current_step_journey function_ref=...
-- case_1 start branches={}
-  step prepare_same_step_demo attempt=1 start
-  step prepare_same_step_demo attempt=1 ok duration=...
-  step wait_for_same_step attempt=1 start
-  step wait_for_same_step attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: still waiting for the same-step retry demo
-  step wait_for_same_step attempt=2 start
-  step wait_for_same_step attempt=2 ok duration=...
-- case_1 ok steps=2 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step prepare_same_step_demo attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step prepare_same_step_demo attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: still waiting for the same-step retry demo"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=2 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=2 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -132,19 +130,17 @@ journey_id=retry_from_step_result_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/retry_journey/retry_journey.py:retry_from_step_result_journey
-journey_id=retry_from_step_result_journey function_ref=...
-- case_1 start branches={}
-  step issue_report_request attempt=1 start
-  step issue_report_request attempt=1 ok duration=...
-  step wait_for_report attempt=1 start
-  step wait_for_report attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: report not ready yet
-  step issue_report_request attempt=2 start
-  step issue_report_request attempt=2 ok duration=...
-  step wait_for_report attempt=2 start
-  step wait_for_report attempt=2 ok duration=...
-  step assert_report_ready attempt=1 ok duration=...
-- case_1 ok steps=3 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: report not ready yet"
+[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=2 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=2 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_report_ready attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=3 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -162,17 +158,15 @@ journey_id=retry_from_checkpoint_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/retry_journey/retry_journey.py:retry_from_checkpoint_journey
-journey_id=retry_from_checkpoint_journey function_ref=...
-- case_1 start branches={}
-  step load_status_request attempt=1 ok duration=...
-  step refresh_status_cache attempt=1 ok duration=...
-  step wait_for_checkpoint_retry attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: checkpoint retry demo is still waiting
-  step refresh_status_cache attempt=2 start
-  step refresh_status_cache attempt=2 ok duration=...
-  step wait_for_checkpoint_retry attempt=2 ok duration=...
-  step assert_checkpoint_retry_ready attempt=1 ok duration=...
-- case_1 ok steps=4 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step load_status_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_checkpoint_retry attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: checkpoint retry demo is still waiting"
+[journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=2 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_checkpoint_retry attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_checkpoint_retry_ready attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=4 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -236,12 +230,10 @@ journey_id=resume_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/resume_journey/resume_journey.py:resume_journey
-journey_id=resume_journey function_ref=...
-- case_1 start branches={}
-  step load_support_ticket attempt=1 ok duration=...
-  step wait_for_resume_signal attempt=1 start
-  step wait_for_resume_signal attempt=1 interrupted duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step load_support_ticket attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 interrupted duration=..."
 Interrupted.
 Try this: Run the same command again with --state
 ```
@@ -249,9 +241,9 @@ Try this: Run the same command again with --state
 Expected stderr:
 
 ```console
-[tutorial] Loaded support ticket ticket-001 and saved it as the result of load_support_ticket().
-[tutorial] wait_for_resume_signal() is starting with saved ticket ticket-001. journey resumes at the step boundary, so this step restarts from the top on resume with the same saved inputs.
-[tutorial] Press Ctrl-C during the next 2.0 seconds to interrupt after the earlier step has already been saved. Then rerun the same command with --state to resume from this step boundary.
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="Loaded support ticket ticket-001 and saved it as the result of load_support_ticket(). ..."
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="wait_for_resume_signal() is starting with saved ticket ticket-001. ..."
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="Press Ctrl-C during the next 2.0 seconds to interrupt after the earlier step has already been saved. ..."
 ```
 
 ### Second Run: Resume It
@@ -270,21 +262,19 @@ journey_id=resume_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/resume_journey/resume_journey.py:resume_journey
-journey_id=resume_journey function_ref=...
 - case_1 resume branches={}
-  step wait_for_resume_signal attempt=2 start
-  step wait_for_resume_signal attempt=2 ok duration=...
-  step assert_resumed_ticket attempt=1 ok duration=...
-- case_1 ok steps=3 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=2 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_resumed_ticket attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=3 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
 Expected stderr:
 
 ```console
-[tutorial] wait_for_resume_signal() is starting with saved ticket ticket-001. journey resumes at the step boundary, so this step restarts from the top on resume with the same saved inputs.
-[tutorial] The journey finished. If this run resumed from saved state, wait_for_resume_signal() restarted with the same saved ticket while load_support_ticket() was reused from the earlier successful step.
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="wait_for_resume_signal() is starting with saved ticket ticket-001. ..."
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="The journey finished. If this run resumed from saved state, wait_for_resume_signal() restarted with the same saved ticket while load_support_ticket() was reused from the earlier successful step."
 ```
 
 ## What To Notice

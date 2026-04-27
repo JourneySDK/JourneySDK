@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, cast
 
+from journeysdk.logger import get_logger
 from journeysdk.session import get_session
 from ._webhook_shared import (
     WebhookHeaders,
@@ -25,6 +26,8 @@ from ._webhook_local import (
     ensure_local_host,
     normalize_path,
 )
+
+_LOGGER = get_logger("webhook")
 
 
 @dataclass(frozen=True)
@@ -144,27 +147,68 @@ def host_webhook_endpoint(
             path=normalized_path,
         )
     if getattr(session, "mode", None) == "run":
+        _LOGGER.info(
+            "local_host_start",
+            "ensuring local webhook host",
+            port=port,
+            path=normalized_path,
+            url=public_url,
+        )
         ensure_local_host(port=port, path=normalized_path)
+        _LOGGER.info(
+            "local_host_success",
+            "local webhook host is ready",
+            port=port,
+            path=normalized_path,
+            url=public_url,
+        )
 
     def receive_webhook() -> WebhookRequestPayload:
+        _LOGGER.info(
+            "webhook_wait_start",
+            "waiting for local webhook request",
+            path=normalized_path,
+            url=public_url,
+            timeout=timeout_seconds,
+        )
         deadline = time.monotonic() + timeout_seconds
         while True:
             with urllib.request.urlopen(poll_url, timeout=max(timeout_seconds, 0.1)) as response:
                 if response.status == 200:
                     payload = response.read()
-                    return cast(
+                    decoded = cast(
                         WebhookRequestPayload,
                         json.loads(payload.decode("utf-8")),
                     )
+                    _LOGGER.info(
+                        "webhook_wait_success",
+                        "received local webhook request",
+                        path=normalized_path,
+                        method=decoded.get("method"),
+                    )
+                    return decoded
                 if response.status != 204:
                     raise RuntimeError(
                         f"Unexpected webhook poll response {response.status} for {public_url}."
                     )
 
             if time.monotonic() >= deadline:
+                _LOGGER.warning(
+                    "webhook_wait_timeout",
+                    "timed out waiting for local webhook request",
+                    path=normalized_path,
+                    url=public_url,
+                    timeout=timeout_seconds,
+                )
                 raise TimeoutError(
                     f"Timed out waiting for a webhook on {public_url} after {timeout} seconds."
                 )
+            _LOGGER.debug(
+                "webhook_wait_poll_empty",
+                "local webhook poll returned no request",
+                path=normalized_path,
+                poll_interval=poll_interval_seconds,
+            )
             time.sleep(poll_interval_seconds)
 
     _set_step_metadata(
@@ -187,6 +231,11 @@ def get_webhook_endpoint(*, path: str) -> CloudWebhookEndpointStep:
     label = build_step_label(prefix="get_webhook_", path=normalized_path)
 
     def acquire_webhook_endpoint() -> CloudWebhookEndpoint:
+        _LOGGER.info(
+            "cloud_endpoint_create_start",
+            "creating cloud webhook endpoint",
+            path=normalized_path,
+        )
         api_base_url, payload = create_webhook_endpoint(path=normalized_path)
         endpoint_id = payload.get("endpoint_id")
         public_url = payload.get("url")
@@ -199,12 +248,20 @@ def get_webhook_endpoint(*, path: str) -> CloudWebhookEndpointStep:
             raise RuntimeError(
                 "Journey cloud returned an endpoint for a different webhook path than requested."
             )
-        return CloudWebhookEndpoint(
+        endpoint = CloudWebhookEndpoint(
             endpoint_id=endpoint_id,
             path=normalized_path,
             url=public_url,
             api_base_url=api_base_url,
         )
+        _LOGGER.info(
+            "cloud_endpoint_create_success",
+            "created cloud webhook endpoint",
+            path=endpoint.path,
+            endpoint_id=endpoint.endpoint_id,
+            url=endpoint.url,
+        )
+        return endpoint
 
     _set_step_metadata(
         acquire_webhook_endpoint,
@@ -248,6 +305,13 @@ def wait_for_webhook_request(
             )
 
         deadline = time.monotonic() + timeout_seconds
+        _LOGGER.info(
+            "cloud_webhook_wait_start",
+            "waiting for cloud webhook request",
+            path=normalized_path,
+            endpoint_id=endpoint.endpoint_id,
+            timeout=timeout_seconds,
+        )
         while True:
             payload = fetch_next_request(
                 endpoint_id=endpoint.endpoint_id,
@@ -258,12 +322,33 @@ def wait_for_webhook_request(
                     raise RuntimeError(
                         "Journey cloud returned a webhook payload for a different path than requested."
                     )
+                _LOGGER.info(
+                    "cloud_webhook_wait_success",
+                    "received cloud webhook request",
+                    path=normalized_path,
+                    endpoint_id=endpoint.endpoint_id,
+                    method=payload.get("method"),
+                )
                 return payload
 
             if time.monotonic() >= deadline:
+                _LOGGER.warning(
+                    "cloud_webhook_wait_timeout",
+                    "timed out waiting for cloud webhook request",
+                    path=normalized_path,
+                    endpoint_id=endpoint.endpoint_id,
+                    timeout=timeout_seconds,
+                )
                 raise TimeoutError(
                     f"Timed out waiting for a webhook on {endpoint.url} after {timeout} seconds."
                 )
+            _LOGGER.debug(
+                "cloud_webhook_wait_poll_empty",
+                "cloud webhook poll returned no request",
+                path=normalized_path,
+                endpoint_id=endpoint.endpoint_id,
+                poll_interval=poll_interval_seconds,
+            )
             time.sleep(poll_interval_seconds)
 
     _set_step_metadata(

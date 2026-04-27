@@ -58,19 +58,17 @@ uv run journey --file docs/cloud_webhook_journey/cloud_webhook_journey.py
 Plan
 Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey
 journey_id=cloud_webhook_journey function_ref=...
-- case_1 branch_env={} labels=['get_webhook_invoice_paid', 'send_invoice_paid_webhook_later', 'receive_webhook_invoice_paid', 'assert_invoice_paid_webhook']
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 branch_env={} labels=['get_webhook_invoice_paid', 'send_invoice_paid_webhook_later', 'receive_webhook_invoice_paid', 'assert_invoice_paid_webhook']"
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey
-journey_id=cloud_webhook_journey function_ref=...
-- case_1 start branches={}
-  step get_webhook_invoice_paid attempt=1 ok duration=...
-  step send_invoice_paid_webhook_later attempt=1 ok duration=...
-  step receive_webhook_invoice_paid attempt=1 start
-  step receive_webhook_invoice_paid attempt=1 ok duration=...
-  step assert_invoice_paid_webhook attempt=1 ok duration=...
-- case_1 ok steps=4 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step get_webhook_invoice_paid attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step send_invoice_paid_webhook_later attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step receive_webhook_invoice_paid attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step receive_webhook_invoice_paid attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_invoice_paid_webhook attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=4 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -123,15 +121,13 @@ journey_id=cloud_email_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/cloud_email_journey/cloud_email_journey.py:cloud_email_journey
-journey_id=cloud_email_journey function_ref=...
-- case_1 start branches={}
-  step get_email_inbox attempt=1 ok duration=...
-  step send_email attempt=1 ok duration=...
-  step receive_email attempt=1 start
-  step receive_email attempt=1 ok duration=...
-  step assert_welcome_email attempt=1 ok duration=...
-- case_1 ok steps=4 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step get_email_inbox attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step send_email attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step receive_email attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step receive_email attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_welcome_email attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=4 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 

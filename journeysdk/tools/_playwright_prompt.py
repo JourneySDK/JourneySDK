@@ -11,6 +11,7 @@ import os
 import sys
 from typing import Protocol, cast
 
+from journeysdk.logger import get_logger
 from playwright.sync_api import Page as PlaywrightPage
 
 JOURNEY_PLAYWRIGHT_PROMPT_MODEL_ENV = "JOURNEY_PLAYWRIGHT_PROMPT_MODEL"
@@ -36,7 +37,7 @@ Rules:
 """
 
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
-_PROMPT_LOG_PREFIX = "[journey-playwright]"
+_PROMPT_LOGGER = get_logger("playwright-prompt")
 
 
 @dataclass(frozen=True)
@@ -137,7 +138,11 @@ class _PromptSession:
                 )
                 _emit_prompt_log(
                     f"step {step_index}/{self._max_steps}: finished with "
-                    f"answer: {finished.text}"
+                    f"answer: {finished.text}",
+                    event="prompt_finish",
+                    step=step_index,
+                    max_steps=self._max_steps,
+                    answer=finished.text,
                 )
                 pages = tuple(self._prompt_pages())
                 return JourneyPlaywrightPromptResult(
@@ -164,7 +169,12 @@ class _PromptSession:
                 _emit_prompt_log(
                     f"step {step_index}/{self._max_steps}: rejected on "
                     f"{_page_summary(self._prompt_pages()[self._active_page_index])}: "
-                    f"{step.detail}"
+                    f"{step.detail}",
+                    event="prompt_rejected",
+                    step=step_index,
+                    max_steps=self._max_steps,
+                    page=self._active_page_index,
+                    detail=step.detail,
                 )
                 continue
             self._log_new_pages(previous_page_count=previous_page_count)
@@ -173,7 +183,11 @@ class _PromptSession:
             )
             _emit_prompt_log(
                 f"step {step_index}/{self._max_steps}: succeeded on "
-                f"{_page_summary(self._prompt_pages()[self._active_page_index])}"
+                f"{_page_summary(self._prompt_pages()[self._active_page_index])}",
+                event="prompt_step_success",
+                step=step_index,
+                max_steps=self._max_steps,
+                page=self._active_page_index,
             )
             self._steps.append(step)
 
@@ -187,7 +201,11 @@ class _PromptSession:
                 f" Last step was {last_step.status}: "
                 f"{last_step.action} {last_step.target!r} ({last_step.detail})."
             )
-        _emit_prompt_log(f"prompt stopped: {message}")
+        _emit_prompt_log(
+            f"prompt stopped: {message}",
+            event="prompt_stopped",
+            max_steps=self._max_steps,
+        )
         raise RuntimeError(message)
 
     def _log_start(self) -> None:
@@ -200,7 +218,13 @@ class _PromptSession:
             f"model={self._model!r}; "
             f"max_steps={self._max_steps}; "
             f"timeout={timeout_seconds:g}s; "
-            f"active={_page_summary(active_page)}"
+            f"active={_page_summary(active_page)}",
+            event="prompt_start",
+            instruction=self._instruction,
+            model=self._model,
+            max_steps=self._max_steps,
+            timeout=f"{timeout_seconds:g}s",
+            active=_page_summary(active_page),
         )
 
     def _log_inspection(
@@ -214,14 +238,24 @@ class _PromptSession:
         active_page = pages[active_page_index]
         _emit_prompt_log(
             f"step {step_index}/{self._max_steps}: inspecting "
-            f"{_page_dict_summary(active_page)}"
+            f"{_page_dict_summary(active_page)}",
+            event="prompt_inspect",
+            step=step_index,
+            max_steps=self._max_steps,
+            page=active_page_index,
+            page_summary=_page_dict_summary(active_page),
         )
 
     def _log_action(self, *, step_index: int, code: str) -> None:
         normalized_code = code.strip()
+        action_description = _describe_prompt_action(normalized_code)
         _emit_prompt_log(
             f"step {step_index}/{self._max_steps}: AI will "
-            f"{_describe_prompt_action(normalized_code)}"
+            f"{action_description}",
+            event="prompt_action",
+            step=step_index,
+            max_steps=self._max_steps,
+            action=action_description,
         )
         _emit_prompt_code_log(
             step_label=f"step {step_index}/{self._max_steps}",
@@ -231,13 +265,25 @@ class _PromptSession:
     def _log_new_pages(self, *, previous_page_count: int) -> None:
         current_pages = self._prompt_pages()
         for page in current_pages[previous_page_count:]:
-            _emit_prompt_log(f"discovered {_page_summary(page)}")
+            _emit_prompt_log(
+                f"discovered {_page_summary(page)}",
+                event="page_discovered",
+                page=page.index,
+                title=page.title,
+                url=page.url,
+            )
 
     def _log_active_page_change(self, *, previous_active_page_index: int) -> None:
         if previous_active_page_index == self._active_page_index:
             return
         active_page = self._prompt_pages()[self._active_page_index]
-        _emit_prompt_log(f"active page changed to {_page_summary(active_page)}")
+        _emit_prompt_log(
+            f"active page changed to {_page_summary(active_page)}",
+            event="active_page_change",
+            previous_page=previous_active_page_index,
+            active_page=self._active_page_index,
+            page_summary=_page_summary(active_page),
+        )
 
     def _build_observation(self) -> dict[str, object]:
         self._discover_pages()
@@ -431,20 +477,44 @@ def prompt_page(
     return session.run()
 
 
-def _emit_prompt_log(message: str) -> None:
-    print(f"{_PROMPT_LOG_PREFIX} {message}", file=sys.stderr, flush=True)
+def _emit_prompt_log(
+    message: str,
+    *,
+    event: str = "prompt_log",
+    **fields: object,
+) -> None:
+    _PROMPT_LOGGER.info(event, message, **fields)
 
 
 def _emit_prompt_code_log(*, step_label: str, code: str) -> None:
     if not code:
-        _emit_prompt_log(f"{step_label} code: <blank>")
+        _emit_prompt_log(
+            f"{step_label} code: <blank>",
+            event="prompt_code",
+            step_label=step_label,
+            code="<blank>",
+        )
         return
     if "\n" not in code:
-        _emit_prompt_log(f"{step_label} code: {code}")
+        _emit_prompt_log(
+            f"{step_label} code: {code}",
+            event="prompt_code",
+            step_label=step_label,
+            code=code,
+        )
         return
-    _emit_prompt_log(f"{step_label} code:")
+    _emit_prompt_log(
+        f"{step_label} code:",
+        event="prompt_code",
+        step_label=step_label,
+    )
     for line in code.splitlines():
-        _emit_prompt_log(f"  {line}")
+        _emit_prompt_log(
+            f"  {line}",
+            event="prompt_code",
+            step_label=step_label,
+            code=line,
+        )
 
 
 def _page_summary(page: JourneyPlaywrightPromptPage) -> str:

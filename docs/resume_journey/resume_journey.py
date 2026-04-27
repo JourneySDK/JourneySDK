@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from pathlib import Path
 
 from journeysdk import journey, step
+from journeysdk.logger import get_logger
+
+_LOGGER = get_logger("tutorial")
 
 
 def reset_demo_state(*, state_path: str | Path | None = None) -> None:
@@ -72,4 +74,4 @@ def resume_journey() -> None:
 
 
 def _tutorial_note(message: str) -> None:
-    print(f"[tutorial] {message}", file=sys.stderr, flush=True)
+    _LOGGER.info("tutorial_note", message)

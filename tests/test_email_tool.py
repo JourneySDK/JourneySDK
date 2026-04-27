@@ -163,6 +163,7 @@ def test_direct_email_planning_does_not_touch_smtp_or_imap(monkeypatch: pytest.M
 
 def test_direct_email_helpers_send_wait_and_mark_messages_seen(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
     monkeypatch.setattr(imaplib, "IMAP4_SSL", FakeIMAP)
@@ -217,6 +218,13 @@ def test_direct_email_helpers_send_wait_and_mark_messages_seen(
             subject_contains="Welcome",
             server=DIRECT_SERVER,
         )()
+
+    log_output = capsys.readouterr().err
+    assert "component=email event=inbox_resolve_success" in log_output
+    assert "component=email event=email_send_success" in log_output
+    assert "component=email event=email_wait_success" in log_output
+    assert "component=email event=email_wait_timeout" in log_output
+    assert DIRECT_SERVER.smtp_password not in log_output
 
 
 def test_direct_email_config_error_mentions_direct_and_cloud_paths(

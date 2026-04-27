@@ -504,7 +504,10 @@ def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path)
     ) == state
 
 
-def test_open_page_opens_url_string_and_cleans_returned_page(monkeypatch):
+def test_open_page_opens_url_string_and_cleans_returned_page(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
     events: list[object] = []
     _install_fake_playwright(monkeypatch, events)
 
@@ -531,6 +534,9 @@ def test_open_page_opens_url_string_and_cleans_returned_page(monkeypatch):
         "browser_close",
         "playwright_exit",
     ]
+    log_output = capsys.readouterr().err
+    assert "component=playwright event=open_page_start" in log_output
+    assert "component=playwright event=open_page_success" in log_output
 
 
 def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypatch):
@@ -954,13 +960,15 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(
         ("prompt_rendered_html", "Welcome popup"),
         ("prompt_screenshot", "Welcome popup"),
     ]
-    assert "[journey-playwright] prompt start:" in log_output
-    assert 'instruction=\'click on a "Sign in" button and get the title' in log_output
+    assert "[journey]" in log_output
+    assert "component=playwright-prompt event=prompt_start" in log_output
+    assert 'click on a \\"Sign in\\" button and get the title' in log_output
     assert "model='anthropic/claude-sonnet-4-5'" in log_output
     assert "active=page 0 'Login page' at http://example.test/login" in log_output
     assert "step 1/8: inspecting page 0 'Login page'" in log_output
     assert "step 1/8: AI will click selector '#sign-in'" in log_output
-    assert 'step 1/8 code: page.locator("#sign-in").click(timeout=timeout_ms)' in log_output
+    assert "event=prompt_code" in log_output
+    assert 'page.locator(\\"#sign-in\\").click(timeout=timeout_ms)' in log_output
     assert "discovered page 1 'Welcome popup' at http://example.test/sign-in-popup" in log_output
     assert "active page changed to page 1 'Welcome popup'" in log_output
     assert (
@@ -1042,7 +1050,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
         ("prompt_screenshot", "Chat"),
     ]
     assert "step 1/8: AI will click selector '#attach'" in log_output
-    assert 'step 1/8 code: page.locator("#attach").click(timeout=timeout_ms)' in log_output
+    assert 'page.locator(\\"#attach\\").click(timeout=timeout_ms)' in log_output
     assert "step 1/8: rejected on page 0 'Chat'" in log_output
     assert "AssertionError: No click handler registered for '#attach'" in log_output
     assert (
@@ -1050,8 +1058,8 @@ def test_journey_playwright_prompt_retries_rejected_python(
         "'I need to fix a toilet'"
     ) in log_output
     assert (
-        'step 2/8 code: page.locator("#composer").fill'
-        '("I need to fix a toilet", timeout=timeout_ms)'
+        'page.locator(\\"#composer\\").fill'
+        '(\\"I need to fix a toilet\\", timeout=timeout_ms)'
     ) in log_output
 
 

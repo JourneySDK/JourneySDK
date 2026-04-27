@@ -16,6 +16,7 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 - `journeysdk/planner.py`: journey compilation (aka planning)
 - `journeysdk/executor.py`: execution of a compiled journey
 - `journeysdk/cli.py`: CLI implementation
+- `journeysdk/logger.py`: shared diagnostic logging API and common stderr format
 - `docs/`: runnable tutorial journeys plus the handbook pages that explain them
 
 ## Preferred commands
@@ -29,6 +30,9 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
 flow that reaches a target step label.
+
+Journey diagnostics use `journeysdk.logger.get_logger(...)` and emit `[journey] ...` lines to stderr by default. The
+CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout for plans, summaries, prompts, and JSON.
 
 ## Core principles
 
@@ -55,6 +59,8 @@ flow that reaches a target step label.
 ## Change guidance
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.
+- Use `journeysdk.logger.get_logger(...)` for SDK, tool, or tutorial diagnostics instead of ad hoc
+  `print(..., file=sys.stderr)`.
 - Do not add tests that assert exact prose inside `*.md` files; prefer behavior-level checks for runnable examples,
   CLI behavior, repository boundaries, or relevant file existence.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.

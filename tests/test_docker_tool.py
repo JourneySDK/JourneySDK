@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import pickle
+import subprocess
 from pathlib import Path
 
 import journeysdk as journey_sdk
 import pytest
 
 from journeysdk.models import StepNode
+from journeysdk.logger import configure_logging
 from journeysdk.tools import docker as journey_docker
 
 
@@ -279,6 +281,7 @@ def test_run_docker_planning_does_not_touch_docker(monkeypatch: pytest.MonkeyPat
 def test_run_docker_executes_compose_config_and_up(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ):
     compose_file = _write_compose_file(tmp_path)
     runtime = _FakeDockerRuntime()
@@ -330,6 +333,38 @@ def test_run_docker_executes_compose_config_and_up(
             ],
         ),
     ]
+    log_output = capsys.readouterr().err
+    assert "component=docker event=compose_start" in log_output
+    assert "component=docker event=compose_success" in log_output
+
+
+def test_docker_run_cli_logs_subprocess_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    def fake_run(
+        args: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        return subprocess.CompletedProcess(args, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(journey_docker.subprocess, "run", fake_run)
+
+    configure_logging("debug")
+    try:
+        assert journey_docker._run_cli(["docker", "ps"], owner="test") == "ok\n"
+    finally:
+        configure_logging("info")
+
+    log_output = capsys.readouterr().err
+    assert "component=docker event=subprocess_start" in log_output
+    assert "component=docker event=subprocess_success" in log_output
 
 
 def test_docker_stack_statuses_and_logs_use_live_docker_metadata(

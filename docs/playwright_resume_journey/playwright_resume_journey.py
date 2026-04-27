@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from pathlib import Path
 
 from journeysdk import journey, step
+from journeysdk.logger import get_logger
 from journeysdk.tools.playwright import (
     JourneyPlaywrightPage,
     open_page,
@@ -17,6 +17,8 @@ from docs.playwright_resume_journey._auth_demo import (
     reset_demo_port,
     shutdown_demo_server,
 )
+
+_LOGGER = get_logger("tutorial")
 
 
 def reset_demo_state(*, state_path: str | Path | None = None) -> None:
@@ -116,4 +118,4 @@ def playwright_resume_journey() -> None:
 
 
 def _tutorial_note(message: str) -> None:
-    print(f"[tutorial] {message}", file=sys.stderr, flush=True)
+    _LOGGER.info("tutorial_note", message)

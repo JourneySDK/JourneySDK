@@ -42,6 +42,8 @@ That is the whole authored flow. The helper functions in the same file do the re
 uv run journey --file docs/first_journey/first_journey.py
 ```
 
+Expected stdout:
+
 ```console
 Plan
 Journey docs/first_journey/first_journey.py:first_journey
@@ -50,20 +52,18 @@ journey_id=first_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/first_journey/first_journey.py:first_journey
-journey_id=first_journey function_ref=...
-- case_1 start branches={}
-  step create_customer_profile attempt=1 start
-  step create_customer_profile attempt=1 ok duration=...
-  step send_welcome_message attempt=1 start
-  step send_welcome_message attempt=1 ok duration=...
-  step assert_welcome_message_sent attempt=1 start
-  step assert_welcome_message_sent attempt=1 ok duration=...
-- case_1 ok steps=3 duration=...
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-The important part is not the formatting. The important part is that Journey shows every step boundary, every attempt, and the final summary without hiding what ran.
+Expected stderr includes structured live diagnostics:
+
+```console
+[journey] time=... level=INFO component=executor event=step_start message="  step create_customer_profile attempt=1 start" ...
+[journey] time=... level=INFO component=executor event=step_success message="  step create_customer_profile attempt=1 ok duration=..." ...
+[journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=3 duration=..." ...
+```
+
+The important part is not the formatting. The important part is that Journey keeps stdout useful for summaries and JSON, while stderr shows every step boundary, every attempt, and what happened when. Use `--log-level off` to suppress diagnostics or `--log-level debug` for more tool detail.
 
 ## One File Can Define More Than One Journey
 

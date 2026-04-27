@@ -18,6 +18,7 @@ from .errors import (
     InvalidBranchUsageError,
     StepNotFoundError,
 )
+from .logger import get_logger
 from .models import (
     BranchMarkerNode,
     CaseExecutionReport,
@@ -276,6 +277,259 @@ class _ExecutionObserver:
 
     def on_develop_state_restart(self, *, case_id: str) -> None:
         return
+
+
+def _format_duration(seconds: float) -> str:
+    return f"{seconds:.3f}s"
+
+
+def _format_exception(exc: BaseException) -> str:
+    message = str(exc)
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return type(exc).__name__
+
+
+def _format_branch_env(branch_env: dict[str, str]) -> str:
+    entries = ", ".join(f"{key}={value}" for key, value in branch_env.items())
+    return "{" + entries + "}"
+
+
+def _step_name(node: StepNode) -> str:
+    return node.label or node.node_id
+
+
+class _LoggingExecutionObserver(_ExecutionObserver):
+    def __init__(self) -> None:
+        self._logger = get_logger("executor")
+
+    def on_journey_start(
+        self,
+        *,
+        plan: JourneyPlan,
+        selected_cases: list[_SelectedCase],
+    ) -> None:
+        self._logger.info(
+            "journey_start",
+            "starting journey execution",
+            journey=plan.journey_id,
+            function_ref=plan.function_ref,
+            cases=len(selected_cases),
+        )
+
+    def on_case_start(
+        self,
+        *,
+        case_plan: CasePlan,
+        stop_after_index: int | None,
+        replay_anchor: str | None,
+    ) -> None:
+        self._logger.info(
+            "case_start",
+            f"- {case_plan.case_id} start branches={_format_branch_env(case_plan.branch_env)}",
+            case=case_plan.case_id,
+            branches=_format_branch_env(case_plan.branch_env),
+            replay_anchor=replay_anchor,
+            stop_after_index=stop_after_index,
+        )
+
+    def on_case_resume(
+        self,
+        *,
+        case_plan: CasePlan,
+        stop_after_index: int | None,
+        replay_anchor: str | None,
+        replay_from_index: int,
+    ) -> None:
+        self._logger.info(
+            "case_resume",
+            f"- {case_plan.case_id} resume branches={_format_branch_env(case_plan.branch_env)}",
+            case=case_plan.case_id,
+            branches=_format_branch_env(case_plan.branch_env),
+            replay_anchor=replay_anchor,
+            replay_from_index=replay_from_index,
+            stop_after_index=stop_after_index,
+        )
+
+    def on_step_start(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+    ) -> None:
+        self._logger.info(
+            "step_start",
+            f"  step {_step_name(node)} attempt={attempt} start",
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+        )
+
+    def on_branch(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: BranchMarkerNode,
+        node_index: int,
+    ) -> None:
+        self._logger.info(
+            "branch_select",
+            f"  branch {node.group_id}={node.active_key}",
+            case=case_plan.case_id,
+            branch_group=node.group_id,
+            branch=node.active_key,
+            node_index=node_index,
+        )
+
+    def on_retry(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+        delay_seconds: float,
+        remaining_retries: int,
+        error: Exception,
+    ) -> None:
+        self._logger.warning(
+            "step_retry",
+            (
+                f"  step {_step_name(node)} attempt={attempt} retry "
+                f"duration={_format_duration(duration_seconds)} "
+                f"delay={_format_duration(delay_seconds)} "
+                f"remaining={remaining_retries} "
+                f"error={_format_exception(error)}"
+            ),
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
+            delay=_format_duration(delay_seconds),
+            remaining=remaining_retries,
+            error=_format_exception(error),
+        )
+
+    def on_step_success(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+    ) -> None:
+        self._logger.info(
+            "step_success",
+            (
+                f"  step {_step_name(node)} attempt={attempt} ok "
+                f"duration={_format_duration(duration_seconds)}"
+            ),
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
+        )
+
+    def on_step_failure(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+        error: Exception,
+    ) -> None:
+        self._logger.error(
+            "step_failure",
+            (
+                f"  step {_step_name(node)} attempt={attempt} failed "
+                f"duration={_format_duration(duration_seconds)} "
+                f"error={_format_exception(error)}"
+            ),
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
+            error=_format_exception(error),
+        )
+
+    def on_step_interrupted(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        duration_seconds: float,
+        error: BaseException,
+    ) -> None:
+        self._logger.warning(
+            "step_interrupted",
+            (
+                f"  step {_step_name(node)} attempt={attempt} interrupted "
+                f"duration={_format_duration(duration_seconds)} "
+                f"error={_format_exception(error)}"
+            ),
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            attempt=attempt,
+            duration=_format_duration(duration_seconds),
+            error=_format_exception(error),
+        )
+
+    def on_case_complete(
+        self,
+        *,
+        case_plan: CasePlan,
+        report: CaseExecutionReport,
+        duration_seconds: float,
+    ) -> None:
+        del case_plan
+        parts = [
+            f"- {report.case_id}",
+            "ok",
+            f"steps={sum(1 for record in report.records if record.node_type == 'StepNode')}",
+            f"duration={_format_duration(duration_seconds)}",
+        ]
+        if report.stopped_at_label is not None:
+            parts.append(f"stopped_at={report.stopped_at_label}")
+        if report.replay_anchor is not None:
+            parts.append(f"replay_anchor={report.replay_anchor}")
+        self._logger.info(
+            "case_complete",
+            " ".join(parts),
+            case=report.case_id,
+            steps=sum(1 for record in report.records if record.node_type == "StepNode"),
+            duration=_format_duration(duration_seconds),
+            stopped_at=report.stopped_at_label,
+            replay_anchor=report.replay_anchor,
+        )
+
+    def on_journey_complete(self, *, report: ExecutionReport) -> None:
+        self._logger.info(
+            "journey_complete",
+            "journey execution completed",
+            journey=report.journey_id,
+            cases=len(report.case_reports),
+        )
+
+    def on_develop_state_restart(self, *, case_id: str) -> None:
+        self._logger.warning(
+            "develop_state_restart",
+            "Already-run journey code changed before the paused step; "
+            f"restarting {case_id} from the beginning.",
+            case=case_id,
+        )
 
 
 def _copy_binding(binding: StepBindingState) -> StepBindingState:
@@ -2515,7 +2769,7 @@ def _execute_plan(
     target_step = develop_step if develop_step is not None else step
     selected_cases = _select_cases(plan, target_step)
     validation = validate_journey(journey_fn)
-    execution_observer = observer or _ExecutionObserver()
+    execution_observer = observer or _LoggingExecutionObserver()
     execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
     rehydration_enabled = _needs_rehydration(
         selected_cases,

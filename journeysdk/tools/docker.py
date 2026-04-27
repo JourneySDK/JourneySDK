@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from journeysdk.logger import get_logger
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
 _SUPPORTED_CONTAINER_STATES = {"running", "created", "exited"}
 _UNSUPPORTED_CONTAINER_STATES = {"paused", "restarting", "removing", "dead"}
+_LOGGER = get_logger("docker")
 
 
 @dataclass(frozen=True)
@@ -135,6 +137,12 @@ def run_docker(
         resolved_project_name = normalized_project_name or _generate_project_name(
             original_compose_path
         )
+        _LOGGER.info(
+            "compose_start",
+            "starting Docker Compose stack",
+            compose_file=original_compose_path,
+            project=resolved_project_name,
+        )
         project_cache_dir = _project_cache_dir(
             cache_root=_CACHE_ROOT,
             project_name=resolved_project_name,
@@ -164,12 +172,19 @@ def run_docker(
             owner="run_docker",
         )
 
-        return DockerComposeStack(
+        stack = DockerComposeStack(
             compose_file=str(original_compose_path),
             resolved_compose_file=str(resolved_compose_path),
             project_name=resolved_project_name,
             cache_root=str(_CACHE_ROOT),
         )
+        _LOGGER.info(
+            "compose_success",
+            "Docker Compose stack started",
+            compose_file=stack.compose_file,
+            project=stack.project_name,
+        )
+        return stack
 
     _set_step_metadata(
         start_stack,
@@ -209,6 +224,13 @@ def _store_docker_snapshot(
         stack=validated_stack,
         snapshot_name=normalized_snapshot_name,
         snapshot_root=snapshot_root,
+    )
+    _LOGGER.info(
+        "snapshot_store_start",
+        "storing Docker Compose snapshot",
+        project=validated_stack.project_name,
+        snapshot=normalized_snapshot_name,
+        snapshot_dir=snapshot_dir,
     )
     if snapshot_dir.exists():
         shutil.rmtree(snapshot_dir)
@@ -298,6 +320,14 @@ def _store_docker_snapshot(
         json.dumps(manifest, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    _LOGGER.info(
+        "snapshot_store_success",
+        "stored Docker Compose snapshot",
+        project=validated_stack.project_name,
+        snapshot=normalized_snapshot_name,
+        containers=len(container_entries),
+        volumes=len(volume_entries_by_name),
+    )
 
 
 def restore_docker(
@@ -336,6 +366,13 @@ def _restore_docker_snapshot(
             "restore_docker(...) could not find a stored snapshot manifest at "
             f"'{manifest_path}'."
         )
+    _LOGGER.info(
+        "snapshot_restore_start",
+        "restoring Docker Compose snapshot",
+        project=validated_stack.project_name,
+        snapshot=normalized_snapshot_name,
+        snapshot_dir=snapshot_dir,
+    )
 
     manifest = _load_manifest(manifest_path)
     _validate_manifest_matches_stack(
@@ -435,9 +472,22 @@ def _restore_docker_snapshot(
             ),
             owner="restore_docker",
         )
+    _LOGGER.info(
+        "snapshot_restore_success",
+        "restored Docker Compose snapshot",
+        project=validated_stack.project_name,
+        snapshot=normalized_snapshot_name,
+        containers=len(container_entries),
+        volumes=len(volume_entries),
+    )
 
 
 def _load_live_statuses(stack: DockerComposeStack) -> dict[str, tuple[DockerContainerStatus, ...]]:
+    _LOGGER.debug(
+        "statuses_load_start",
+        "loading live Docker Compose statuses",
+        project=stack.project_name,
+    )
     live_containers = _load_live_containers(
         _require_stack(stack=stack, owner="DockerComposeStack.statuses"),
         owner="DockerComposeStack.statuses",
@@ -446,14 +496,26 @@ def _load_live_statuses(stack: DockerComposeStack) -> dict[str, tuple[DockerCont
     grouped: dict[str, list[DockerContainerStatus]] = defaultdict(list)
     for live_container in live_containers:
         grouped[live_container.status.service].append(live_container.status)
-    return {
+    statuses = {
         service: tuple(statuses)
         for service, statuses in sorted(grouped.items())
     }
+    _LOGGER.debug(
+        "statuses_load_success",
+        "loaded live Docker Compose statuses",
+        project=stack.project_name,
+        services=len(statuses),
+    )
+    return statuses
 
 
 def _load_live_logs(stack: DockerComposeStack) -> dict[str, str]:
     validated_stack = _require_stack(stack=stack, owner="DockerComposeStack.logs")
+    _LOGGER.debug(
+        "logs_load_start",
+        "loading live Docker Compose logs",
+        project=validated_stack.project_name,
+    )
     services = sorted(_load_live_statuses(validated_stack))
     logs: dict[str, str] = {}
     for service in services:
@@ -465,6 +527,12 @@ def _load_live_logs(stack: DockerComposeStack) -> dict[str, str]:
             ),
             owner="DockerComposeStack.logs",
         )
+    _LOGGER.debug(
+        "logs_load_success",
+        "loaded live Docker Compose logs",
+        project=validated_stack.project_name,
+        services=len(logs),
+    )
     return logs
 
 
@@ -1180,6 +1248,12 @@ def _compose_multi_file_command(
 
 
 def _run_cli(args: Sequence[str], *, owner: str) -> str:
+    _LOGGER.debug(
+        "subprocess_start",
+        "running subprocess",
+        owner=owner,
+        command=_display_command(args),
+    )
     try:
         completed = subprocess.run(
             list(args),
@@ -1189,6 +1263,12 @@ def _run_cli(args: Sequence[str], *, owner: str) -> str:
         )
     except FileNotFoundError as exc:
         executable = args[0] if args else "command"
+        _LOGGER.error(
+            "subprocess_missing",
+            "required subprocess executable was not available",
+            owner=owner,
+            executable=executable,
+        )
         raise FileNotFoundError(
             f"{owner}(...) requires the '{executable}' CLI, but it was not available."
         ) from exc
@@ -1197,9 +1277,23 @@ def _run_cli(args: Sequence[str], *, owner: str) -> str:
         error_output = completed.stderr.strip() or completed.stdout.strip()
         if not error_output:
             error_output = f"exit code {completed.returncode}"
+        _LOGGER.error(
+            "subprocess_failure",
+            "subprocess failed",
+            owner=owner,
+            command=_display_command(args),
+            returncode=completed.returncode,
+        )
         raise RuntimeError(
             f"{owner}(...) failed while running `{_display_command(args)}`: {error_output}"
         )
+    _LOGGER.debug(
+        "subprocess_success",
+        "subprocess completed",
+        owner=owner,
+        command=_display_command(args),
+        stdout_bytes=len(completed.stdout),
+    )
     return completed.stdout
 
 

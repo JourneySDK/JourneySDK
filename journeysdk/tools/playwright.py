@@ -10,6 +10,7 @@ from threading import Lock
 from types import TracebackType
 from typing import Literal, TypedDict, cast
 
+from journeysdk.logger import get_logger
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import _require_executing_step
 from playwright.sync_api import Page as PlaywrightPage
@@ -58,6 +59,7 @@ _REHYDRATE_STORAGE_SCRIPT = """
 
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
 _PLAYWRIGHT_INSTALL_LOCK = Lock()
+_LOGGER = get_logger("playwright")
 
 
 @dataclass(frozen=True)
@@ -249,6 +251,14 @@ class JourneyPlaywrightPage(PlaywrightPage):
         if self._journey_exit_started:
             return
         self._journey_exit_started = True
+        cleanup_url = self.url
+        was_live = self._is_live
+        _LOGGER.debug(
+            "page_cleanup_start",
+            "cleaning up Playwright page resources",
+            url=cleanup_url,
+            live=was_live,
+        )
         failures: list[BaseException] = []
 
         if self._is_live:
@@ -278,7 +288,18 @@ class JourneyPlaywrightPage(PlaywrightPage):
                 failures.append(manager_exc)
 
         if failures:
+            _LOGGER.error(
+                "page_cleanup_failure",
+                "Playwright page cleanup failed",
+                url=cleanup_url,
+                failures=len(failures),
+            )
             raise RuntimeError(_cleanup_failure_message(failures))
+        _LOGGER.debug(
+            "page_cleanup_success",
+            "Playwright page resources cleaned up",
+            url=cleanup_url,
+        )
 
     def __store__(self, context: JourneyStoreContext) -> object:
         """Store the current page state for Journey replay."""
@@ -343,6 +364,13 @@ def open_page(
     snapshot = _snapshot_from_open_page_input(page_or_url)
     local_storage = snapshot.local_storage_dict()
     page = JourneyPlaywrightPage._from_snapshot(snapshot)
+    _LOGGER.info(
+        "open_page_start",
+        "opening Playwright page",
+        url=snapshot.url,
+        browser=browser,
+        headless=headless,
+    )
 
     try:
         manager = sync_playwright()
@@ -368,8 +396,21 @@ def open_page(
         if local_storage:
             page.evaluate(_REHYDRATE_STORAGE_SCRIPT, local_storage)
             page.reload(wait_until="load")
+        _LOGGER.info(
+            "open_page_success",
+            "Playwright page opened",
+            url=page.url,
+            browser=browser,
+        )
         return page
     except BaseException as exc:
+        _LOGGER.error(
+            "open_page_failure",
+            "failed to open Playwright page",
+            url=snapshot.url,
+            browser=browser,
+            error=_format_exception(exc),
+        )
         try:
             page.__exit__(type(exc), exc, exc.__traceback__)
         except BaseException as cleanup_exc:
@@ -398,11 +439,21 @@ def ensure_browser_installed(
             "'chromium', 'firefox', or 'webkit'."
         )
 
+    _LOGGER.info(
+        "browser_install_check_start",
+        "checking Playwright browser installation",
+        browser=browser,
+    )
     with sync_playwright() as playwright:
         _ensure_browser_type_installed(
             getattr(playwright, browser),
             browser=browser,
         )
+    _LOGGER.info(
+        "browser_install_check_success",
+        "Playwright browser installation is available",
+        browser=browser,
+    )
 
 
 def _launch_browser_with_auto_install(
@@ -432,6 +483,12 @@ def _ensure_browser_type_installed(
 ) -> bool:
     executable_path = _browser_executable_path(browser_type)
     if executable_path is None or executable_path.exists():
+        _LOGGER.debug(
+            "browser_install_check_skip",
+            "Playwright browser executable is already available",
+            browser=browser,
+            executable_path=executable_path,
+        )
         return False
     _install_playwright_browser(
         browser,
@@ -456,18 +513,43 @@ def _install_playwright_browser(
     with _PLAYWRIGHT_INSTALL_LOCK:
         if executable_path is not None and executable_path.exists():
             return
+        _LOGGER.info(
+            "browser_install_start",
+            "installing Playwright browser",
+            browser=browser,
+            command=" ".join(command),
+            executable_path=executable_path,
+        )
         result = subprocess.run(command, check=False)
         if result.returncode != 0:
+            _LOGGER.error(
+                "browser_install_failure",
+                "Playwright browser installation failed",
+                browser=browser,
+                returncode=result.returncode,
+            )
             raise RuntimeError(
                 f"Journey SDK could not automatically install the Playwright {browser!r} browser. "
                 "Retry after restoring network access, or run the Playwright installer manually "
                 f"in the same environment: {' '.join(command)}"
             )
         if executable_path is not None and not executable_path.exists():
+            _LOGGER.error(
+                "browser_install_missing_executable",
+                "Playwright browser install completed but executable is missing",
+                browser=browser,
+                executable_path=executable_path,
+            )
             raise RuntimeError(
                 f"Journey SDK installed the Playwright {browser!r} browser, "
                 f"but the executable is still missing at {executable_path}."
             )
+        _LOGGER.info(
+            "browser_install_success",
+            "Playwright browser installed",
+            browser=browser,
+            executable_path=executable_path,
+        )
 
 
 def _looks_like_missing_browser_error(exc: BaseException) -> bool:
@@ -476,6 +558,13 @@ def _looks_like_missing_browser_error(exc: BaseException) -> bool:
         "Executable doesn't exist" in message
         or "Please run the following command to download new browsers" in message
     )
+
+
+def _format_exception(exc: BaseException) -> str:
+    message = str(exc)
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return type(exc).__name__
 
 
 def _cleanup_failure_message(failures: list[BaseException]) -> str:

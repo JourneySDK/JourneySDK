@@ -65,6 +65,10 @@ uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_
 
 Use `--file` to scope discovery to one file, `--journey` to select one decorated entrypoint, and targeted `--step LABEL` to execute only the single flow that reaches a step label.
 
+Journey writes plans, summaries, prompts, and JSON to stdout. Live diagnostics go to stderr as structured
+`[journey]` log lines with `time`, `level`, `component`, `event`, and `message` fields. Use
+`--log-level debug|info|warning|error|off` to tune them; default `info` is usually best for local and agent runs.
+
 Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step results:
 
 ```bash
@@ -93,4 +97,5 @@ If the paused step failed, retry the same paused step first; continuing to a lat
 - Prefer explicit step functions over anonymous lambdas or deeply nested closures.
 - Store external resource handles as serializable descriptors or rehydratable top-level classes, not as live sockets, browsers, sessions, or clients.
 - Keep official tool usage side-effect free during planning; acquire live resources inside step execution.
+- Use `journeysdk.logger.get_logger("component")` for SDK/tool/tutorial diagnostics instead of printing directly to stderr.
 - Use noninteractive `--develop-step` with persistent state for coding agents, and run the full relevant journey or test suite before wrapping up.

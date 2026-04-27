@@ -50,18 +50,16 @@ journey_id=good_demo_journey function_ref=...
 Summary: 2 journeys planned, 2 cases planned, 0 failed
 
 Execution
-Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
-journey_id=broken_demo_journey function_ref=...
-- case_1 start branches={}
-  step raise_expected_failure attempt=1 start
-  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure"
 
 Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey
 journey_id=good_demo_journey function_ref=...
-- case_1 start branches={}
-  step finish_successfully attempt=1 start
-  step finish_successfully attempt=1 ok duration=...
-- case_1 ok steps=1 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step finish_successfully attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step finish_successfully attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=1 duration=..."
 ERROR [execute] .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey (CallableExecutionError)
 What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure
 Try this: Inspect the step implementation or rerun after fixing the underlying failure.
@@ -89,11 +87,9 @@ journey_id=good_demo_journey function_ref=...
 Summary: 2 journeys planned, 2 cases planned, 0 failed
 
 Execution
-Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
-journey_id=broken_demo_journey function_ref=...
-- case_1 start branches={}
-  step raise_expected_failure attempt=1 start
-  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure"
 ERROR [execute] .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey (CallableExecutionError)
 What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure
 Try this: Inspect the step implementation or rerun after fixing the underlying failure.
@@ -107,7 +103,7 @@ This is the faster feedback loop when you only care about the first failure.
 
 Each failed run gives you three layers of information:
 
-- The live step line shows the exact step label, attempt number, and error class.
+- The structured stderr log line shows the exact step label, attempt number, component, event, timestamp, and error class.
 - The `ERROR [execute]` block summarizes the failure in plain English.
 - The final summary tells you whether the CLI continued into later journeys or stopped early.
 

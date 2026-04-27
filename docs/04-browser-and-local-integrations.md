@@ -82,18 +82,16 @@ uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_
 Plan
 Journey docs/simple_journey/simple_journey.py:simple_journey
 journey_id=simple_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']"
 - case_2 branch_env={'bg_1': 'branch_2'} labels=['assert_demo_homepage', 'click_store_local_file', 'local_file_is_written', 'assert_local_file_contents']
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Journey docs/simple_journey/simple_journey.py:simple_journey
-journey_id=simple_journey function_ref=...
-- case_2 start branches={bg_1=branch_2}
-  step click_store_local_file attempt=1 ok duration=...
-  step local_file_is_written attempt=1 ok duration=...
-  step assert_local_file_contents attempt=1 ok duration=...
-- case_2 ok steps=3 duration=... stopped_at=assert_local_file_contents replay_anchor=cp_1
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step click_store_local_file attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step local_file_is_written attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_local_file_contents attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_local_file_contents replay_anchor=cp_1"
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -172,19 +170,17 @@ journey_id=docker_compose_journey function_ref=...
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Journey docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey
-journey_id=docker_compose_journey function_ref=...
-- case_1 start branches={bg_1=branch_1}
-  step run_docker attempt=1 ok duration=...
-  step assert_stack_ready attempt=1 ok duration=...
-  step capture_baseline_state attempt=1 ok duration=...
-  step increment_counter attempt=1 ok duration=...
-  step assert_increment_branch attempt=1 ok duration=...
-- case_1 ok steps=5 duration=...
-- case_2 start branches={bg_1=branch_2}
-  step read_counter_state attempt=1 ok duration=...
-  step assert_restored_counter_branch attempt=1 ok duration=...
-- case_2 ok steps=5 duration=... replay_anchor=cp_1
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={bg_1=branch_1}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step run_docker attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_stack_ready attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step capture_baseline_state attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step increment_counter attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_increment_branch attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=5 duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step read_counter_state attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_restored_counter_branch attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=5 duration=... replay_anchor=cp_1"
 Summary: 1 journey executed, 2 cases executed, 0 failed
 ```
 
@@ -282,21 +278,19 @@ journey_id=playwright_resume_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey
-journey_id=playwright_resume_journey function_ref=...
-- case_1 start branches={}
-  step login_and_capture_session attempt=1 ok duration=...
-  step continue_authenticated_dashboard attempt=1 start
-  step continue_authenticated_dashboard attempt=1 interrupted duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step login_and_capture_session attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=1 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=1 interrupted duration=..."
 Interrupted.
 ```
 
 Expected stderr:
 
 ```console
-[tutorial] Signed in and returned JourneyPlaywrightPage for http://127.0.0.1:.../dashboard. The next step can reopen this authenticated dashboard from saved state without logging in again.
-[tutorial] continue_authenticated_dashboard() reopened the saved dashboard at http://127.0.0.1:.../dashboard. journey resumes at the step boundary, so this step restarts from the top on resume with the same saved JourneyPlaywrightPage.
-[tutorial] Press Ctrl-C during the next 2.0 seconds to interrupt after the authenticated browser state has already been saved.
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="Signed in and returned JourneyPlaywrightPage for http://127.0.0.1:.../dashboard. ..."
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="continue_authenticated_dashboard() reopened the saved dashboard at http://127.0.0.1:.../dashboard. ..."
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="Press Ctrl-C during the next 2.0 seconds to interrupt after the authenticated browser state has already been saved."
 ```
 
 ### Second Run: Reopen the Same Saved Session
@@ -315,20 +309,18 @@ journey_id=playwright_resume_journey function_ref=...
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
-Journey docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey
-journey_id=playwright_resume_journey function_ref=...
 - case_1 resume branches={}
-  step continue_authenticated_dashboard attempt=2 start
-  step continue_authenticated_dashboard attempt=2 ok duration=...
-  step assert_protected_action_complete attempt=1 ok duration=...
-- case_1 ok steps=3 duration=...
+[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=2 start"
+[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_protected_action_complete attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=3 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
 Expected stderr:
 
 ```console
-[tutorial] The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved JourneyPlaywrightPage instead of logging in again.
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved JourneyPlaywrightPage instead of logging in again."
 ```
 
 ## Prompt a Live Page with an LLM

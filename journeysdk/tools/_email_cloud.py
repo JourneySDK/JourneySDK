@@ -9,10 +9,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import cast
 
+from journeysdk.logger import get_logger
 from journeysdk.types import JsonObject
 
 JOURNEY_CLOUD_API_KEY_ENV = "JOURNEY_CLOUD_API_KEY"
 JOURNEY_CLOUD_BASE_URL_ENV = "JOURNEY_CLOUD_BASE_URL"
+_LOGGER = get_logger("email-cloud")
 
 
 @dataclass(frozen=True)
@@ -123,24 +125,59 @@ def _request_json(
         method=method,
     )
 
+    _LOGGER.debug(
+        "cloud_request_start",
+        "calling Journey Cloud email API",
+        method=method,
+        route=route,
+        url=url,
+    )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
             status = response.status
             raw_body = response.read()
     except urllib.error.HTTPError as exc:
         detail = _error_detail(exc.read())
+        _LOGGER.error(
+            "cloud_request_failure",
+            "Journey Cloud email API returned an error",
+            method=method,
+            route=route,
+            status=exc.code,
+        )
         raise RuntimeError(
             f"Journey cloud request to {url} failed with status {exc.code}: {detail}"
         ) from exc
     except urllib.error.URLError as exc:
+        _LOGGER.error(
+            "cloud_request_unreachable",
+            "Journey Cloud email API was unreachable",
+            method=method,
+            route=route,
+            error=str(exc.reason),
+        )
         raise RuntimeError(
             f"Could not reach the journey cloud service at {config.api_base_url}: {exc.reason}"
         ) from exc
 
     if status == 204 and allow_no_content:
+        _LOGGER.debug(
+            "cloud_request_no_content",
+            "Journey Cloud email API returned no content",
+            method=method,
+            route=route,
+            status=status,
+        )
         return None
 
     if not raw_body:
+        _LOGGER.debug(
+            "cloud_request_success",
+            "Journey Cloud email API returned an empty JSON payload",
+            method=method,
+            route=route,
+            status=status,
+        )
         return {}
 
     try:
@@ -154,6 +191,13 @@ def _request_json(
         raise RuntimeError(
             f"Journey cloud returned an unexpected response payload for {url}."
         )
+    _LOGGER.debug(
+        "cloud_request_success",
+        "Journey Cloud email API returned JSON",
+        method=method,
+        route=route,
+        status=status,
+    )
     return cast(JsonObject, decoded)
 
 

@@ -126,7 +126,9 @@ def test_local_host_accepts_requests_and_polls_them_fifo():
     assert payload_3 is None
 
 
-def test_receive_webhook_retries_until_the_background_sender_posts():
+def test_receive_webhook_retries_until_the_background_sender_posts(
+    capsys: pytest.CaptureFixture[str],
+):
     port = _free_port()
 
     def assert_webhook(request_payload: dict[str, object]) -> bool:
@@ -165,6 +167,10 @@ def test_receive_webhook_retries_until_the_background_sender_posts():
         "receive_webhook_endpoint_a",
         "assert_webhook",
     ]
+    log_output = capsys.readouterr().err
+    assert "component=webhook event=local_host_success" in log_output
+    assert "component=webhook event=webhook_wait_start" in log_output
+    assert "component=webhook event=webhook_wait_success" in log_output
 
 
 def test_webhook_journey_supports_targeted_execution_and_resume(tmp_path: Path):
