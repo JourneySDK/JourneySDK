@@ -6,7 +6,7 @@ This chapter covers three related ideas:
 
 - `checkpoint()` lets later cases replay from a known point
 - `branch()` lets one function produce several linear cases
-- `--step` and `--develop-step` let you run only the path that reaches one target label
+- `--step` and `--develop-step` let you run only the case that reaches one target label
 
 ## Branch Once, Reuse Shared Setup
 
@@ -31,12 +31,12 @@ def branching_journey() -> None:
 Why this shape matters:
 
 - `load_signup_request` and `classify_signup_request` are shared setup
-- the checkpoint gives later execution a replay anchor
+- the checkpoint gives later execution a replay anchor and can produce checkpoint snapshots
 - each `branch(...)` arm becomes its own case
 
 `checkpoint()` is marker-only. External system state belongs on the values that
-cross that boundary, not on the checkpoint itself. If a step result needs
-custom replay behavior, define it at module top level and make that value
+cross that replay boundary, not on the checkpoint itself. If a step result needs
+custom rehydration behavior, define it at module top level and make that value
 implement the Journey rehydration protocol:
 
 ```python
@@ -58,7 +58,7 @@ rewinds to that boundary, such as a checkpoint-started later branch. The
 protocol is documented in the README's Journey Rehydration Protocol section.
 
 Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
-targeted run uses the compiled labels to choose one path.
+targeted run uses the compiled labels to choose one case.
 
 ### Run Only the Branch That Reaches One Step
 
@@ -87,7 +87,9 @@ Execution
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-That output is the reason `--step` is so useful during development: Journey chooses the single case that reaches the label you care about.
+That output is the reason `--step` is so useful during development: Journey chooses the single case that reaches the
+label you care about. The reported `replay_anchor` names the branch checkpoint, but this targeted run still starts from
+the selected case's beginning.
 
 ### Stop After the Target Step While You Iterate
 
@@ -108,7 +110,13 @@ Development mode stopped after step assert_manual_review_path attempt=1 ok.
 Summary: 0 journeys executed, 0 cases executed, 0 failed
 ```
 
-Use `--develop-step` when you are actively editing one branch and want Journey to stop at the point you care about instead of rerunning the whole world every time. Rerun the same command to retry the paused step after editing code, or target the next step with the same state file to continue. Develop-step retries are unlimited and do not spend the step's configured `step(..., retry=...)` budget. Add `--interactive` when you want Journey to keep the process open and prompt after each paused step. Journey reloads and recompiles the selected journey file before each retry or continue, so edits to the retried step or later steps are picked up immediately; if code that Journey would have reused from the already-run prefix changed, the selected case starts again from the beginning.
+Use `--develop-step` when you are actively editing one branch and want Journey to pause after the step boundary you
+care about. Rerun the same command to retry the paused step after editing code, or target the next step with the same
+state file to continue. Develop-step retries replay from the paused step's replay boundary, are unlimited, and do not
+spend the step's configured `step(..., retry=...)` budget. Add `--interactive` when you want Journey to keep the process
+open and prompt after each paused step. Journey reloads and recompiles the selected journey file before each retry or
+continue, so edits to the retried step or later steps are picked up immediately; if code that Journey would have reused
+from the already-run prefix changed, the selected case starts again from the beginning.
 
 ## Rehydrate Later Cases from a Checkpoint
 
@@ -132,7 +140,8 @@ def rehydration_journey() -> None:
         step(assert_branch_b, shared)
 ```
 
-This example is intentionally small. It exists to show one idea clearly: later branches can restart from saved checkpoint state instead of rerunning shared setup.
+This example is intentionally small. It exists to show one idea clearly: in a full multi-case run, later branches can
+restart from a saved checkpoint snapshot instead of rerunning shared setup.
 
 If a value created before the checkpoint implements `__store__` /
 `__restore__`, Journey restores that external state before the later branch
@@ -162,13 +171,16 @@ Execution
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-The `replay_anchor=cp_1` part is what matters. It tells you which checkpoint Journey used as the branch's starting point.
+The `replay_anchor=cp_1` part tells you which checkpoint is the branch replay anchor. For a targeted `--step` run it is
+reported metadata; Journey does not skip directly to that checkpoint unless existing state or retry behavior causes
+replay.
 
 ## What To Notice
 
 - Authoring stays sequential, even when execution becomes multi-case.
-- `checkpoint()` is not just a marker for humans. It is a replay anchor for targeted runs and later branch execution.
-- External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, checkpoint rewinds, and `--state` all use the same rehydration path.
+- `checkpoint()` is not just a marker for humans. It can create checkpoint snapshots and names replay anchors.
+- External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, checkpoint
+  rewinds, and `--state` all use the same rehydration path.
 - `--step` picks one case. `--develop-step` picks one case and stops after the target so you can iterate faster.
 - Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.
 

@@ -2,7 +2,8 @@
 
 This chapter is for the first ten minutes with Journey.
 
-The goal is simple: understand what a journey looks like in Python, how to run it, and how to narrow a file down to one journey when you need script-friendly JSON output.
+The goal is simple: understand what a journey looks like in Python, how to run it, and how to narrow a file down to
+one journey when you need script-friendly JSON output.
 
 ## The Mental Model
 
@@ -10,10 +11,13 @@ The goal is simple: understand what a journey looks like in Python, how to run i
 - Mark one top-level function with `@journey`.
 - Add steps with `step(...)`.
 - Pass step results explicitly into later steps.
+- Treat every step as a boundary where Journey can save progress, stop, retry, or resume.
 - Use `journey` to compile and run the authored flow as linear executable cases.
-- Use selection flags when you want one file, one journey, or one target path.
+- Use selection flags when you want one file, one journey, or one target case.
 
-If you remember only one thing, remember this: Journey does not ask you to stop writing Python. It compiles ordinary Python step calls into a runnable plan.
+If you remember only one thing, remember this: Journey does not ask you to stop writing Python. It compiles ordinary
+Python step calls into a runnable plan, and long-running work stays manageable because resume and replay happen at step
+boundaries.
 
 ## The Smallest Useful Journey
 
@@ -63,7 +67,9 @@ Expected stderr includes structured live diagnostics:
 [journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=3 duration=..." ...
 ```
 
-The important part is not the formatting. The important part is that Journey keeps stdout useful for summaries and JSON, while stderr shows every step boundary, every attempt, and what happened when. Use `--log-level off` to suppress diagnostics or `--log-level debug` for more tool detail.
+The important part is not the formatting. The important part is that Journey keeps stdout useful for summaries and
+JSON, while stderr shows every step boundary, every attempt, and what happened when. Use `--log-level off` to suppress
+diagnostics or `--log-level debug` for more tool detail.
 
 ## One File Can Define More Than One Journey
 

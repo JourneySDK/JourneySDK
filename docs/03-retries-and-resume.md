@@ -1,11 +1,12 @@
 # 03 Retries and Resume
 
-Not every failure means the journey is wrong. Sometimes the system under test is still catching up. Sometimes a run gets interrupted halfway through.
+Not every failure means the journey is wrong. Sometimes the system under test is still catching up. Sometimes a run gets
+interrupted while a step is running.
 
 This chapter covers both cases:
 
-- retries when a step needs to poll or replay from earlier state
-- `--state` when a whole run is interrupted and you want to continue later
+- retries when a step needs to poll or replay from an earlier step boundary
+- `--state` when a run is interrupted and you want to restart the dirty step later
 
 ## Three Retry Shapes
 
@@ -50,17 +51,16 @@ def retry_from_checkpoint_journey() -> None:
     step(assert_checkpoint_retry_ready, result)
 ```
 
-Those three journeys represent the three most common retry strategies:
+Those three journeys represent the three most common retry boundaries:
 
 - retry only the failing step
 - retry from an earlier step result
 - retry from a checkpoint and replay everything after it
 
-Checkpoint replay follows the same rule as `--state`: Journey reuses the stored
-step inputs and outputs that cross the replay boundary. If one of those values
-needs custom side effects, put that logic on a module-level value type with
-`__store__` / `__restore__` as described in the README's Journey Rehydration
-Protocol section.
+Checkpoint replay follows the same rule as `--state`: Journey reuses saved step
+bindings before the replay boundary. If one of those values needs custom side
+effects, put that logic on a module-level value type with `__store__` /
+`__restore__` as described in the README's Journey Rehydration Protocol section.
 
 That matters when the replayable value wraps external state instead of being a
 plain pickleable object:
@@ -87,9 +87,9 @@ def retry_with_external_state() -> None:
     step(wait_until_ready, context, retry=1, retry_delay=0, retry_from=anchor)
 ```
 
-Journey stores that step result at the replay boundary and reuses it on retries
-and resume, so the same external-state logic works for checkpoint rewinds and
-`--state` restores.
+Journey stores that step result before the replay boundary and reuses it on
+retries and resume, so the same external-state logic works for checkpoint
+rewinds and `--state` restores.
 
 ### Retry the Current Step
 
@@ -204,7 +204,8 @@ def resume_journey() -> None:
     step(assert_resumed_ticket, resumed_ticket)
 ```
 
-The key rule is that Journey resumes at a step boundary, not in the middle of a function body.
+The key rule is that Journey resumes at a step boundary, not in the middle of a function body. A step that was active
+when the process stopped is the dirty step; on the next run Journey restarts it from the top with saved inputs.
 
 ### Reset the Demo State
 
@@ -235,6 +236,7 @@ Execution
 [journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 start"
 [journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 interrupted duration=..."
 Interrupted.
+What happened: Journey execution was interrupted before it finished.
 Try this: Run the same command again with --state
 ```
 
@@ -280,10 +282,10 @@ Expected stderr:
 ## What To Notice
 
 - Retries are explicit. Journey does not silently retry behind your back.
-- `retry_from=` is the switch that decides how much earlier work gets replayed.
-- Hooked checkpoints run `store(...)` on the first hit and `restore(...)` when a retry or resume rewinds back to that checkpoint.
-- Any value that Journey may need to replay later must be pickle-serializable.
-- `--state` keeps successful step results so the rerun can skip what already succeeded.
-- Resume starts the interrupted step again from the top. It does not jump into the middle of the function.
+- `retry_from=` is the switch that decides the replay boundary.
+- Checkpoint snapshots store saved bindings on the first hit and restore them when replay rewinds to that checkpoint.
+- Any value that Journey may need to replay later must be pickle-serializable or rehydratable.
+- `--state` keeps successful step bindings so the rerun can skip what already succeeded.
+- Resume starts the dirty step again from the top. It does not jump into the middle of the function.
 
 Continue with [04 Browser and Local Integrations](04-browser-and-local-integrations.md) when your steps need to open real pages, receive webhooks, or inspect local files.

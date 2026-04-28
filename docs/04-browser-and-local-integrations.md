@@ -82,12 +82,13 @@ uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_
 Plan
 Journey docs/simple_journey/simple_journey.py:simple_journey
 journey_id=simple_journey function_ref=...
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']"
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']
 - case_2 branch_env={'bg_1': 'branch_2'} labels=['assert_demo_homepage', 'click_store_local_file', 'local_file_is_written', 'assert_local_file_contents']
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
 [journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_demo_homepage attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step click_store_local_file attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step local_file_is_written attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_local_file_contents attempt=1 ok duration=..."
@@ -95,7 +96,8 @@ Execution
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-That targeted run is a good example of why Journey is useful during development. You can focus on the file branch without rerunning the webhook branch.
+That targeted run is a good example of why Journey is useful during development. You can focus on the file branch
+without running the webhook branch, while still executing the selected case from its first step boundary.
 
 ## Snapshot a Local Docker Compose App
 
@@ -106,11 +108,11 @@ Read these files together:
 - `docs/docker_compose_journey/app/Dockerfile`
 - `docs/docker_compose_journey/app/server.py`
 
-This example is intentionally branched. It boots a tiny HTTP app plus Postgres, saves that stack at
+This example is intentionally branched. It boots a tiny HTTP app plus Postgres, captures a checkpoint snapshot at
 `after_boot`, then uses two later branches to show what restore means in practice:
 
 - branch A increments a database-backed counter from `0` to `1`
-- branch B starts from the same checkpoint and sees the counter back at `0`
+- branch B replays from the same checkpoint snapshot and sees the counter back at `0`
 
 The Docker helper is still just a normal Journey step factory:
 
@@ -185,7 +187,7 @@ Summary: 1 journey executed, 2 cases executed, 0 failed
 ```
 
 That second case is the whole point. Branch A already changed the counter to `1`, but branch B still reads `0`
-because Journey restored the `after_boot` Docker snapshot before `read_counter_state` ran.
+because Journey restored the `after_boot` checkpoint snapshot before `read_counter_state` ran.
 
 ### Target the Restore Branch While Iterating
 
@@ -194,7 +196,8 @@ uv run journey --file docs/docker_compose_journey/docker_compose_journey.py --st
 ```
 
 That targeted run still reports `replay_anchor=cp_1`, so you can focus on the restore branch without changing the
-checkpoint behavior.
+checkpoint behavior. The targeted run reports the replay anchor as metadata; it does not skip directly to the
+checkpoint unless existing state or retry behavior causes replay.
 
 Docker snapshotting is strict on purpose. In v1 it aims for exact rollback of
 container filesystems plus Docker-managed volume contents, so it rejects bind
@@ -283,6 +286,8 @@ Execution
 [journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=1 start"
 [journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=1 interrupted duration=..."
 Interrupted.
+What happened: Journey execution was interrupted before it finished.
+Try this: Run the same command again with --state
 ```
 
 Expected stderr:
@@ -361,7 +366,8 @@ the prompt loop discovered, and `result.steps` records the bounded action histor
 
 - Browser logic stays inside normal Python functions. Journey does not wrap Playwright in a separate DSL.
 - The same journey can branch into a webhook case and a local file case.
-- `JourneyPlaywrightPage` is just another step value. Returning it lets Journey save it, close it, resume it, and pass it into later steps.
+- `JourneyPlaywrightPage` is just another step value. Returning it lets Journey save it at a step boundary, close it,
+  rehydrate it, and pass it into later steps.
 - `JourneyPlaywrightPage.prompt(...)` works on a live page handle and returns a structured result instead of mutating the saved-page semantics of the original handle.
 - Steps that open a page but return other data should close the page explicitly, as shown in `continue_authenticated_dashboard()`.
 - Targeted execution is especially useful for UI work because you can rerun only the branch you are debugging.

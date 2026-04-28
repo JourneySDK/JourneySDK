@@ -2,7 +2,8 @@
 
 Healthy documentation should show failure, not only success.
 
-This chapter explains what Journey's failure output means and when `--fail-fast` changes the right thing.
+This chapter explains what Journey's failure output means, how to think about the failing step boundary, and when
+`--fail-fast` changes the right thing.
 
 ## A Deliberately Broken File
 
@@ -117,6 +118,8 @@ A good local debugging sequence usually looks like this:
 ## What To Notice
 
 - Journey failures are step-oriented. You do not have to guess which part of the flow broke.
+- With `--state`, an interrupted dirty step restarts from its replay boundary; Journey does not resume inside the step
+  function body.
 - Default mode and `--fail-fast` answer different questions. One maximizes coverage per run; the other maximizes speed to the first actionable error.
 - Showing a failure example in the docs matters because this is what local development and CI actually look like.
 

@@ -71,7 +71,8 @@ def branch(
     ``start_from`` names the checkpoint where this branch begins for downstream
     single-step execution and for full-case checkpoint replay. When a targeted
     execution reaches a step inside this branch, the execution report exposes
-    that checkpoint as the branch replay anchor. When all cases are executed,
+    that checkpoint as the branch replay anchor, but targeted execution still
+    starts from the selected case's beginning. When all cases are executed,
     later branches that start from the same checkpoint can restore saved state
     from that checkpoint instead of rerunning earlier shared steps.
 
@@ -152,6 +153,9 @@ def step(
     from an earlier checkpoint, journey may need to save and restore step
     inputs and outputs. Any value that may be replayed that way must be
     pickle-serializable or implement the Journey rehydration protocol.
+    If execution is interrupted while a step is running, a resumed run restarts
+    that step from the top with saved inputs; Journey does not resume inside
+    the function body.
 
     Outside an active planning or execution session, ``step()`` is invalid.
 

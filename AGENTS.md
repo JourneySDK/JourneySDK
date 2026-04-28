@@ -3,10 +3,12 @@
 ## Project
 
 Journey SDK is a workflow-as-code QA toolkit for long, branching, async, cross-system user journeys. Authors write one
-journey in sequential Python with primitives like `step`, `checkpoint`, and `retry`, and Journey SDK compiles or
-executes the resulting linear cases.
+journey in sequential Python with primitives like `step`, `checkpoint`, `branch`, and `step(..., retry=...)`, and
+Journey SDK compiles or executes the resulting linear cases.
 
-See `README.md` for the deeper product description, use cases, and tutorial context.
+See `README.md` for the deeper product description, use cases, tutorial context, and glossary. Use that vocabulary
+consistently: step boundary, state file, saved step binding, dirty step, replay boundary, replay anchor, checkpoint
+snapshot, develop-step pause, pause action, rehydration, rehydratable value, and step-exit lifecycle.
 
 ## Key files
 
@@ -29,7 +31,8 @@ See `README.md` for the deeper product description, use cases, and tutorial cont
 
 CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
-flow that reaches a target step label.
+case that reaches a target step label. Targeted `--step` runs report `replay_anchor` for branch checkpoints, but they
+do not skip directly to that checkpoint unless state or retry behavior causes replay.
 
 Journey diagnostics use `journeysdk.logger.get_logger(...)` and emit `[journey] ...` lines to stderr by default. The
 CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout for plans, summaries, prompts, and JSON.
@@ -37,7 +40,8 @@ CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout f
 ## Core principles
 
 - **Developer-centric**: The developer-facing interfaces (API and CLI) must be straightforward and intuitive.
-- **Resumable tests**: Steps can be interrupted and resumed (when `--state` is provided).
+- **Resumable tests**: Steps can be interrupted with `--state`; Journey resumes by restarting the dirty step from the
+  top with saved inputs, never from the middle of a function body.
 - **Extensible design**: There are official tools, and everyone is welcome to add their own. Adding new tools must be
   straightforward and intuitive.
 - **Clear documentation**: To make it developer-friendly, all docs must be written in plain English, with enough

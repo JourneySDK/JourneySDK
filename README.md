@@ -4,9 +4,14 @@ Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async,
 
 ## Overview
 
-Journey SDK is built around a simple idea: write one journey in sequential Python, then let Journey SDK compile it into
-linear executable flows. It is designed for workflows where a single journey can touch browsers, edge devices,
-background jobs, third-party services, voice or AI systems, and delayed side effects.
+Journey SDK is built around a simple idea: write one long-running journey in sequential Python, then let Journey SDK
+compile it into linear executable flows that can stop and resume at step boundaries. It is designed for workflows where
+a single journey can touch browsers, edge devices, background jobs, third-party services, voice or AI systems, and
+delayed side effects.
+
+Every `step(...)` call is an interruption boundary. With `--state`, Journey saves the successful steps that came before
+the active step. If execution is interrupted while a step is running, Journey never resumes inside that function body;
+the next run restarts the affected step from the top with the same saved inputs.
 
 Each step is just plain Python, so teams can use existing testing tools and scripts without adapting them to a special
 framework. A `step` can run browser automation, mobile checks, API assertions, or service-specific validation logic.
@@ -28,7 +33,7 @@ That makes Journey SDK useful for flows such as:
 - developers and test engineers who want to express journey logic in plain Python instead of splitting it across
   multiple frameworks
 - platform and workflow teams building internal automations, customer lifecycle flows, or agentic products with async
-[journey] time=... level=INFO component=executor event=execution_log message="  steps and third-party integrations"
+  steps and third-party integrations
 - AI coding agents that need to generate, run, and iterate on journey tests while implementing features
 
 ## AI Agent Support
@@ -115,20 +120,46 @@ Write one journey in sequential Python with `step`, `checkpoint`, and optional s
 `step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate module-level journey entrypoints with
 `@journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching
 workflows without duplicating test code. Step functions are plain callables: pass every required input as explicit
-arguments, and return any value that later steps or resumed runs must reuse.
+arguments, and return any value that later steps or resumed runs must reuse. The step boundary is the durable unit:
+successful steps can be reused, while interrupted or retried steps restart from the top with saved inputs.
 
 Retryable steps can poll for async effects, rerun from the step itself, or replay from an earlier step/checkpoint.
 They are retried when they raise an exception and `retry` is greater than 0. The explicit defaults are `retry=0`,
 `retry_delay=5`, and `retry_from=None`; when retries are enabled and `retry_from` is omitted, the current step is
 retried.
 
+## Glossary
+
+- **Journey**: one decorated Python function that describes the full workflow under test.
+- **Case**: one linear executable path compiled from a journey, including one selected branch choice for each branch
+  group.
+- **Step**: one `step(...)` call and the plain Python function it runs.
+- **Step boundary**: the boundary before and after a step where Journey can save progress, stop, retry, or resume.
+- **State file**: the `--state` file that stores selected cases, completed case reports, active progress, saved step
+  bindings, and checkpoint snapshots.
+- **Saved step binding**: stored step inputs, metadata, and optional result that Journey can use when replaying or
+  resuming.
+- **Dirty step**: the step that had started but had not completed when execution was interrupted.
+- **Replay**: rerunning part of a case from a step boundary while reusing saved values before that boundary.
+- **Replay boundary**: the step or checkpoint index where replay starts.
+- **Replay anchor**: the checkpoint name reported for a targeted branch run or used by retry/checkpoint replay.
+- **Checkpoint snapshot**: saved records, step bindings, retry counters, and attempt counters captured at a checkpoint.
+- **Branch**: an inline `if branch(): ... elif branch(): ...` arm that compiles into a separate case.
+- **Targeted run**: a `--step LABEL` run that executes the one case reaching that label and stops after it. A reported
+  `replay_anchor` identifies the branch checkpoint, but targeted runs do not skip directly to that checkpoint.
+- **Develop-step pause**: a `--develop-step LABEL` stop after the selected step, used for quick edit-run loops.
+- **Pause action**: `continue` or `retry` after a develop-step pause.
+- **Rehydration**: storing and restoring values that cross replay boundaries.
+- **Rehydratable value**: a value with `__store__` and `__restore__` hooks for custom replay storage.
+- **Step-exit lifecycle**: cleanup of returned values that expose `__exit__` after Journey has saved the step result.
+
 ## Journey Rehydration Protocol
 
 When retries, `--state`, checkpoint replay, or checkpoint-started branches need
-to reuse a step value, Journey rehydrates that step from SDK-managed saved
-inputs and outputs. Any step argument or return value that may cross one of
-those boundaries must be pickle-serializable or implement the Journey
-rehydration protocol:
+to reuse a step value across a replay boundary, Journey rehydrates that value
+from SDK-managed saved step bindings. Any step argument or return value that
+may cross one of those boundaries must be pickle-serializable or implement the
+Journey rehydration protocol:
 
 ```python
 class ExternalState:
@@ -327,10 +358,11 @@ Set provider credentials with the provider's normal environment variables such a
 `ANTHROPIC_API_KEY`, and either pass `model=...` or set `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
-enabled, journey stores the step inputs and outputs it may need to replay later, so those values must be
-pickle-serializable. The same rule applies to steps that may be replayed because of retries or
-`branch(start_from=...)`. The state file is kept after the run finishes, so rerunning the same command can reuse that
-saved progress; delete the file when you want to start fresh.
+enabled, Journey stores the step inputs and outputs it may need to replay later, so those values must be
+pickle-serializable. If a run is interrupted while a step is active, the saved dirty step restarts from the top on the
+next run with the same inputs; Journey does not resume inside the function body. The same replay rule applies to steps
+that may be replayed because of retries or `branch(start_from=...)`. The state file is kept after the run finishes, so
+rerunning the same command can reuse that saved progress; delete the file when you want to start fresh.
 
 ## How it works
 
@@ -350,14 +382,16 @@ keeps stdout output but suppresses Journey diagnostics.
 
 CLI commands discover functions annotated with `@journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
-flow that reaches a target step label. Use `--develop-step` to run that same single case in development mode. By
+flow that reaches a target step label. A targeted run still starts from the selected case's beginning; a
+`replay_anchor` in the report identifies the branch checkpoint but does not mean Journey skipped shared setup.
+Use `--develop-step` to run that same single case in development mode. By
 default it executes one target step, stores state, prints the paused result, and exits so coding agents can iterate
-with synchronous command calls. Run the same `--develop-step LABEL --state dev.state` command to retry that step, or
-target the next step with the same state file to continue. Add `--interactive` to keep the current process open and
-prompt after each paused step. Develop-step retries are unlimited and do not spend the step's configured
-`step(..., retry=...)` budget. Each retry or continue reloads and recompiles the journey file first, so edits to the
-current step, later steps, or future journey structure are picked up. If the already-run part of the selected case
-changed, Journey starts that case over so the reused prefix is not stale.
+with synchronous command calls. Run the same `--develop-step LABEL --state dev.state` command to retry that step from
+its replay boundary, or target the next step with the same state file to continue. Add `--interactive` to keep the
+current process open and prompt after each paused step. Develop-step retries are unlimited and do not spend the step's
+configured `step(..., retry=...)` budget. Each retry or continue reloads and recompiles the journey file first, so
+edits to the current step, later steps, or future journey structure are picked up. If the already-run part of the
+selected case changed, Journey starts that case over so the reused prefix is not stale.
 
 ## Core principles
 
@@ -365,6 +399,8 @@ changed, Journey starts that case over so the reused prefix is not stale.
 - **Simplicity over flexibility**: keep the framework footprint small so the testing logic stays easy to follow
 - **Tool-friendly**: integrate external systems and domain-specific tools without forcing them into a custom DSL
 - **Journey-centric**: optimize around the full business process rather than isolated pages or API calls
+- **Interruptible step boundaries**: keep long journeys restartable by saving progress between steps and replaying from
+  explicit boundaries
 - **Single-step execution**: make it cheap to run only the flow that reaches a target step label during development
 - **Fast step iteration**: retry one paused develop step from saved state without replaying the whole journey
 
@@ -385,13 +421,13 @@ Execute with persisted state so Ctrl-C can be resumed later:
 uv run journey --state run.state
 ```
 
-Execute only the path that reaches a target step label:
+Execute only the case that reaches a target step label:
 
 ```bash
 uv run journey --step assert_local_file_contents
 ```
 
-Execute one target path in development mode and stop after the target step:
+Execute one target case in development mode and stop after the target step:
 
 ```bash
 uv run journey --develop-step assert_local_file_contents --state dev.state

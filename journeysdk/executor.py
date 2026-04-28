@@ -157,6 +157,13 @@ class _SelectedCase:
     stop_after_index: int | None
 
 
+@dataclass(frozen=True)
+class _ReplayBoundary:
+    start_index: int
+    checkpoint_name: str | None = None
+    preserve_retry_for: str | None = None
+
+
 @dataclass
 class _ActiveBranchChain:
     group_id: str
@@ -1373,13 +1380,12 @@ class _RunSession:
                 raise ExecutionStateMismatchError(
                     "Pause-on-step state points at a non-step node."
                 )
-            anchor_index = paused_step.node_index
-            if node.retry is not None:
-                anchor_index = self._retry_anchor_index(node, paused_step.node_index)
-                if node.retry.from_checkpoint is not None:
-                    self._pending_checkpoint_restore_name = node.retry.from_checkpoint
-            self._trim_from(anchor_index, preserve_retry_for=None)
-            self.replay_from_index = anchor_index
+            boundary = self._replay_boundary_for_step(
+                node,
+                paused_step.node_index,
+                preserve_retry_for=None,
+            )
+            self._apply_replay_boundary(boundary)
             self.stop_after_index = paused_step.node_index
             self._dirty_node_id = None
             self._paused_step = None
@@ -1406,16 +1412,12 @@ class _RunSession:
                 f"The journey state points at '{self._dirty_node_id}', which is not a step."
             )
 
-        anchor_index = node_index
-        preserve_retry_for: str | None = None
-        if node.retry is not None:
-            anchor_index = self._retry_anchor_index(node, node_index)
-            preserve_retry_for = node.node_id
-            if node.retry.from_checkpoint is not None:
-                self._pending_checkpoint_restore_name = node.retry.from_checkpoint
-
-        self._trim_from(anchor_index, preserve_retry_for=preserve_retry_for)
-        self.replay_from_index = anchor_index
+        boundary = self._replay_boundary_for_step(
+            node,
+            node_index,
+            preserve_retry_for=node.node_id if node.retry is not None else None,
+        )
+        self._apply_replay_boundary(boundary)
         self._dirty_node_id = None
         self._persist_state()
 
@@ -1493,6 +1495,33 @@ class _RunSession:
             if node.node_id != preserve_retry_for:
                 self._retry_remaining.pop(node.node_id, None)
 
+    def _replay_boundary_for_step(
+        self,
+        node: StepNode,
+        node_index: int,
+        *,
+        preserve_retry_for: str | None,
+    ) -> _ReplayBoundary:
+        if node.retry is None:
+            return _ReplayBoundary(
+                start_index=node_index,
+                preserve_retry_for=preserve_retry_for,
+            )
+        return _ReplayBoundary(
+            start_index=self._retry_anchor_index(node, node_index),
+            checkpoint_name=node.retry.from_checkpoint,
+            preserve_retry_for=preserve_retry_for,
+        )
+
+    def _apply_replay_boundary(self, boundary: _ReplayBoundary) -> None:
+        if boundary.checkpoint_name is not None:
+            self._pending_checkpoint_restore_name = boundary.checkpoint_name
+        self._trim_from(
+            boundary.start_index,
+            preserve_retry_for=boundary.preserve_retry_for,
+        )
+        self.replay_from_index = boundary.start_index
+
     def _retry_anchor_index(self, node: StepNode, node_index: int) -> int:
         if node.retry is None:
             raise InvalidBranchUsageError(
@@ -1528,11 +1557,12 @@ class _RunSession:
             return None
 
         self._retry_remaining[node.node_id] = remaining - 1
-        anchor_index = self._retry_anchor_index(node, node_index)
-        if node.retry.from_checkpoint is not None:
-            self._pending_checkpoint_restore_name = node.retry.from_checkpoint
-        self._trim_from(anchor_index, preserve_retry_for=node.node_id)
-        self.replay_from_index = anchor_index
+        boundary = self._replay_boundary_for_step(
+            node,
+            node_index,
+            preserve_retry_for=node.node_id,
+        )
+        self._apply_replay_boundary(boundary)
         return node.retry.delay_seconds
 
     def _pause_after_step(
@@ -2511,13 +2541,13 @@ def _find_paused_step_index(
     return None
 
 
-def _retry_anchor_index_for_case(
+def _replay_boundary_for_case_step(
     case_plan: CasePlan,
     node: StepNode,
     node_index: int,
-) -> int | None:
+) -> _ReplayBoundary | None:
     if node.retry is None:
-        return node_index
+        return _ReplayBoundary(start_index=node_index)
 
     step_index_by_id = {
         item.node_id: index
@@ -2530,10 +2560,21 @@ def _retry_anchor_index_for_case(
         if isinstance(item, CheckpointNode)
     }
     if node.retry.from_node_id is not None:
-        return step_index_by_id.get(node.retry.from_node_id)
-    if node.retry.from_checkpoint is not None:
-        return checkpoint_index_by_name.get(node.retry.from_checkpoint)
-    return node_index
+        anchor_index = step_index_by_id.get(node.retry.from_node_id)
+        checkpoint_name = None
+    elif node.retry.from_checkpoint is not None:
+        anchor_index = checkpoint_index_by_name.get(node.retry.from_checkpoint)
+        checkpoint_name = node.retry.from_checkpoint
+    else:
+        anchor_index = node_index
+        checkpoint_name = None
+
+    if anchor_index is None or anchor_index > node_index:
+        return None
+    return _ReplayBoundary(
+        start_index=anchor_index,
+        checkpoint_name=checkpoint_name,
+    )
 
 
 def _record_matches_node(
@@ -2707,17 +2748,20 @@ def _refresh_develop_state_for_plan(
 
     if pause_action == "continue":
         reusable_boundary = paused_index + 1
-        trim_boundary: int | None = None
+        replay_boundary: _ReplayBoundary | None = None
     else:
-        retry_anchor = _retry_anchor_index_for_case(case_plan, paused_node, paused_index)
-        if retry_anchor is None:
+        replay_boundary = _replay_boundary_for_case_step(
+            case_plan,
+            paused_node,
+            paused_index,
+        )
+        if replay_boundary is None:
             return _restart_develop_state(
                 path,
                 case_id=active_case.case_id,
                 observer=observer,
             )
-        reusable_boundary = retry_anchor
-        trim_boundary = retry_anchor
+        reusable_boundary = replay_boundary.start_index
 
     if not _snapshot_matches_prefix(
         active_case.snapshot,
@@ -2740,13 +2784,13 @@ def _refresh_develop_state_for_plan(
         active_case.stop_after_index = selected_case.stop_after_index
     else:
         active_case.stop_after_index = paused_index
-    if trim_boundary is not None:
+    if replay_boundary is not None:
         active_case.snapshot = _trim_snapshot_to_prefix(
             active_case.snapshot,
             case_plan,
-            trim_boundary,
+            replay_boundary.start_index,
         )
-        active_case.replay_from_index = trim_boundary
+        active_case.replay_from_index = replay_boundary.start_index
         active_case.dirty_node_id = None
 
     state.plan_signature = new_signature

@@ -7,13 +7,21 @@ description: Develop, execute, debug, and maintain Journey SDK workflow-as-code 
 
 ## Journey SDK Context
 
-Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys. Use this skill when a Journey SDK journey tests product or business flows that touch browsers, APIs, mobile or edge devices, background jobs, third-party services, webhooks, email, AI or voice systems, or delayed side effects.
+Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys. Use this
+skill when a Journey SDK journey tests product or business flows that touch browsers, APIs, mobile or edge devices,
+background jobs, third-party services, webhooks, email, AI or voice systems, or delayed side effects. Use the README
+glossary vocabulary when explaining behavior: step boundary, state file, saved step binding, dirty step, replay
+boundary, replay anchor, checkpoint snapshot, develop-step pause, pause action, rehydration, rehydratable value, and
+step-exit lifecycle.
 
 Do not use this skill for generic Python scripts, generic unit tests, or unrelated workflow automation that is not authored as a Journey SDK journey.
 
 ## Official Tools
 
-Official tools live under `journeysdk.tools`. They are ordinary Python helpers that return step callables or serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted resources while steps execute, and make returned values serializable or rehydratable when they cross retry, checkpoint, branch, or `--state` boundaries.
+Official tools live under `journeysdk.tools`. They are ordinary Python helpers that return step callables or
+serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted
+resources while steps execute, and make returned values serializable or rehydratable when they cross replay boundaries
+for retry, checkpoint, branch, or `--state` behavior.
 
 - `journeysdk.tools.webhook`: host a local webhook endpoint or acquire a cloud-hosted endpoint, then wait for received webhook requests.
 - `journeysdk.tools.email`: get an inbox, send email, and wait for received email using direct SMTP/IMAP settings or hosted email access.
@@ -51,7 +59,10 @@ def account_journey() -> None:
 
 Prefer stable function names because default step labels come from function names. When a label appears in docs, tests, state files, or CLI examples, keep it stable or update every reference in the same change.
 
-Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay. Use `checkpoint()` and `branch(start_from=...)` for branch replay anchors. Keep values that cross retry, checkpoint, branch, or `--state` boundaries pickle-serializable or implement the Journey rehydration protocol with top-level classes and explicit `__store__` / `__restore__` methods.
+Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay. Use `checkpoint()` and
+`branch(start_from=...)` for branch replay anchors and checkpoint snapshots. Keep values that cross replay boundaries
+pickle-serializable or implement the Journey rehydration protocol with top-level classes and explicit `__store__` /
+`__restore__` methods.
 
 ## Run Journeys
 
@@ -63,13 +74,17 @@ uv run journey --file docs/first_journey/first_journey.py
 uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents
 ```
 
-Use `--file` to scope discovery to one file, `--journey` to select one decorated entrypoint, and targeted `--step LABEL` to execute only the single flow that reaches a step label.
+Use `--file` to scope discovery to one file, `--journey` to select one decorated entrypoint, and targeted
+`--step LABEL` to execute only the single case that reaches a step label. A targeted run reports `replay_anchor` for
+branch checkpoints but does not skip directly to that checkpoint unless state or retry behavior causes replay.
 
 Journey writes plans, summaries, prompts, and JSON to stdout. Live diagnostics go to stderr as structured
 `[journey]` log lines with `time`, `level`, `component`, `event`, and `message` fields. Use
 `--log-level debug|info|warning|error|off` to tune them; default `info` is usually best for local and agent runs.
 
-Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step results:
+Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step bindings. When a
+run is interrupted inside a step, Journey restarts that dirty step from the top with saved inputs; it never resumes
+inside the function body:
 
 ```bash
 uv run journey --file docs/resume_journey/resume_journey.py --state .journey/run.state
@@ -77,19 +92,26 @@ uv run journey --file docs/resume_journey/resume_journey.py --state .journey/run
 
 ## Develop One Step
 
-Use `--develop-step LABEL --state .journey/develop-step.state` for agent-friendly edit-run loops. Noninteractive develop-step runs execute the target path, pause after the target step, store state, print the paused result, and exit:
+Use `--develop-step LABEL --state .journey/develop-step.state` for agent-friendly edit-run loops. Noninteractive
+develop-step runs execute the target case, pause after the target step boundary, store state, print the paused result,
+and exit:
 
 ```bash
 uv run journey --file path/to/journey.py --develop-step target_label --state .journey/develop-step.state
 ```
 
-After editing code, retry the same paused step by rerunning the same command with the same `--develop-step` label and `--state` file. To continue after a successful pause, target the next step label with the same state file:
+After editing code, retry the same paused step by rerunning the same command with the same `--develop-step` label and
+`--state` file. To continue after a successful pause, target the next step label with the same state file:
 
 ```bash
 uv run journey --file path/to/journey.py --develop-step next_label --state .journey/develop-step.state
 ```
 
-If the paused step failed, retry the same paused step first; continuing to a later label is invalid until the failed step succeeds. Develop-step retry/continue reloads and recompiles the journey file, so code edits are picked up without a long-lived process. Avoid `--interactive` for non-human agent runs; reserve it for a person who wants an in-process continue/retry prompt.
+If the paused step failed, retry the same paused step first; continuing to a later label is invalid until the failed
+step succeeds. Develop-step retry replays from the paused step's replay boundary; continue reuses the saved prefix and
+moves to the next step boundary. Retry/continue reloads and recompiles the journey file, so code edits are picked up
+without a long-lived process. Avoid `--interactive` for non-human agent runs; reserve it for a person who wants an
+in-process continue/retry prompt.
 
 ## Maintain Journeys
 

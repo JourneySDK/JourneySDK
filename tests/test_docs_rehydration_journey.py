@@ -49,3 +49,9 @@ def test_rehydration_docs_support_targeted_execution_with_replay_anchor():
     assert len(report.case_reports) == 1
     assert report.case_reports[0].stopped_at_label == "assert_branch_b"
     assert report.case_reports[0].replay_anchor == "cp_1"
+    seed = rehydration_docs.EVENTS[0].split("_")[1]
+    assert rehydration_docs.EVENTS == [
+        f"prepare_{seed}",
+        f"shared_seed-{seed}",
+        f"branch_b_seed-{seed}",
+    ]
