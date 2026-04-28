@@ -1,12 +1,12 @@
 # 03 Retries and Resume
 
-Not every failure means the journey is wrong. Sometimes the system under test is still catching up. Sometimes a run gets
-interrupted while a step is running.
+Not every failure means the journey is wrong. Sometimes the system under test is still catching up. Sometimes a long
+run needs to stop cleanly and resume from saved state.
 
 This chapter covers both cases:
 
 - retries when a step needs to poll or replay from an earlier step boundary
-- `--state` when a run is interrupted and you want to restart the dirty step later
+- `--state` when a run is interrupted and you want to resume from a step boundary later
 
 ## Three Retry Shapes
 
@@ -188,9 +188,9 @@ def wait_for_resume_signal(
         "restarts from the top on resume with the same saved inputs."
     )
     _tutorial_note(
-        f"Press Ctrl-C during the next {pause_seconds:.1f} seconds to interrupt after "
-        "the earlier step has already been saved. Then rerun the same command with "
-        "--state to resume from this step boundary."
+        f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
+        "gracefully after this step reaches post-exit. Press Ctrl-C a second time "
+        "to interrupt inside this step and rerun it later from saved inputs."
     )
     time.sleep(pause_seconds)
     return ticket
@@ -204,8 +204,10 @@ def resume_journey() -> None:
     step(assert_resumed_ticket, resumed_ticket)
 ```
 
-The key rule is that Journey resumes at a step boundary, not in the middle of a function body. A step that was active
-when the process stopped is the dirty step; on the next run Journey restarts it from the top with saved inputs.
+The key rule is that Journey resumes at a step boundary, not in the middle of a function body. In CLI runs with
+`--state`, first Ctrl-C is graceful: Journey lets the active step finish storage, exit returned handles, and stop at
+post-exit. Press Ctrl-C a second time to interrupt inside the dirty step; on the next run Journey restarts that step
+from the top with saved inputs.
 
 ### Reset the Demo State
 
@@ -219,7 +221,8 @@ uv run python -c "from docs.resume_journey import reset_demo_state; reset_demo_s
 uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
 ```
 
-Press `Ctrl-C` when the tutorial note tells you to.
+Press `Ctrl-C` once when the tutorial note tells you to. The command stops after the active step completes; press it a
+second time only if you want to force an immediate dirty-step interruption.
 
 Expected stdout:
 
@@ -234,7 +237,8 @@ Execution
 [journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
 [journey] time=... level=INFO component=executor event=execution_log message="  step load_support_ticket attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 interrupted duration=..."
+[journey] time=... level=WARNING component=cli event=graceful_interrupt_requested message="interrupt requested; waiting for the active step to reach post-exit" ...
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 ok duration=..."
 Interrupted.
 What happened: Journey execution was interrupted before it finished.
 Try this: Run the same command again with --state
@@ -245,7 +249,7 @@ Expected stderr:
 ```console
 [journey] time=... level=INFO component=tutorial event=tutorial_note message="Loaded support ticket ticket-001 and saved it as the result of load_support_ticket(). ..."
 [journey] time=... level=INFO component=tutorial event=tutorial_note message="wait_for_resume_signal() is starting with saved ticket ticket-001. ..."
-[journey] time=... level=INFO component=tutorial event=tutorial_note message="Press Ctrl-C during the next 2.0 seconds to interrupt after the earlier step has already been saved. ..."
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step reaches post-exit. ..."
 ```
 
 ### Second Run: Resume It
@@ -265,8 +269,6 @@ Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
 - case_1 resume branches={}
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=2 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=2 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_resumed_ticket attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=3 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
@@ -286,6 +288,7 @@ Expected stderr:
 - Checkpoint snapshots store saved bindings on the first hit and restore them when replay rewinds to that checkpoint.
 - Any value that Journey may need to replay later must be pickle-serializable or rehydratable.
 - `--state` keeps successful step bindings so the rerun can skip what already succeeded.
-- Resume starts the dirty step again from the top. It does not jump into the middle of the function.
+- First Ctrl-C in a CLI `--state` run resumes after the completed step; second Ctrl-C restarts the dirty step from the
+  top later. Journey never jumps into the middle of the function.
 
 Continue with [04 Browser and Local Integrations](04-browser-and-local-integrations.md) when your steps need to open real pages, receive webhooks, or inspect local files.

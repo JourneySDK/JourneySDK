@@ -9,9 +9,10 @@ compile it into linear executable flows that can stop and resume at step boundar
 a single journey can touch browsers, edge devices, background jobs, third-party services, voice or AI systems, and
 delayed side effects.
 
-Every `step(...)` call is an interruption boundary. With `--state`, Journey saves the successful steps that came before
-the active step. If execution is interrupted while a step is running, Journey never resumes inside that function body;
-the next run restarts the affected step from the top with the same saved inputs.
+Every `step(...)` call is an interruption boundary. With `--state`, Journey saves step inputs and successful results so
+the next run can resume at a boundary. In the CLI, the first Ctrl-C during a running step waits for that step to reach
+post-exit and then stops; the next run continues after the completed step. Press Ctrl-C a second time to interrupt the
+dirty step immediately; that step restarts from the top later with the same saved inputs.
 
 Each step is just plain Python, so teams can use existing testing tools and scripts without adapting them to a special
 framework. A `step` can run browser automation, mobile checks, API assertions, or service-specific validation logic.
@@ -147,11 +148,12 @@ retried.
 - **Branch**: an inline `if branch(): ... elif branch(): ...` arm that compiles into a separate case.
 - **Targeted run**: a `--step LABEL` run that executes the one case reaching that label and stops after it. A reported
   `replay_anchor` identifies the branch checkpoint, but targeted runs do not skip directly to that checkpoint.
-- **Develop-step pause**: a `--develop-step LABEL` stop after the selected step, used for quick edit-run loops.
+- **Step lifecycle**: initialization, execution, storage, pre-exit, exit, and post-exit for one step attempt.
+- **Develop-step pause**: a `--develop-step LABEL` stop at pre-exit after the selected step has been stored and before
+  returned handles are exited, used for quick edit-run loops.
 - **Pause action**: `continue` or `retry` after a develop-step pause.
 - **Rehydration**: storing and restoring values that cross replay boundaries.
 - **Rehydratable value**: a value with `__store__` and `__restore__` hooks for custom replay storage.
-- **Step-exit lifecycle**: cleanup of returned values that expose `__exit__` after Journey has saved the step result.
 
 ## Journey Rehydration Protocol
 
@@ -189,17 +191,30 @@ next step instead of trying to pickle the live resource itself. Official tools
 follow this pattern: `JourneyPlaywrightPage` stores browser state, and later
 steps reopen it with `open_page(saved_page)`.
 
-## Step-Exit Tool Lifecycle
+## Step Lifecycle
 
 Official tools that open live resources inside a step should return an object
 with the standard context-manager `__exit__(exc_type, exc, traceback)` method.
-After a step function returns, Journey stores the returned value, discovers
-returned `__exit__` handles, and closes them before the next step runs. In
-noninteractive `--develop-step` mode, Journey stores the returned value and
-closes returned handles before the command exits. With
-`--develop-step --interactive`, Journey stores the returned value and shows the
-continue/retry prompt while those handles are still live, then closes them after
-the user chooses `continue` or `retry`, or cancels the prompt.
+Each step attempt has six phases:
+
+1. **Initialization**: Journey restores saved values, calls `__restore__`
+   hooks when needed, and resolves the arguments passed to the step function.
+2. **Execution**: Journey calls the step function. The function may succeed,
+   fail, retry, or be interrupted.
+3. **Storage**: Journey calls `__store__` hooks when needed and stores the
+   step inputs plus the returned value in the state file.
+4. **Pre-exit**: `--develop-step` pauses here after a matched step, with
+   returned handles still live.
+5. **Exit**: Journey discovers returned `__exit__` handles and closes them
+   before the next step runs.
+6. **Post-exit**: a graceful CLI Ctrl-C stops here after the completed step has
+   been saved and exited.
+
+In noninteractive `--develop-step` mode, Journey stores the returned value,
+pauses at pre-exit, then closes returned handles before the command exits. With
+`--develop-step --interactive`, Journey shows the continue/retry prompt while
+those handles are still live, then closes them after the user chooses
+`continue` or `retry`, or cancels the prompt.
 
 Use this pattern when a tool owns a resource that should not outlive the step
 attempt:
@@ -359,10 +374,11 @@ Set provider credentials with the provider's normal environment variables such a
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
 enabled, Journey stores the step inputs and outputs it may need to replay later, so those values must be
-pickle-serializable. If a run is interrupted while a step is active, the saved dirty step restarts from the top on the
-next run with the same inputs; Journey does not resume inside the function body. The same replay rule applies to steps
-that may be replayed because of retries or `branch(start_from=...)`. The state file is kept after the run finishes, so
-rerunning the same command can reuse that saved progress; delete the file when you want to start fresh.
+pickle-serializable. In the CLI, the first Ctrl-C during an active step lets that step finish storage and exit before
+the command stops; the next run continues after that step. Press Ctrl-C a second time to stop inside the dirty step,
+which restarts from the top later with the same inputs. The same replay rule applies to steps that may be replayed
+because of retries or `branch(start_from=...)`. The state file is kept after the run finishes, so rerunning the same
+command can reuse that saved progress; delete the file when you want to start fresh.
 
 ## How it works
 

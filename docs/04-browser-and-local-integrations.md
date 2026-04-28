@@ -269,7 +269,8 @@ uv run python -c "from docs.playwright_resume_journey import reset_demo_state; r
 uv run journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
 ```
 
-Press `Ctrl-C` when the tutorial note tells you to.
+Press `Ctrl-C` once when the tutorial note tells you to. The command stops after the active step completes; press it a
+second time only if you want to force an immediate dirty-step interruption.
 
 Expected stdout:
 
@@ -284,7 +285,8 @@ Execution
 [journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
 [journey] time=... level=INFO component=executor event=execution_log message="  step login_and_capture_session attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=1 interrupted duration=..."
+[journey] time=... level=WARNING component=cli event=graceful_interrupt_requested message="interrupt requested; waiting for the active step to reach post-exit" ...
+[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=1 ok duration=..."
 Interrupted.
 What happened: Journey execution was interrupted before it finished.
 Try this: Run the same command again with --state
@@ -295,7 +297,7 @@ Expected stderr:
 ```console
 [journey] time=... level=INFO component=tutorial event=tutorial_note message="Signed in and returned JourneyPlaywrightPage for http://127.0.0.1:.../dashboard. ..."
 [journey] time=... level=INFO component=tutorial event=tutorial_note message="continue_authenticated_dashboard() reopened the saved dashboard at http://127.0.0.1:.../dashboard. ..."
-[journey] time=... level=INFO component=tutorial event=tutorial_note message="Press Ctrl-C during the next 2.0 seconds to interrupt after the authenticated browser state has already been saved."
+[journey] time=... level=INFO component=tutorial event=tutorial_note message="Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step reaches post-exit. ..."
 ```
 
 ### Second Run: Reopen the Same Saved Session
@@ -315,8 +317,6 @@ Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
 - case_1 resume branches={}
-[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=2 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step continue_authenticated_dashboard attempt=2 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_protected_action_complete attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=3 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed

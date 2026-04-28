@@ -8,7 +8,7 @@ Journey SDK compiles or executes the resulting linear cases.
 
 See `README.md` for the deeper product description, use cases, tutorial context, and glossary. Use that vocabulary
 consistently: step boundary, state file, saved step binding, dirty step, replay boundary, replay anchor, checkpoint
-snapshot, develop-step pause, pause action, rehydration, rehydratable value, and step-exit lifecycle.
+snapshot, step lifecycle, develop-step pause, pause action, rehydration, and rehydratable value.
 
 ## Key files
 
@@ -40,8 +40,8 @@ CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout f
 ## Core principles
 
 - **Developer-centric**: The developer-facing interfaces (API and CLI) must be straightforward and intuitive.
-- **Resumable tests**: Steps can be interrupted with `--state`; Journey resumes by restarting the dirty step from the
-  top with saved inputs, never from the middle of a function body.
+- **Resumable tests**: With CLI `--state`, first Ctrl-C lets the active step finish and resume after it; second Ctrl-C
+  interrupts the dirty step, which later restarts from the top with saved inputs.
 - **Extensible design**: There are official tools, and everyone is welcome to add their own. Adding new tools must be
   straightforward and intuitive.
 - **Clear documentation**: To make it developer-friendly, all docs must be written in plain English, with enough

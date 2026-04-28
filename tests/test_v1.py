@@ -1280,6 +1280,64 @@ def test_execute_returned_step_exit_objects_defer_during_develop_step_pause(tmp_
     assert events[-1] == "cleanup:None"
 
 
+def test_execute_step_lifecycle_reaches_post_exit_before_graceful_interrupt(tmp_path):
+    events: list[str] = []
+    state_file = tmp_path / "lifecycle.state"
+
+    class RecordingInterruptController:
+        def __init__(self) -> None:
+            self.phases: list[str] = []
+            self.pending = True
+
+        def on_step_lifecycle_phase(self, phase: str | None) -> None:
+            if phase is not None:
+                self.phases.append(phase)
+
+        def is_step_interrupt_pending(self) -> bool:
+            return self.pending
+
+        def raise_if_interrupted_after_step(self) -> None:
+            if self.pending:
+                self.pending = False
+                raise KeyboardInterrupt()
+
+    def publish():
+        events.append("publish")
+        return _StepExitValue(events, "cleanup")
+
+    def finish(value):
+        events.append(f"finish_{value.closed}")
+        return True
+
+    def journey():
+        value = journey_sdk.step(publish)
+        journey_sdk.step(finish, value)
+
+    controller = RecordingInterruptController()
+    with pytest.raises(KeyboardInterrupt):
+        with journey_executor._use_step_interrupt_controller(controller):
+            journey_sdk.execute(journey, state=state_file)
+
+    assert controller.phases == [
+        "initialization",
+        "execution",
+        "storage",
+        "pre-exit",
+        "exit",
+        "post-exit",
+    ]
+    assert events[:3] == [
+        "publish",
+        "cleanup:store_open",
+        "cleanup:None",
+    ]
+
+    journey_sdk.execute(journey, state=state_file)
+
+    assert events.count("publish") == 1
+    assert "finish_True" in events
+
+
 def test_execute_step_exit_cleanup_failure_fails_successful_step(tmp_path):
     events: list[str] = []
     should_fail = {"cleanup": True}

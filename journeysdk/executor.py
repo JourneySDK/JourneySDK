@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from types import FrameType, TracebackType
@@ -87,6 +90,59 @@ class _StepExitObject(Protocol):
         traceback: TracebackType | None,
     ) -> object:
         ...
+
+
+_STEP_LIFECYCLE_INITIALIZATION = "initialization"
+_STEP_LIFECYCLE_EXECUTION = "execution"
+_STEP_LIFECYCLE_STORAGE = "storage"
+_STEP_LIFECYCLE_PRE_EXIT = "pre-exit"
+_STEP_LIFECYCLE_EXIT = "exit"
+_STEP_LIFECYCLE_POST_EXIT = "post-exit"
+
+
+class _StepInterruptController(Protocol):
+    def on_step_lifecycle_phase(self, phase: str | None) -> None:
+        ...
+
+    def is_step_interrupt_pending(self) -> bool:
+        ...
+
+    def raise_if_interrupted_after_step(self) -> None:
+        ...
+
+
+_STEP_INTERRUPT_CONTROLLER: ContextVar[_StepInterruptController | None] = ContextVar(
+    "journey_step_interrupt_controller",
+    default=None,
+)
+
+
+@contextmanager
+def _use_step_interrupt_controller(
+    controller: _StepInterruptController,
+) -> Iterator[None]:
+    token = _STEP_INTERRUPT_CONTROLLER.set(controller)
+    try:
+        yield
+    finally:
+        _STEP_INTERRUPT_CONTROLLER.reset(token)
+
+
+def _notify_step_lifecycle_phase(phase: str | None) -> None:
+    controller = _STEP_INTERRUPT_CONTROLLER.get()
+    if controller is not None:
+        controller.on_step_lifecycle_phase(phase)
+
+
+def _is_step_interrupt_pending() -> bool:
+    controller = _STEP_INTERRUPT_CONTROLLER.get()
+    return controller is not None and controller.is_step_interrupt_pending()
+
+
+def _raise_if_interrupted_after_step() -> None:
+    controller = _STEP_INTERRUPT_CONTROLLER.get()
+    if controller is not None:
+        controller.raise_if_interrupted_after_step()
 
 
 def _step_exit_objects_from_value(value: Any) -> list[_StepExitObject]:
@@ -1189,7 +1245,7 @@ class _RunSession:
         self._pending_checkpoint_restore_name = checkpoint_restore_name
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
-        self._active_step_running = False
+        self._active_step_lifecycle: _StepLifecycle | None = None
         (
             self._step_key_by_id,
             self._checkpoint_key_by_name,
@@ -1576,7 +1632,30 @@ class _RunSession:
         failure: CallableExecutionError | None = None,
         pending_exit_objects: tuple[_StepExitObject, ...] = (),
     ) -> None:
-        paused_step = PausedStepState(
+        paused_step = self._build_paused_step(
+            node,
+            node_index=node_index,
+            attempt=attempt,
+            ok=ok,
+            error=error,
+            failure=failure,
+        )
+        self._paused_step = paused_step
+        self._dirty_node_id = None
+        self._persist_state()
+        raise _PauseRequested(paused_step, pending_exit_objects)
+
+    def _build_paused_step(
+        self,
+        node: StepNode,
+        *,
+        node_index: int,
+        attempt: int,
+        ok: bool,
+        error: str | None = None,
+        failure: CallableExecutionError | None = None,
+    ) -> PausedStepState:
+        return PausedStepState(
             node_id=node.node_id,
             label=node.label,
             node_index=node_index,
@@ -1586,10 +1665,6 @@ class _RunSession:
             failure_message=failure.message if failure is not None else None,
             failure_hint=failure.hint if failure is not None else None,
         )
-        self._paused_step = paused_step
-        self._dirty_node_id = None
-        self._persist_state()
-        raise _PauseRequested(paused_step, pending_exit_objects)
 
     def _store_step_inputs(
         self,
@@ -1994,28 +2069,106 @@ class _RunSession:
         return self._state_controller
 
     def _is_step_executing(self) -> bool:
-        return self._active_step_running
+        lifecycle = self._active_step_lifecycle
+        return (
+            lifecycle is not None
+            and lifecycle.phase == _STEP_LIFECYCLE_EXECUTION
+        )
 
-    def _start_step_lifecycle(self) -> None:
-        if self._active_step_running:
+    def _ensure_no_active_step_lifecycle(self) -> None:
+        if self._active_step_lifecycle is not None:
             raise InvalidBranchUsageError(
                 "A journey step started while another step was already running.",
                 hint="Do not call step(...) from inside another step function.",
             )
-        self._active_step_running = True
 
-    def _finish_step_lifecycle(self) -> None:
-        self._active_step_running = False
-
-    def _exit_step_return_values(
+    def _set_step_lifecycle_phase(
         self,
+        lifecycle: "_StepLifecycle",
+        phase: str,
+    ) -> None:
+        active = self._active_step_lifecycle
+        if active is not None and active is not lifecycle:
+            self._ensure_no_active_step_lifecycle()
+        self._active_step_lifecycle = lifecycle
+        lifecycle.phase = phase
+        _notify_step_lifecycle_phase(phase)
+
+    def _clear_step_lifecycle(self, lifecycle: "_StepLifecycle") -> None:
+        if self._active_step_lifecycle is lifecycle:
+            self._active_step_lifecycle = None
+            _notify_step_lifecycle_phase(None)
+        lifecycle.phase = None
+
+    def _begin_step_attempt(
+        self,
+        node: StepNode,
+        *,
+        node_index: int,
+    ) -> tuple[int, float]:
+        self._dirty_node_id = node.node_id
+        attempt = self._step_attempts.get(node.node_id, 0) + 1
+        self._step_attempts[node.node_id] = attempt
+        self._persist_state()
+        self._observer.on_step_start(
+            case_plan=self.case_plan,
+            node=node,
+            node_index=node_index,
+            attempt=attempt,
+        )
+        return attempt, time.perf_counter()
+
+    def _observe_step_interrupted(
+        self,
+        node: StepNode,
+        *,
+        node_index: int,
+        attempt: int,
+        started_at: float,
+        error: BaseException,
+    ) -> None:
+        self._observer.on_step_interrupted(
+            case_plan=self.case_plan,
+            node=node,
+            node_index=node_index,
+            attempt=attempt,
+            duration_seconds=time.perf_counter() - started_at,
+            error=error,
+        )
+
+    def _commit_step_success(
+        self,
+        node: StepNode,
+        *,
+        node_index: int,
+        attempt: int,
+        started_at: float,
         output: Any,
+        binding: StepBindingState,
+    ) -> bool:
+        self._promote_step_result(node, binding)
+        self._retry_remaining.pop(node.node_id, None)
+        self._dirty_node_id = None
+        self.replay_from_index = max(self.replay_from_index, node_index + 1)
+        should_stop = self._record(node_index, node, ok=True, result=output)
+        self._observer.on_step_success(
+            case_plan=self.case_plan,
+            node=node,
+            node_index=node_index,
+            attempt=attempt,
+            duration_seconds=time.perf_counter() - started_at,
+        )
+        return should_stop
+
+    def _close_step_exit_objects(
+        self,
+        exit_objects: tuple[_StepExitObject, ...],
         exc_type: type[BaseException] | None = None,
         exc: BaseException | None = None,
         traceback: TracebackType | None = None,
     ) -> list[BaseException]:
         failures: list[BaseException] = []
-        for value in reversed(_step_exit_objects_from_value(output)):
+        for value in reversed(exit_objects):
             try:
                 value.__exit__(exc_type, exc, traceback)
             except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
@@ -2032,6 +2185,7 @@ class _RunSession:
         **kwargs: P.kwargs,
     ) -> R:
         del retry, retry_delay, retry_from
+        self._ensure_no_active_step_lifecycle()
         node_index = self.cursor
         node = self._consume(StepNode)
         if callable_ref(fn) != node.fn_ref:
@@ -2063,6 +2217,7 @@ class _RunSession:
                 binding,
                 description=f"saved result for step '{node.label or node.node_id}'",
             )
+            self.replay_from_index = max(self.replay_from_index, node_index + 1)
             should_stop = self._record(node_index, node, ok=True, result=result)
             if should_stop:
                 if self._develop_step_enabled:
@@ -2075,139 +2230,13 @@ class _RunSession:
                 raise _StopCase()
             return cast(R, result)
 
-        bound_args: tuple[Any, ...]
-        bound_kwargs: dict[str, Any]
-        if binding is not None and not binding.has_result:
-            bound_args, bound_kwargs = self._resolve_step_inputs(node, binding)
-        else:
-            binding = self._store_step_inputs(node, tuple(args), dict(kwargs))
-            bound_args, bound_kwargs = self._resolve_step_inputs(node, binding)
-
-        self._dirty_node_id = node.node_id
-        attempt = self._step_attempts.get(node.node_id, 0) + 1
-        self._step_attempts[node.node_id] = attempt
-        self._persist_state()
-        self._observer.on_step_start(
-            case_plan=self.case_plan,
+        lifecycle = _StepLifecycle(
+            session=self,
             node=node,
             node_index=node_index,
-            attempt=attempt,
+            binding=binding,
         )
-        started_at = time.perf_counter()
-
-        self._start_step_lifecycle()
-        try:
-            output = fn(*bound_args, **bound_kwargs)
-        except KeyboardInterrupt as exc:
-            self._finish_step_lifecycle()
-            self._observer.on_step_interrupted(
-                case_plan=self.case_plan,
-                node=node,
-                node_index=node_index,
-                attempt=attempt,
-                duration_seconds=time.perf_counter() - started_at,
-                error=exc,
-            )
-            raise
-        except Exception as exc:  # pragma: no cover - surfaced to caller
-            self._finish_step_lifecycle()
-            self._handle_step_exception(
-                node,
-                node_index=node_index,
-                attempt=attempt,
-                started_at=started_at,
-                exc=exc,
-            )
-        except BaseException:
-            self._finish_step_lifecycle()
-            raise
-
-        self._finish_step_lifecycle()
-
-        try:
-            binding = self._set_step_result(node, output)
-        except Exception as exc:
-            cleanup_failures = self._exit_step_return_values(
-                output,
-                type(exc),
-                exc,
-                exc.__traceback__,
-            )
-            _add_cleanup_failure_notes(exc, cleanup_failures)
-            raise
-
-        pending_exit_objects = tuple(_step_exit_objects_from_value(output))
-        should_pause_for_develop = (
-            self._develop_step_enabled
-            and self.stop_after_index is not None
-            and node_index == self.stop_after_index
-        )
-        if should_pause_for_develop:
-            try:
-                self._promote_step_result(node, binding)
-                self._retry_remaining.pop(node.node_id, None)
-                self._dirty_node_id = None
-                should_stop = self._record(node_index, node, ok=True, result=output)
-                self._observer.on_step_success(
-                    case_plan=self.case_plan,
-                    node=node,
-                    node_index=node_index,
-                    attempt=attempt,
-                    duration_seconds=time.perf_counter() - started_at,
-                )
-                if should_stop:
-                    self._pause_after_step(
-                        node,
-                        node_index=node_index,
-                        attempt=attempt,
-                        ok=True,
-                        pending_exit_objects=pending_exit_objects,
-                    )
-            except _PauseRequested:
-                raise
-            except Exception as exc:
-                cleanup_failures = self._exit_step_return_values(
-                    output,
-                    type(exc),
-                    exc,
-                    exc.__traceback__,
-                )
-                _add_cleanup_failure_notes(exc, cleanup_failures)
-                raise
-
-        cleanup_failures = self._exit_step_return_values(output)
-        if cleanup_failures:
-            self._discard_step_result(node)
-            cleanup_error = RuntimeError(_cleanup_failure_message(cleanup_failures))
-            self._handle_step_exception(
-                node,
-                node_index=node_index,
-                attempt=attempt,
-                started_at=started_at,
-                exc=cleanup_error,
-            )
-
-        self._promote_step_result(node, binding)
-        self._retry_remaining.pop(node.node_id, None)
-        self._dirty_node_id = None
-        should_stop = self._record(node_index, node, ok=True, result=output)
-        self._observer.on_step_success(
-            case_plan=self.case_plan,
-            node=node,
-            node_index=node_index,
-            attempt=attempt,
-            duration_seconds=time.perf_counter() - started_at,
-        )
-        if should_stop:
-            if self._develop_step_enabled:
-                self._pause_after_step(
-                    node,
-                    node_index=node_index,
-                    attempt=attempt,
-                    ok=True,
-                )
-            raise _StopCase()
-        return cast(R, output)
+        return lifecycle.run(fn, tuple(args), dict(kwargs))
 
     def checkpoint(self) -> CheckpointRef:
         checkpoint_index = self.cursor
@@ -2328,6 +2357,178 @@ class _RunSession:
                 raise _StopCase()
         self._active_branch_chains.pop(spec.template_key, None)
         return True
+
+
+@dataclass
+class _StepLifecycle:
+    session: _RunSession
+    node: StepNode
+    node_index: int
+    binding: StepBindingState | None
+    phase: str | None = None
+    attempt: int = 0
+    started_at: float = 0.0
+    exit_objects: tuple[_StepExitObject, ...] = ()
+    _success_committed: bool = False
+
+    def run(
+        self,
+        fn: StepFunction[P, R],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> R:
+        self.session._ensure_no_active_step_lifecycle()
+        try:
+            self._enter(_STEP_LIFECYCLE_INITIALIZATION)
+            bound_args, bound_kwargs = self._initialize(args, kwargs)
+            self.attempt, self.started_at = self.session._begin_step_attempt(
+                self.node,
+                node_index=self.node_index,
+            )
+
+            output = self._execute(fn, bound_args, bound_kwargs)
+            binding = self._store(output)
+
+            should_stop = self._pre_exit(output, binding)
+            self._exit()
+            if not self._success_committed:
+                should_stop = self._commit_success(output, binding)
+            self._post_exit()
+            if should_stop:
+                raise _StopCase()
+            return cast(R, output)
+        finally:
+            self.session._clear_step_lifecycle(self)
+
+    def _enter(self, phase: str) -> None:
+        self.session._set_step_lifecycle_phase(self, phase)
+
+    def _initialize(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        if self.binding is not None and not self.binding.has_result:
+            return self.session._resolve_step_inputs(self.node, self.binding)
+
+        self.binding = self.session._store_step_inputs(self.node, args, kwargs)
+        return self.session._resolve_step_inputs(self.node, self.binding)
+
+    def _execute(
+        self,
+        fn: StepFunction[P, R],
+        bound_args: tuple[Any, ...],
+        bound_kwargs: dict[str, Any],
+    ) -> R:
+        self._enter(_STEP_LIFECYCLE_EXECUTION)
+        try:
+            return fn(*bound_args, **bound_kwargs)
+        except KeyboardInterrupt as exc:
+            self.session._clear_step_lifecycle(self)
+            self.session._observe_step_interrupted(
+                self.node,
+                node_index=self.node_index,
+                attempt=self.attempt,
+                started_at=self.started_at,
+                error=exc,
+            )
+            raise
+        except Exception as exc:  # pragma: no cover - surfaced to caller
+            self.session._clear_step_lifecycle(self)
+            self.session._handle_step_exception(
+                self.node,
+                node_index=self.node_index,
+                attempt=self.attempt,
+                started_at=self.started_at,
+                exc=exc,
+            )
+        except BaseException:
+            self.session._clear_step_lifecycle(self)
+            raise
+        raise AssertionError("unreachable")
+
+    def _store(self, output: Any) -> StepBindingState:
+        self._enter(_STEP_LIFECYCLE_STORAGE)
+        try:
+            binding = self.session._set_step_result(self.node, output)
+        except Exception as exc:
+            cleanup_failures = self.session._close_step_exit_objects(
+                tuple(_step_exit_objects_from_value(output)),
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, cleanup_failures)
+            raise
+        self.exit_objects = tuple(_step_exit_objects_from_value(output))
+        return binding
+
+    def _pre_exit(self, output: Any, binding: StepBindingState) -> bool:
+        self._enter(_STEP_LIFECYCLE_PRE_EXIT)
+        should_pause_for_develop = (
+            self.session._develop_step_enabled
+            and self.session.stop_after_index is not None
+            and self.node_index == self.session.stop_after_index
+            and not _is_step_interrupt_pending()
+        )
+        if not should_pause_for_develop:
+            return False
+
+        try:
+            should_stop = self._commit_success(output, binding)
+            if should_stop:
+                self.session._paused_step = self.session._build_paused_step(
+                    self.node,
+                    node_index=self.node_index,
+                    attempt=self.attempt,
+                    ok=True,
+                )
+                self.session._persist_state()
+                raise _PauseRequested(
+                    self.session._paused_step,
+                    self.exit_objects,
+                )
+        except _PauseRequested:
+            raise
+        except Exception as exc:
+            cleanup_failures = self.session._close_step_exit_objects(
+                self.exit_objects,
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, cleanup_failures)
+            raise
+        return False
+
+    def _exit(self) -> None:
+        self._enter(_STEP_LIFECYCLE_EXIT)
+        cleanup_failures = self.session._close_step_exit_objects(self.exit_objects)
+        if cleanup_failures:
+            self.session._discard_step_result(self.node)
+            cleanup_error = RuntimeError(_cleanup_failure_message(cleanup_failures))
+            self.session._handle_step_exception(
+                self.node,
+                node_index=self.node_index,
+                attempt=self.attempt,
+                started_at=self.started_at,
+                exc=cleanup_error,
+            )
+
+    def _commit_success(self, output: Any, binding: StepBindingState) -> bool:
+        self._success_committed = True
+        return self.session._commit_step_success(
+            self.node,
+            node_index=self.node_index,
+            attempt=self.attempt,
+            started_at=self.started_at,
+            output=output,
+            binding=binding,
+        )
+
+    def _post_exit(self) -> None:
+        self._enter(_STEP_LIFECYCLE_POST_EXIT)
+        _raise_if_interrupted_after_step()
 
 
 def _node_label(node: Any) -> str | None:

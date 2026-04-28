@@ -2043,6 +2043,184 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     assert state_file.exists()
 
 
+def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    state_file = tmp_path / "resume.state"
+    marker_file = tmp_path / "sent.flag"
+    events_file = tmp_path / "events.log"
+
+    _write(
+        tmp_path / "flow.py",
+        f"""
+        import signal
+        import journeysdk as journey
+        from pathlib import Path
+
+        MARKER = Path({str(marker_file)!r})
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        class LifecycleValue:
+            def __init__(self, closed: bool = False):
+                self.closed = closed
+
+            def __store__(self, context):
+                del context
+                state = "closed" if self.closed else "open"
+                _append(f"store_{{state}}")
+                return {{"closed": self.closed}}
+
+            @classmethod
+            def __restore__(cls, payload, context):
+                del context
+                return cls(closed=payload["closed"])
+
+            def __exit__(self, exc_type, exc, traceback):
+                del exc_type, exc, traceback
+                self.closed = True
+                _append("exit")
+
+        def publish():
+            _append("publish")
+            if not MARKER.exists():
+                MARKER.write_text("sent", encoding="utf-8")
+                signal.raise_signal(signal.SIGINT)
+                _append("after_signal")
+            return LifecycleValue()
+
+        def finish(value):
+            _append(f"finish_{{value.closed}}")
+            return True
+
+        @journey.journey
+        def flow():
+            value = journey.step(publish)
+            journey.step(finish, value)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    first_capture = capsys.readouterr()
+
+    assert first_exit == 130
+    assert "Interrupted." in first_capture.out
+    assert "step publish attempt=1 ok duration=" in first_capture.err
+    assert "step publish attempt=1 interrupted" not in first_capture.err
+    assert _event_lines(events_file) == [
+        "publish",
+        "after_signal",
+        "store_open",
+        "exit",
+        "store_closed",
+    ]
+
+    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    second_capture = capsys.readouterr()
+
+    assert second_exit == 0
+    assert "step publish attempt=2 start" not in second_capture.err
+    assert "step finish attempt=1 ok duration=" in second_capture.err
+    events = _event_lines(events_file)
+    assert events[:5] == [
+        "publish",
+        "after_signal",
+        "store_open",
+        "exit",
+        "store_closed",
+    ]
+    assert events.count("publish") == 1
+    assert "finish_True" in events
+    assert events.index("exit") < events.index("finish_True")
+
+
+def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    state_file = tmp_path / "resume.state"
+    marker_file = tmp_path / "sent.flag"
+    seed_file = tmp_path / "seed.count"
+    events_file = tmp_path / "events.log"
+
+    _write(
+        tmp_path / "flow.py",
+        f"""
+        import signal
+        import journeysdk as journey
+        from pathlib import Path
+
+        MARKER = Path({str(marker_file)!r})
+        SEED = Path({str(seed_file)!r})
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def next_payload():
+            value = int(SEED.read_text(encoding="utf-8")) + 1 if SEED.exists() else 1
+            SEED.write_text(str(value), encoding="utf-8")
+            return {{"seed": value}}
+
+        def publish(payload):
+            _append(f"publish_{{payload['seed']}}")
+            if not MARKER.exists():
+                MARKER.write_text("sent", encoding="utf-8")
+                signal.raise_signal(signal.SIGINT)
+                _append("after_first_signal")
+                signal.raise_signal(signal.SIGINT)
+                _append("after_second_signal")
+            return payload
+
+        def finish(payload):
+            _append(f"finish_{{payload['seed']}}")
+            return True
+
+        @journey.journey
+        def flow():
+            payload = next_payload()
+            result = journey.step(publish, payload)
+            journey.step(finish, result)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    first_capture = capsys.readouterr()
+
+    assert first_exit == 130
+    assert "step publish attempt=1 interrupted duration=" in first_capture.err
+    first_events = _event_lines(events_file)
+    runtime_seed = first_events[0].rsplit("_", 1)[1]
+    assert first_events == [
+        f"publish_{runtime_seed}",
+        "after_first_signal",
+    ]
+
+    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    second_capture = capsys.readouterr()
+
+    assert second_exit == 0
+    assert "step publish attempt=2 ok duration=" in second_capture.err
+    assert _event_lines(events_file) == [
+        f"publish_{runtime_seed}",
+        "after_first_signal",
+        f"publish_{runtime_seed}",
+        f"finish_{runtime_seed}",
+    ]
+    assert int(seed_file.read_text(encoding="utf-8")) > int(runtime_seed)
+
+
 def test_execute_state_resume_streams_case_resume_in_text_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

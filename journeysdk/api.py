@@ -153,9 +153,9 @@ def step(
     from an earlier checkpoint, journey may need to save and restore step
     inputs and outputs. Any value that may be replayed that way must be
     pickle-serializable or implement the Journey rehydration protocol.
-    If execution is interrupted while a step is running, a resumed run restarts
-    that step from the top with saved inputs; Journey does not resume inside
-    the function body.
+    In CLI runs with ``--state``, first Ctrl-C lets the active step finish and
+    resume after it; pressing Ctrl-C again interrupts the dirty step, which
+    later restarts from the top with saved inputs.
 
     Outside an active planning or execution session, ``step()`` is invalid.
 

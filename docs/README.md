@@ -27,8 +27,9 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 ```
 
 - The Docker Compose snapshot example expects local `docker` and `docker compose` access when you execute it.
-- With `--state`, an interrupted run resumes at a step boundary. The active step restarts from the top with saved
-  inputs; Journey never resumes inside a function body.
+- With `--state`, CLI Ctrl-C is graceful the first time: Journey lets the active step reach post-exit, then resumes
+  after that completed step. Press Ctrl-C again to interrupt the dirty step immediately; that step restarts later with
+  saved inputs.
 
 ## Reading Order
 

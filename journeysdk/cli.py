@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -18,7 +22,12 @@ from .errors import (
     NoJourneysFoundError,
     StepNotFoundError,
 )
-from .executor import _ExecutionObserver, _PausedExecution, _execute_plan
+from .executor import (
+    _ExecutionObserver,
+    _PausedExecution,
+    _execute_plan,
+    _use_step_interrupt_controller,
+)
 from .logger import configure_logging, get_logger
 from .models import (
     BranchMarkerNode,
@@ -33,6 +42,64 @@ from .state import load_execution_state
 from .types import JourneyEntrypoint
 
 _CLI_LOGGER = get_logger("cli")
+
+_GRACEFUL_INTERRUPT_PHASES = {
+    "initialization",
+    "execution",
+    "storage",
+    "pre-exit",
+    "exit",
+}
+
+
+class _CliStepInterruptController:
+    def __init__(self) -> None:
+        self._phase: str | None = None
+        self._pending_interrupt = False
+
+    def on_step_lifecycle_phase(self, phase: str | None) -> None:
+        self._phase = phase
+
+    def is_step_interrupt_pending(self) -> bool:
+        return self._pending_interrupt
+
+    def raise_if_interrupted_after_step(self) -> None:
+        if not self._pending_interrupt:
+            return
+        self._pending_interrupt = False
+        raise KeyboardInterrupt()
+
+    def handle_sigint(self, signum: int, frame: object) -> None:
+        del signum, frame
+        if self._phase in _GRACEFUL_INTERRUPT_PHASES and not self._pending_interrupt:
+            self._pending_interrupt = True
+            _CLI_LOGGER.warning(
+                "graceful_interrupt_requested",
+                "interrupt requested; waiting for the active step to reach post-exit",
+                phase=self._phase,
+            )
+            return
+        raise KeyboardInterrupt()
+
+
+@contextmanager
+def _graceful_cli_interrupts(enabled: bool) -> Iterator[None]:
+    if not enabled or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    controller = _CliStepInterruptController()
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    def handler(signum: int, frame: object) -> None:
+        controller.handle_sigint(signum, frame)
+
+    signal.signal(signal.SIGINT, handler)
+    try:
+        with _use_step_interrupt_controller(controller):
+            yield
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
 
 
 @dataclass(frozen=True)
@@ -1251,37 +1318,38 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         print("Execution")
 
     try:
-        should_execute = bool(compiled) and not (args.fail_fast and errors)
-        if not should_execute:
-            run_errors = []
-        elif args.step is None and args.develop_step is None:
-            run_results, run_errors = _execute_all_targets(
-                compiled,
-                root=root,
-                fail_fast=args.fail_fast,
-                state=args.state,
-                stream_live=True,
-            )
-            executed.extend(run_results)
-        else:
-            if args.develop_step is not None:
-                run_results, run_errors = _execute_target_pause(
+        with _graceful_cli_interrupts(args.state is not None):
+            should_execute = bool(compiled) and not (args.fail_fast and errors)
+            if not should_execute:
+                run_errors = []
+            elif args.step is None and args.develop_step is None:
+                run_results, run_errors = _execute_all_targets(
                     compiled,
                     root=root,
-                    develop_step=args.develop_step,
+                    fail_fast=args.fail_fast,
                     state=args.state,
                     stream_live=True,
-                    interactive=args.interactive,
                 )
+                executed.extend(run_results)
             else:
-                run_results, run_errors = _execute_target_step(
-                    compiled,
-                    root=root,
-                    step=args.step,
-                    state=args.state,
-                    stream_live=True,
-                )
-            executed.extend(run_results)
+                if args.develop_step is not None:
+                    run_results, run_errors = _execute_target_pause(
+                        compiled,
+                        root=root,
+                        develop_step=args.develop_step,
+                        state=args.state,
+                        stream_live=True,
+                        interactive=args.interactive,
+                    )
+                else:
+                    run_results, run_errors = _execute_target_step(
+                        compiled,
+                        root=root,
+                        step=args.step,
+                        state=args.state,
+                        stream_live=True,
+                    )
+                executed.extend(run_results)
     except KeyboardInterrupt:
         _emit_interrupt_output(state=args.state, as_json=args.json)
         return 130

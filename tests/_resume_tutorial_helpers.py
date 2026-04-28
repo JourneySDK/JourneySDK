@@ -9,7 +9,7 @@ from typing import Any
 import journeysdk as journey
 from journeysdk.models import StepNode
 
-INTERRUPT_PROMPT_PREFIX = "Press Ctrl-C during the next"
+INTERRUPT_PROMPT_PREFIX = "Press Ctrl-C once during the next"
 
 
 class LiveStderr:

@@ -11,8 +11,8 @@ Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async,
 skill when a Journey SDK journey tests product or business flows that touch browsers, APIs, mobile or edge devices,
 background jobs, third-party services, webhooks, email, AI or voice systems, or delayed side effects. Use the README
 glossary vocabulary when explaining behavior: step boundary, state file, saved step binding, dirty step, replay
-boundary, replay anchor, checkpoint snapshot, develop-step pause, pause action, rehydration, rehydratable value, and
-step-exit lifecycle.
+boundary, replay anchor, checkpoint snapshot, step lifecycle, develop-step pause, pause action, rehydration, and
+rehydratable value.
 
 Do not use this skill for generic Python scripts, generic unit tests, or unrelated workflow automation that is not authored as a Journey SDK journey.
 
@@ -82,9 +82,10 @@ Journey writes plans, summaries, prompts, and JSON to stdout. Live diagnostics g
 `[journey]` log lines with `time`, `level`, `component`, `event`, and `message` fields. Use
 `--log-level debug|info|warning|error|off` to tune them; default `info` is usually best for local and agent runs.
 
-Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step bindings. When a
-run is interrupted inside a step, Journey restarts that dirty step from the top with saved inputs; it never resumes
-inside the function body:
+Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step bindings. In CLI
+runs, first Ctrl-C lets the active step finish storage, exit returned handles, and stop at post-exit; rerunning resumes
+after that step. Press Ctrl-C again to interrupt the dirty step immediately; that step later restarts from the top with
+saved inputs:
 
 ```bash
 uv run journey --file docs/resume_journey/resume_journey.py --state .journey/run.state

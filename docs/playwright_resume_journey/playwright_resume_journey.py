@@ -69,10 +69,10 @@ def continue_authenticated_dashboard(
             "restarts from the top on resume with the same saved JourneyPlaywrightPage."
         )
         _tutorial_note(
-            f"Press Ctrl-C during the next {pause_seconds:.1f} seconds to interrupt "
-            "after the authenticated browser state has already been saved. Then rerun "
-            "the same command with --state to reopen this dashboard from the same "
-            "saved session."
+            f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
+            "gracefully after this step reaches post-exit. Press Ctrl-C a second time "
+            "to interrupt inside this step and rerun it later with the same saved "
+            "authenticated browser state."
         )
         time.sleep(pause_seconds)
 

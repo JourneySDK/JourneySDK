@@ -42,9 +42,9 @@ def wait_for_resume_signal(
         "restarts from the top on resume with the same saved inputs."
     )
     _tutorial_note(
-        f"Press Ctrl-C during the next {pause_seconds:.1f} seconds to interrupt after "
-        "the earlier step has already been saved. Then rerun the same command with "
-        "--state to resume from this step boundary."
+        f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
+        "gracefully after this step reaches post-exit. Press Ctrl-C a second time "
+        "to interrupt inside this step and rerun it later from saved inputs."
     )
     time.sleep(pause_seconds)
     _tutorial_note(

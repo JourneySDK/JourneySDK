@@ -216,6 +216,8 @@ def test_resume_readme_commands_interrupt_then_resume(
     assert "Try this: Run the same command again with --state" in first_output
     assert "Loaded support ticket ticket-001" in first_error
     assert INTERRUPT_PROMPT_PREFIX in first_error
+    assert "graceful_interrupt_requested" in first_error
+    assert "step wait_for_resume_signal attempt=1 ok duration=" in first_error
 
     second_exit = main(
         [
@@ -231,7 +233,8 @@ def test_resume_readme_commands_interrupt_then_resume(
 
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_error
-    assert "step wait_for_resume_signal attempt=2 ok duration=" in second_error
+    assert "step wait_for_resume_signal attempt=2" not in second_error
+    assert "step assert_resumed_ticket attempt=1 ok duration=" in second_error
     assert "The journey finished." in second_error
 
 
@@ -314,7 +317,8 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         assert first_exit == 130
         assert live_stderr.prompt_seen.is_set()
         assert "Interrupted." in first_output
-        assert "step continue_authenticated_dashboard attempt=1 interrupted duration=" in first_error
+        assert "graceful_interrupt_requested" in first_error
+        assert "step continue_authenticated_dashboard attempt=1 ok duration=" in first_error
         assert "Signed in and returned JourneyPlaywrightPage" in first_error
         assert INTERRUPT_PROMPT_PREFIX in first_error
 
@@ -334,7 +338,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
 
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_error
-    assert "step continue_authenticated_dashboard attempt=2 ok duration=" in second_error
+    assert "step continue_authenticated_dashboard attempt=2" not in second_error
     assert "step assert_protected_action_complete attempt=1 ok duration=" in second_error
     assert "The protected action completed." in second_error
 
