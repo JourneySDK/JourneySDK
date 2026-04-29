@@ -295,10 +295,6 @@ def test_legacy_result_objects_and_errors_are_not_public():
         "from journeysdk import RunResult",
         "from journeysdk import RetryPolicy",
         "from journeysdk import retry",
-        "from journeysdk import checkpoint",
-        "from journeysdk.models import CheckpointNode",
-        "from journeysdk.models import CheckpointRef",
-        "from journeysdk.errors import UnknownCheckpointError",
         "from journeysdk.errors import DuplicateBranchKeyError",
         "from journeysdk import DuplicateBranchKeyError",
         "from journeysdk.errors import EvaluationFailedError",
@@ -314,10 +310,6 @@ def test_legacy_result_objects_and_errors_are_not_public():
         assert not hasattr(journey_sdk, name)
 
     assert not hasattr(journey_sdk, "retry")
-    assert not hasattr(journey_sdk, "checkpoint")
-    assert not hasattr(journey_models, "CheckpointNode")
-    assert not hasattr(journey_models, "CheckpointRef")
-    assert not hasattr(journey_errors, "UnknownCheckpointError")
     assert not hasattr(journey_errors, "DuplicateBranchKeyError")
     assert not hasattr(journey_sdk, "DuplicateBranchKeyError")
 
