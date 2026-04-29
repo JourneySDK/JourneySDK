@@ -20,7 +20,7 @@
     </div>
     <p id="status">Ready</p>
     <script>
-      const webhookUrl = "http://localhost:8765/endpoint-a";
+      const webhookUrl = new URLSearchParams(window.location.search).get("webhookUrl");
       const storedFileName = "stored-message.txt";
       const storedFileContent = "Stored by the journey demo page.\n";
       const status = document.getElementById("status");
@@ -39,6 +39,9 @@
 
       document.getElementById("trigger-endpoint-a").addEventListener("click", () => {
         setDelayedStatus("Endpoint A sent", async () => {
+          if (!webhookUrl) {
+            throw new Error("Missing webhook URL");
+          }
           await fetch(
             webhookUrl + "?event=endpoint_a&source=journey_demo",
             { mode: "no-cors" }

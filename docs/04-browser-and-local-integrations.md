@@ -1,10 +1,10 @@
 # 04 Browser and Local Integrations
 
-Journey does not care whether a step talks to a browser, a file on disk, or a webhook listener. If it is ordinary Python, it can live inside the same authored journey.
+Journey does not care whether a step talks to a browser, a file on disk, or a hosted webhook. If it is ordinary Python, it can live inside the same authored journey.
 
 This chapter shows both sides of that idea:
 
-- one journey that mixes Playwright, a local webhook, and a downloaded file
+- one journey that mixes Playwright, a Journey Cloud webhook, and a downloaded file
 - one journey that snapshots a local Docker Compose app behind a step anchor
 - one journey that captures a browser session so a later run can reopen it
 
@@ -50,17 +50,17 @@ And the journey that ties them together still reads like sequential Python:
 
 ```python
 from journeysdk import branch, journey, step
+from journeysdk.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 
 @journey
 def simple_journey() -> None:
-    receive_endpoint_a = host_webhook_endpoint(port=8765, path="/endpoint-a")
-
     after_setup = step(assert_demo_homepage)
 
     if branch(start_from=after_setup):
-        step(click_trigger_endpoint_a)
-        request_payload = step(receive_endpoint_a)
+        endpoint = step(get_webhook_endpoint(path="/endpoint-a"))
+        step(click_trigger_endpoint_a, endpoint.url)
+        request_payload = step(wait_for_webhook_request(path="/endpoint-a"), endpoint)
         step(assert_endpoint_a_webhook, request_payload)
     elif branch(start_from=after_setup):
         step(click_store_local_file)
@@ -81,7 +81,7 @@ uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_
 Plan
 Journey docs/simple_journey/simple_journey.py:simple_journey
 journey_id=simple_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['assert_demo_homepage', 'get_webhook_endpoint_a', 'click_trigger_endpoint_a', 'receive_webhook_endpoint_a', 'assert_endpoint_a_webhook']
 - case_2 branch_env={'bg_1': 'branch_2'} labels=['assert_demo_homepage', 'click_store_local_file', 'local_file_is_written', 'assert_local_file_contents']
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
@@ -96,7 +96,7 @@ Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
 That targeted run is a good example of why Journey is useful during development. You can focus on the file branch
-without running the webhook branch, while still executing the selected case from its first step boundary.
+without acquiring a webhook endpoint, while still executing the selected case from its first step boundary.
 
 ## Snapshot a Local Docker Compose App
 
@@ -370,4 +370,4 @@ the prompt loop discovered, and `result.steps` records the bounded action histor
 - Steps that open a page but return other data should close the page explicitly, as shown in `continue_authenticated_dashboard()`.
 - Targeted execution is especially useful for UI work because you can rerun only the branch you are debugging.
 
-Continue with [05 Journey Cloud Integrations](05-journey-cloud-integrations.md) when the external resource should be hosted by Journey Cloud instead of the local test process.
+Continue with [05 Journey Cloud Integrations](05-journey-cloud-integrations.md) for focused webhook and email examples hosted by Journey Cloud.

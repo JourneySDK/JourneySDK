@@ -21,7 +21,7 @@ def _case_labels(plan: journey.JourneyPlan) -> list[list[str]]:
     ]
 
 
-def test_demo_site_html_contains_hardcoded_values():
+def test_demo_site_html_reads_cloud_webhook_url_from_page_query():
     page_file = Path(simple_journey.__file__).with_name("demo_site.html")
     html = page_file.read_text(encoding="utf-8")
 
@@ -29,7 +29,9 @@ def test_demo_site_html_contains_hardcoded_values():
     assert "Trigger endpoint A" in html
     assert "Store a local file" in html
     assert "mode: \"no-cors\"" in html
-    assert "http://localhost:8765/endpoint-a" in html
+    assert "URLSearchParams" in html
+    assert "webhookUrl" in html
+    assert "localhost:8765" not in html
 
 
 def test_local_file_helpers_read_and_validate_downloaded_file(
@@ -81,6 +83,7 @@ def test_simple_journey_compiles_without_importing_playwright_and_keeps_structur
     expected_labels = [
         [
             "assert_demo_homepage",
+            "get_webhook_endpoint_a",
             "click_trigger_endpoint_a",
             "receive_webhook_endpoint_a",
             "assert_endpoint_a_webhook",
@@ -111,7 +114,7 @@ def test_simple_journey_compiles_without_importing_playwright_and_keeps_structur
         if isinstance(node, StepNode) and node.label == "click_store_local_file"
     )
     assert homepage_node.args == ()
-    assert click_webhook_node.args == ()
+    assert len(click_webhook_node.args) == 1
     assert click_file_node.args == ()
 
     receive_node = next(
@@ -119,5 +122,5 @@ def test_simple_journey_compiles_without_importing_playwright_and_keeps_structur
         for node in first_plan.case_plans[0].nodes
         if isinstance(node, StepNode) and node.label == "receive_webhook_endpoint_a"
     )
-    assert receive_node.args == ()
+    assert len(receive_node.args) == 1
     assert receive_node.retry is None

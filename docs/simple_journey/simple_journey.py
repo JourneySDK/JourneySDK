@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 from journeysdk import branch, journey, step
-from journeysdk.tools.webhook import host_webhook_endpoint
+from journeysdk.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 _DEMO_PAGE_URL = Path(__file__).with_name("demo_site.html").resolve().as_uri()
 _STORED_FILE_NAME = "stored-message.txt"
@@ -37,15 +38,16 @@ def assert_demo_homepage() -> bool:
     return True
 
 
-def click_trigger_endpoint_a() -> bool:
+def click_trigger_endpoint_a(endpoint_url: str) -> bool:
     from playwright.sync_api import sync_playwright
     from journeysdk.tools.playwright import ensure_browser_installed
 
     ensure_browser_installed()
+    page_url = f"{_DEMO_PAGE_URL}?webhookUrl={quote(endpoint_url, safe='')}"
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         page = browser.new_page()
-        page.goto(_DEMO_PAGE_URL, wait_until="load")
+        page.goto(page_url, wait_until="load")
         page.get_by_role("button", name="Trigger endpoint A").click()
         page.wait_for_function(
             "() => document.getElementById('status').textContent === 'Endpoint A sent'"
@@ -118,13 +120,15 @@ def assert_local_file_contents(file_info: dict[str, str]) -> bool:
 
 @journey
 def simple_journey() -> None:
-    receive_endpoint_a = host_webhook_endpoint(port=8765, path="/endpoint-a")
-
     after_setup = step(assert_demo_homepage)
 
     if branch(start_from=after_setup):
-        step(click_trigger_endpoint_a)
-        request_payload = step(receive_endpoint_a)
+        endpoint = step(get_webhook_endpoint(path="/endpoint-a"))
+        step(click_trigger_endpoint_a, endpoint.url)
+        request_payload = step(
+            wait_for_webhook_request(path="/endpoint-a"),
+            endpoint,
+        )
         step(assert_endpoint_a_webhook, request_payload)
     elif branch(start_from=after_setup):
         step(click_store_local_file)

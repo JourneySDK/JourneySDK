@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import urllib.request
 
@@ -16,15 +15,8 @@ from tests._cloud_stub import serve_in_background
 
 
 def _configure_cloud_env(monkeypatch: pytest.MonkeyPatch, *, api_key: str, base_url: str) -> None:
-    _clear_direct_email_env(monkeypatch)
     monkeypatch.setenv(JOURNEY_CLOUD_API_KEY_ENV, api_key)
     monkeypatch.setenv(JOURNEY_CLOUD_BASE_URL_ENV, base_url)
-
-
-def _clear_direct_email_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in list(os.environ):
-        if name.startswith("JOURNEY_EMAIL_"):
-            monkeypatch.delenv(name, raising=False)
 
 
 def test_cloud_email_planning_does_not_require_env_or_network(monkeypatch: pytest.MonkeyPatch):
@@ -34,7 +26,6 @@ def test_cloud_email_planning_does_not_require_env_or_network(monkeypatch: pytes
         raise AssertionError("compile_journey() should not call the cloud service.")
 
     monkeypatch.setattr(urllib.request, "urlopen", fail_urlopen)
-    _clear_direct_email_env(monkeypatch)
     monkeypatch.delenv(JOURNEY_CLOUD_API_KEY_ENV, raising=False)
     monkeypatch.delenv(JOURNEY_CLOUD_BASE_URL_ENV, raising=False)
 
@@ -60,7 +51,6 @@ def test_cloud_email_planning_does_not_require_env_or_network(monkeypatch: pytes
 def test_cloud_email_helpers_fail_clearly_when_no_config_exists(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    _clear_direct_email_env(monkeypatch)
     monkeypatch.delenv(JOURNEY_CLOUD_API_KEY_ENV, raising=False)
     monkeypatch.delenv(JOURNEY_CLOUD_BASE_URL_ENV, raising=False)
 
@@ -68,9 +58,9 @@ def test_cloud_email_helpers_fail_clearly_when_no_config_exists(
         get_email_inbox()()
 
     message = str(exc_info.value)
-    assert "JOURNEY_EMAIL_ADDRESS" in message
     assert JOURNEY_CLOUD_API_KEY_ENV in message
     assert JOURNEY_CLOUD_BASE_URL_ENV in message
+    assert "JOURNEY_EMAIL_" not in message
 
 
 def test_cloud_email_tool_uses_default_inbox_and_returns_messages(

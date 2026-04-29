@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import socket
 import threading
 import time
 import urllib.request
@@ -14,30 +13,12 @@ from journeysdk.tools._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )
-from journeysdk.tools._webhook_local import (
-    build_poll_url,
-    ensure_local_host,
-    reset_local_hosts,
-)
 from journeysdk.tools.webhook import (
     CloudWebhookEndpoint,
     get_webhook_endpoint,
     wait_for_webhook_request,
 )
 from tests._cloud_stub import serve_in_background
-
-
-@pytest.fixture(autouse=True)
-def _reset_local_hosts() -> None:
-    reset_local_hosts()
-    yield
-    reset_local_hosts()
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def _post_json(url: str, payload: dict[str, object]) -> None:
@@ -49,14 +30,6 @@ def _post_json(url: str, payload: dict[str, object]) -> None:
     )
     with urllib.request.urlopen(request, timeout=5):
         pass
-
-
-def _poll_response(url: str) -> tuple[int, dict[str, object] | None]:
-    with urllib.request.urlopen(url, timeout=5) as response:
-        if response.status == 204:
-            return response.status, None
-        payload = json.loads(response.read().decode("utf-8"))
-        return response.status, payload
 
 
 def _send_cloud_webhook_later(url: str, delay: float) -> bool:
@@ -140,32 +113,34 @@ def test_cloud_webhook_helpers_fail_clearly_when_env_is_missing(monkeypatch: pyt
     assert "JOURNEY_CLOUD_BASE_URL" in str(exc_info.value)
 
 
-def test_cloud_webhook_payload_matches_local_webhook_shape(monkeypatch: pytest.MonkeyPatch):
-    local_port = _free_port()
-    local_path = "/invoice-paid"
-    ensure_local_host(port=local_port, path=local_path)
-    local_public_url = f"http://localhost:{local_port}{local_path}?source=test"
-    local_poll_url = build_poll_url(port=local_port, path=local_path)
-
+def test_cloud_webhook_payload_has_expected_shape(monkeypatch: pytest.MonkeyPatch):
     with serve_in_background() as cloud:
         _configure_cloud_env(monkeypatch, api_key=cloud.api_key, base_url=cloud.base_url)
         endpoint = get_webhook_endpoint(path="/invoice-paid")()
 
-        _post_json(local_public_url, {"sequence": 1})
         _post_json(f"{endpoint.url}?source=test", {"sequence": 1})
 
-        _, local_payload = _poll_response(local_poll_url)
         received = wait_for_webhook_request(path="/invoice-paid")(endpoint)
 
-    assert local_payload is not None
-    assert set(received) == set(local_payload)
-    assert received["method"] == local_payload["method"]
-    assert received["path"] == local_payload["path"]
-    assert received["query"] == local_payload["query"]
-    assert received["headers"]["content-type"] == local_payload["headers"]["content-type"]
-    assert received["body_text"] == local_payload["body_text"]
-    assert received["body_json"] == local_payload["body_json"]
-    assert received["body_base64"] == local_payload["body_base64"]
+    assert set(received) == {
+        "method",
+        "url",
+        "path",
+        "query",
+        "headers",
+        "body_text",
+        "body_json",
+        "body_base64",
+        "received_at",
+    }
+    assert received["method"] == "POST"
+    assert received["url"] == f"{endpoint.url}?source=test"
+    assert received["path"] == "/invoice-paid"
+    assert received["query"] == {"source": ["test"]}
+    assert received["headers"]["content-type"] == "application/json"
+    assert received["body_text"] == '{"sequence": 1}'
+    assert received["body_json"] == {"sequence": 1}
+    assert received["body_base64"] == "eyJzZXF1ZW5jZSI6IDF9"
     assert isinstance(received["received_at"], str)
 
 

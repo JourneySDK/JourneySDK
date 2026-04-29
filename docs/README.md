@@ -48,7 +48,7 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 - If you want to write your first Journey function, start with [01 Getting Started](01-getting-started.md).
 - If you want one authored flow to become multiple executable paths, go to [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
 - If you need polling, replay, or resumable state, go to [03 Retries and Resume](03-retries-and-resume.md).
-- If your journey needs Playwright, local files, local webhooks, or Docker Compose snapshots, go to [04 Browser and Local Integrations](04-browser-and-local-integrations.md).
+- If your journey needs Playwright, local files, or Docker Compose snapshots, go to [04 Browser and Local Integrations](04-browser-and-local-integrations.md).
 - If your journey talks to Journey Cloud-hosted webhooks or email, go to [05 Journey Cloud Integrations](05-journey-cloud-integrations.md).
 - If you are debugging a failure or deciding whether to use `--fail-fast`, go to [06 Debugging and Failure Modes](06-debugging-and-failure-modes.md).
 

@@ -1,6 +1,6 @@
 # 05 Journey Cloud Integrations
 
-Some journeys need resources that should exist outside the local test process: a webhook URL the system under test can reach, or an inbox whose SMTP and IMAP credentials you do not want to manage directly in the SDK.
+Some journeys need resources that should exist outside the local test process: a webhook URL the system under test can reach, or an inbox hosted by Journey Cloud.
 
 That is where Journey Cloud integrations fit.
 

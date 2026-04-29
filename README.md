@@ -16,8 +16,8 @@ dirty step immediately; that step restarts from the top later with the same save
 
 Each step is just plain Python, so teams can use existing testing tools and scripts without adapting them to a special
 framework. A `step` can run browser automation, mobile checks, API assertions, or service-specific validation logic.
-Official tools live under `journeysdk.tools`; today that includes the `webhook` tool for hosting a local webhook
-endpoint or acquiring a cloud-hosted one, the `email` tool for direct or cloud-hosted inbox access, the `docker`
+Official tools live under `journeysdk.tools`; today that includes the `webhook` tool for Journey Cloud-hosted webhook
+endpoints, the `email` tool for Journey Cloud-hosted inbox access, the `docker`
 tool for local Compose-backed snapshots, and the `playwright` tool for resumable page state plus bounded LLM-driven
 page interaction. Retryable steps can poll for async effects or replay from an earlier step.
 
@@ -262,18 +262,7 @@ closes the live browser objects at step exit, while `__store__` / `__restore__`
 save enough browser state for a later step to reopen the page explicitly.
 
 Official tools are ordinary Python helpers that return step callables or serializable helper values. For example, the
-webhook tool can host a local endpoint before the app under test sends to it:
-
-```python
-from journeysdk import step
-from journeysdk.tools.webhook import host_webhook_endpoint
-
-receive_invoice_paid = host_webhook_endpoint(port=8765, path="/invoice-paid")
-
-step(receive_invoice_paid, retry=3, retry_delay=1)
-```
-
-The same module can also use a cloud-hosted webhook endpoint:
+webhook tool can acquire a Journey Cloud-hosted endpoint before the app under test sends to it:
 
 ```python
 from journeysdk import step
@@ -289,8 +278,8 @@ request_payload = step(
 )
 ```
 
-The official email tool follows the same step-oriented model. It can use direct SMTP + IMAP credentials or fall back
-to Journey Cloud:
+The official email tool follows the same step-oriented model and uses the default hosted inbox assigned to the active
+Journey Cloud API key:
 
 ```python
 from journeysdk import step
@@ -459,35 +448,16 @@ the next step with the same state file. For a human prompt loop, add
 uv run journey --develop-step assert_local_file_contents --state dev.state --interactive
 ```
 
-The cloud webhook helpers use `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL` at execution time. Point those
-variables at your hosted cloud control plane or any compatible service:
+The cloud webhook and email helpers use `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL` at execution time. Point
+those variables at your hosted cloud control plane or any compatible service:
 
 ```bash
 export JOURNEY_CLOUD_API_KEY=journey-demo-key
 export JOURNEY_CLOUD_BASE_URL=https://journey-cloud.example.test
 ```
 
-If you want the email tool to use a direct mail server instead of Journey Cloud, configure these execution-time
-variables:
-
-```bash
-export JOURNEY_EMAIL_ADDRESS=qa@example.test
-export JOURNEY_EMAIL_FROM_ADDRESS=journey@example.test
-export JOURNEY_EMAIL_SMTP_HOST=smtp.example.test
-export JOURNEY_EMAIL_SMTP_PORT=587
-export JOURNEY_EMAIL_SMTP_USERNAME=journey-user
-export JOURNEY_EMAIL_SMTP_PASSWORD=journey-pass
-export JOURNEY_EMAIL_SMTP_STARTTLS=true
-export JOURNEY_EMAIL_IMAP_HOST=imap.example.test
-export JOURNEY_EMAIL_IMAP_PORT=993
-export JOURNEY_EMAIL_IMAP_USERNAME=journey-user
-export JOURNEY_EMAIL_IMAP_PASSWORD=journey-pass
-export JOURNEY_EMAIL_IMAP_SSL=true
-export JOURNEY_EMAIL_IMAP_MAILBOX=INBOX
-```
-
-When those direct email settings are absent or incomplete, the official email tool falls back to Journey Cloud and
-uses the default hosted inbox assigned to the active `JOURNEY_CLOUD_API_KEY`.
+The official webhook and email SDK tools require Journey Cloud; the SDK no longer hosts local webhooks or talks
+directly to SMTP/IMAP servers.
 
 Journey Cloud authenticates SDK control-plane calls with `Authorization: Bearer $JOURNEY_CLOUD_API_KEY`. The same
 pattern should apply to all Journey cloud tools: the first API key that reserves a cloud resource becomes its owner.

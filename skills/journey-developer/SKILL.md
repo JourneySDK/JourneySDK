@@ -23,8 +23,8 @@ serializable helper values, so use them with `step(...)` and keep planning side-
 resources while steps execute, and make returned values serializable or rehydratable when they cross replay boundaries
 for retry, branch, or `--state` behavior.
 
-- `journeysdk.tools.webhook`: host a local webhook endpoint or acquire a cloud-hosted endpoint, then wait for received webhook requests.
-- `journeysdk.tools.email`: get an inbox, send email, and wait for received email using direct SMTP/IMAP settings or hosted email access.
+- `journeysdk.tools.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
+- `journeysdk.tools.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
 - `journeysdk.tools.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
 - `journeysdk.tools.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
 
