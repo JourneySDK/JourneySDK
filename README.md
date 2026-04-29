@@ -19,7 +19,7 @@ framework. A `step` can run browser automation, mobile checks, API assertions, o
 Official tools live under `journeysdk.tools`; today that includes the `webhook` tool for hosting a local webhook
 endpoint or acquiring a cloud-hosted one, the `email` tool for direct or cloud-hosted inbox access, the `docker`
 tool for local Compose-backed snapshots, and the `playwright` tool for resumable page state plus bounded LLM-driven
-page interaction. Retryable steps can poll for async effects or replay from an earlier step or checkpoint.
+page interaction. Retryable steps can poll for async effects or replay from an earlier step.
 
 That makes Journey SDK useful for flows such as:
 
@@ -61,7 +61,7 @@ uv add journey-sdk
 For authoring, import only the Journey primitives you use:
 
 ```python
-from journeysdk import checkpoint, journey, step
+from journeysdk import journey, step
 ```
 
 ### Install The CLI
@@ -117,14 +117,14 @@ publish checklist.
 
 ## Authoring model
 
-Write one journey in sequential Python with `step`, `checkpoint`, and optional step retries via
+Write one journey in sequential Python with `step`, `branch`, and optional step retries via
 `step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate module-level journey entrypoints with
 `@journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching
 workflows without duplicating test code. Step functions are plain callables: pass every required input as explicit
 arguments, and return any value that later steps or resumed runs must reuse. The step boundary is the durable unit:
 successful steps can be reused, while interrupted or retried steps restart from the top with saved inputs.
 
-Retryable steps can poll for async effects, rerun from the step itself, or replay from an earlier step/checkpoint.
+Retryable steps can poll for async effects, rerun from the step itself, or replay from an earlier step.
 They are retried when they raise an exception and `retry` is greater than 0. The explicit defaults are `retry=0`,
 `retry_delay=5`, and `retry_from=None`; when retries are enabled and `retry_from` is omitted, the current step is
 retried.
@@ -137,17 +137,18 @@ retried.
 - **Step**: one `step(...)` call and the plain Python function it runs.
 - **Step boundary**: the boundary before and after a step where Journey can save progress, stop, retry, or resume.
 - **State file**: the `--state` file that stores selected cases, completed case reports, active progress, saved step
-  bindings, and checkpoint snapshots.
+  bindings, and branch-anchor snapshots.
 - **Saved step binding**: stored step inputs, metadata, and optional result that Journey can use when replaying or
   resuming.
 - **Dirty step**: the step that had started but had not completed when execution was interrupted.
 - **Replay**: rerunning part of a case from a step boundary while reusing saved values before that boundary.
-- **Replay boundary**: the step or checkpoint index where replay starts.
-- **Replay anchor**: the checkpoint name reported for a targeted branch run or used by retry/checkpoint replay.
-- **Checkpoint snapshot**: saved records, step bindings, retry counters, and attempt counters captured at a checkpoint.
+- **Replay boundary**: the step index where replay starts.
+- **Replay anchor**: the step label reported for a targeted branch run or used by retry and branch replay.
+- **Branch-anchor snapshot**: saved records, step bindings, retry counters, and attempt counters captured after an
+  anchor step reaches post-exit.
 - **Branch**: an inline `if branch(): ... elif branch(): ...` arm that compiles into a separate case.
 - **Targeted run**: a `--step LABEL` run that executes the one case reaching that label and stops after it. A reported
-  `replay_anchor` identifies the branch checkpoint, but targeted runs do not skip directly to that checkpoint.
+  `replay_anchor` identifies the branch step anchor, but targeted runs do not skip directly to that anchor.
 - **Step lifecycle**: initialization, execution, storage, pre-exit, exit, and post-exit for one step attempt.
 - **Develop-step pause**: a `--develop-step LABEL` stop at pre-exit after the selected step has been stored and before
   returned handles are exited, used for quick edit-run loops.
@@ -157,7 +158,7 @@ retried.
 
 ## Journey Rehydration Protocol
 
-When retries, `--state`, checkpoint replay, or checkpoint-started branches need
+When retries, `--state`, or step-started branches need
 to reuse a step value across a replay boundary, Journey rehydrates that value
 from SDK-managed saved step bindings. Any step argument or return value that
 may cross one of those boundaries must be pickle-serializable or implement the
@@ -181,9 +182,8 @@ step value.
 
 The context object describes where and why the value is being stored or
 restored. Use `context.artifact_root` for larger file artifacts. Inspect
-`context.boundary_kind`, `context.boundary_id`, and `context.checkpoint_name`
-when a value needs different behavior for active state, step bindings, or
-checkpoint snapshots.
+`context.boundary_kind` and `context.boundary_id` when a value needs different
+behavior for active state, step bindings, or branch-anchor snapshots.
 
 Restored values should be usable as later step inputs. For values backed by live
 external resources, store enough data to reopen the resource explicitly in the
@@ -255,7 +255,7 @@ contains it, or close it explicitly with local `try` / `finally` code.
 
 Keep lifecycle methods idempotent, and close only resources owned by that tool
 call. If the step returns a value that must survive retries, `--state`, or
-checkpoint replay, that value should also implement the Journey rehydration
+branch replay, that value should also implement the Journey rehydration
 protocol above; do not rely on pickling live resources. `JourneyPlaywrightPage`
 is the canonical example because it implements both protocols: `__exit__`
 closes the live browser objects at step exit, while `__store__` / `__restore__`
@@ -304,17 +304,19 @@ message = step(
 )
 ```
 
-The Docker tool can start a local Compose app as a step value and pair a checkpoint with exact rollback of container
-filesystems plus Docker-managed volume contents. `DockerComposeStack` already implements the rehydration protocol, so
-plain `checkpoint()` is enough:
+The Docker tool can start a local Compose app as a step value and pair a step anchor with exact rollback of container
+filesystems plus Docker-managed volume contents. `DockerComposeStack` already implements the rehydration protocol:
 
 ```python
-from journeysdk import checkpoint, step
+from journeysdk import branch, step
 from journeysdk.tools.docker import run_docker
 
 stack = step(run_docker(compose_file="docker-compose.yml"))
-after_boot = checkpoint()
-step(assert_compose_logs, stack)
+baseline = step(capture_baseline_state, stack)
+if branch(start_from=baseline):
+    step(mutate_compose_app, stack)
+elif branch(start_from=baseline):
+    step(assert_compose_logs, stack)
 ```
 
 Current Docker snapshots are intentionally strict: bind mounts, external volumes, read-only mounts, and multi-container
@@ -399,7 +401,7 @@ keeps stdout output but suppresses Journey diagnostics.
 CLI commands discover functions annotated with `@journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
 flow that reaches a target step label. A targeted run still starts from the selected case's beginning; a
-`replay_anchor` in the report identifies the branch checkpoint but does not mean Journey skipped shared setup.
+`replay_anchor` in the report identifies the branch step anchor but does not mean Journey skipped shared setup.
 Use `--develop-step` to run that same single case in development mode. By
 default it executes one target step, stores state, prints the paused result, and exits so coding agents can iterate
 with synchronous command calls. Run the same `--develop-step LABEL --state dev.state` command to retry that step from

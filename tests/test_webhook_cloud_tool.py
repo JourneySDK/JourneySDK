@@ -227,8 +227,7 @@ def test_cloud_webhook_journey_supports_targeted_execution(monkeypatch: pytest.M
 
         def journey():
             endpoint = journey_sdk.step(get_webhook_endpoint(path="/invoice-paid"))
-            after_setup = journey_sdk.checkpoint()
-            if journey_sdk.branch(start_from=after_setup):
+            if journey_sdk.branch(start_from=endpoint):
                 journey_sdk.step(_send_cloud_webhook_later, endpoint.url, 0.01)
                 request_payload = journey_sdk.step(
                     wait_for_webhook_request(
@@ -241,13 +240,13 @@ def test_cloud_webhook_journey_supports_targeted_execution(monkeypatch: pytest.M
                     retry_delay=0,
                 )
                 journey_sdk.step(assert_webhook, request_payload)
-            elif journey_sdk.branch(start_from=after_setup):
+            elif journey_sdk.branch(start_from=endpoint):
                 journey_sdk.step(noop)
 
         targeted_report = journey_sdk.execute(journey, step="assert_webhook")
         assert len(targeted_report.case_reports) == 1
         assert targeted_report.case_reports[0].stopped_at_label == "assert_webhook"
-        assert targeted_report.case_reports[0].replay_anchor == "cp_1"
+        assert targeted_report.case_reports[0].replay_anchor == "get_webhook_invoice_paid"
 
 
 def test_cloud_webhook_endpoint_handle_survives_resume(

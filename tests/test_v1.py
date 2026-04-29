@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import pickle
 from types import TracebackType
 
@@ -17,11 +16,10 @@ from journeysdk.errors import (
     ExecutionStateSerializationError,
     InvalidBranchUsageError,
     StepNotFoundError,
-    UnknownCheckpointError,
     UnsupportedControlFlowError,
     UnsupportedLoopError,
 )
-from journeysdk.models import BranchMarkerNode, CheckpointNode, StepNode, StepRetry
+from journeysdk.models import BranchMarkerNode, StepNode, StepRetry
 from journeysdk.state import ExecutionStateEnvelope, SelectedCaseState
 
 
@@ -67,7 +65,7 @@ class _ReplayValue:
         ):
             raise RuntimeError(self.fail_store_message)
         type(self).events.append(
-            f"store_{self.seed}_{self.mode}_{context.boundary_kind}_{context.checkpoint_name or context.boundary_id}"
+            f"store_{self.seed}_{self.mode}_{context.boundary_kind}_{context.boundary_id}"
         )
         return {
             "seed": self.seed,
@@ -89,7 +87,7 @@ class _ReplayValue:
         seed = payload["seed"]
         mode = payload["mode"]
         cls.events.append(
-            f"restore_{seed}_{mode}_{context.boundary_kind}_{context.checkpoint_name or context.boundary_id}"
+            f"restore_{seed}_{mode}_{context.boundary_kind}_{context.boundary_id}"
         )
         return cls(seed, mode=mode)
 
@@ -297,6 +295,10 @@ def test_legacy_result_objects_and_errors_are_not_public():
         "from journeysdk import RunResult",
         "from journeysdk import RetryPolicy",
         "from journeysdk import retry",
+        "from journeysdk import checkpoint",
+        "from journeysdk.models import CheckpointNode",
+        "from journeysdk.models import CheckpointRef",
+        "from journeysdk.errors import UnknownCheckpointError",
         "from journeysdk.errors import DuplicateBranchKeyError",
         "from journeysdk import DuplicateBranchKeyError",
         "from journeysdk.errors import EvaluationFailedError",
@@ -312,6 +314,10 @@ def test_legacy_result_objects_and_errors_are_not_public():
         assert not hasattr(journey_sdk, name)
 
     assert not hasattr(journey_sdk, "retry")
+    assert not hasattr(journey_sdk, "checkpoint")
+    assert not hasattr(journey_models, "CheckpointNode")
+    assert not hasattr(journey_models, "CheckpointRef")
+    assert not hasattr(journey_errors, "UnknownCheckpointError")
     assert not hasattr(journey_errors, "DuplicateBranchKeyError")
     assert not hasattr(journey_sdk, "DuplicateBranchKeyError")
 
@@ -341,8 +347,7 @@ def test_single_branch_group_compiles_to_one_case_per_branch():
 
     def journey():
         signup = journey_sdk.step(signup_user)
-        journey_sdk.step(assert_ok, signup)
-        after_signup = journey_sdk.checkpoint()
+        after_signup = journey_sdk.step(assert_ok, signup)
         if journey_sdk.branch(start_from=after_signup):
             order = journey_sdk.step(user_buys_something)
             journey_sdk.step(assert_ok, order)
@@ -400,7 +405,7 @@ def test_nested_branch_groups_expand_recursively_only_when_reachable():
     assert sorted(_labels(case) for case in plan.case_plans) == [["b"], ["c"], ["d"]]
 
 
-def test_unknown_checkpoint_is_rejected():
+def test_branch_start_from_rejects_non_step_value():
     def path_a():
         return True
 
@@ -408,12 +413,12 @@ def test_unknown_checkpoint_is_rejected():
         return True
 
     def journey():
-        if journey_sdk.branch(start_from="missing_checkpoint"):
+        if journey_sdk.branch(start_from="missing_step"):
             journey_sdk.step(path_a)
         elif journey_sdk.branch():
             journey_sdk.step(path_b)
 
-    with pytest.raises(UnknownCheckpointError):
+    with pytest.raises(TypeError):
         journey_sdk.compile_journey(journey)
 
 
@@ -458,8 +463,7 @@ def test_execute_step_runs_single_matching_flow_and_stops_after_target():
 
     def journey():
         signup = journey_sdk.step(signup_user)
-        journey_sdk.step(assert_ok, signup)
-        after_signup = journey_sdk.checkpoint()
+        after_signup = journey_sdk.step(assert_ok, signup)
         if journey_sdk.branch(start_from=after_signup):
             order = journey_sdk.step(user_buys_something)
             journey_sdk.step(assert_ok, order)
@@ -477,7 +481,7 @@ def test_execute_step_runs_single_matching_flow_and_stops_after_target():
     assert len(report.case_reports) == 1
     case_report = report.case_reports[0]
     assert case_report.stopped_at_label == "stripe_invoice_paid"
-    assert case_report.replay_anchor == "cp_1"
+    assert case_report.replay_anchor == "assert_ok"
 
     labels = [record.label for record in case_report.records if record.label is not None]
     assert labels[-1] == "stripe_invoice_paid"
@@ -611,8 +615,8 @@ def test_plan_includes_branch_marker_nodes_with_start_from_metadata():
         return True
 
     def journey():
-        cp1 = journey_sdk.checkpoint()
-        if journey_sdk.branch(start_from=cp1):
+        anchor = journey_sdk.step(a)
+        if journey_sdk.branch(start_from=anchor):
             journey_sdk.step(step_a)
         elif journey_sdk.branch():
             journey_sdk.step(step_b)
@@ -623,101 +627,12 @@ def test_plan_includes_branch_marker_nodes_with_start_from_metadata():
     for case in plan.case_plans:
         markers = [node for node in case.nodes if isinstance(node, BranchMarkerNode)]
         assert len(markers) == 1
-        if _labels(case) == ["step_a"]:
-            assert markers[0].start_from == "cp_1"
+        if _labels(case) == ["a", "step_a"]:
+            anchor_node = next(node for node in case.nodes if isinstance(node, StepNode) and node.label == "a")
+            assert markers[0].start_from == anchor_node.node_id
         else:
-            assert _labels(case) == ["step_b"]
+            assert _labels(case) == ["a", "step_b"]
             assert markers[0].start_from is None
-
-
-def test_checkpoint_branches_keyword_is_rejected_with_migration_hint():
-    def a():
-        return True
-
-    def b():
-        return True
-
-    def journey():
-        journey_sdk.checkpoint(branches=[a, b])
-
-    with pytest.raises(InvalidBranchUsageError) as exc_info:
-        journey_sdk.compile_journey(journey)
-
-    assert "no longer supported" in str(exc_info.value)
-    assert exc_info.value.hint is not None
-
-
-def test_checkpoint_signature_has_no_branches_keyword():
-    assert list(inspect.signature(journey_sdk.checkpoint).parameters) == []
-
-
-def test_checkpoint_rejects_one_hook_without_the_other():
-    def save_state():
-        return None
-
-    def journey():
-        journey_sdk.checkpoint(store=save_state)
-
-    with pytest.raises(TypeError) as exc_info:
-        journey_sdk.compile_journey(journey)
-
-    assert "unexpected keyword argument 'store'" in str(exc_info.value)
-
-
-def test_checkpoint_rejects_noncallable_hooks():
-    def restore_state():
-        return None
-
-    def journey():
-        journey_sdk.checkpoint(store="not-callable", restore=restore_state)
-
-    with pytest.raises(TypeError) as exc_info:
-        journey_sdk.compile_journey(journey)
-
-    assert "unexpected keyword argument 'store'" in str(exc_info.value)
-
-
-def test_checkpoint_rejects_args_without_hooks():
-    def journey():
-        journey_sdk.checkpoint("payload")
-
-    with pytest.raises(TypeError) as exc_info:
-        journey_sdk.compile_journey(journey)
-
-    assert "takes 0 positional arguments but 1 was given" in str(exc_info.value)
-
-
-def test_plan_includes_marker_only_checkpoint_node():
-    def journey():
-        journey_sdk.checkpoint()
-
-    plan = journey_sdk.compile_journey(journey)
-    checkpoint_node = next(
-        node for node in plan.case_plans[0].nodes if isinstance(node, CheckpointNode)
-    )
-
-    assert checkpoint_node.name == "cp_1"
-
-
-def test_branch_selector_is_rejected_with_migration_hint():
-    def a():
-        return True
-
-    def b():
-        return True
-
-    def journey():
-        selected = journey_sdk.checkpoint()
-        if selected.is_(a):
-            journey_sdk.step(a)
-        elif selected.is_(b):
-            journey_sdk.step(b)
-
-    with pytest.raises(InvalidBranchUsageError) as exc_info:
-        journey_sdk.compile_journey(journey)
-
-    assert "no longer supported" in str(exc_info.value)
-    assert exc_info.value.hint is not None
 
 
 def test_branch_call_outside_inline_if_chain_is_rejected():
@@ -752,6 +667,9 @@ def test_labels_default_to_function_names_when_missing():
 
 
 def test_branches_accept_branch_variables_without_callables():
+    def prepare_anchor():
+        return "anchor"
+
     def branch_a_step():
         return "a"
 
@@ -759,7 +677,7 @@ def test_branches_accept_branch_variables_without_callables():
         return "b"
 
     def journey():
-        anchor = journey_sdk.checkpoint()
+        anchor = journey_sdk.step(prepare_anchor)
         if journey_sdk.branch(start_from=anchor):
             journey_sdk.step(branch_a_step)
         elif journey_sdk.branch():
@@ -767,19 +685,20 @@ def test_branches_accept_branch_variables_without_callables():
 
     plan = journey_sdk.compile_journey(journey)
     assert sorted(_labels(case) for case in plan.case_plans) == [
-        ["branch_a_step"],
-        ["branch_b_step"],
+        ["prepare_anchor", "branch_a_step"],
+        ["prepare_anchor", "branch_b_step"],
     ]
 
     branch_a_case = next(
-        case for case in plan.case_plans if _labels(case) == ["branch_a_step"]
+        case for case in plan.case_plans if _labels(case) == ["prepare_anchor", "branch_a_step"]
     )
+    anchor_node = next(node for node in branch_a_case.nodes if isinstance(node, StepNode) and node.label == "prepare_anchor")
     marker = next(node for node in branch_a_case.nodes if isinstance(node, BranchMarkerNode))
-    assert marker.start_from == "cp_1"
+    assert marker.start_from == anchor_node.node_id
 
     report = journey_sdk.execute(journey, step="branch_a_step")
     assert len(report.case_reports) == 1
-    assert report.case_reports[0].replay_anchor == "cp_1"
+    assert report.case_reports[0].replay_anchor == "prepare_anchor"
 
 
 def test_step_rejects_calls_outside_planning_or_execution():
@@ -800,19 +719,18 @@ def test_step_rejects_calls_outside_planning_or_execution():
     assert exc_info.value.hint == "Call step() inside a function decorated with @journey."
 
 
-def test_plan_includes_retry_metadata_for_step_and_checkpoint_anchors():
+def test_plan_includes_retry_metadata_for_step_anchors():
     def prepare():
         return "prepared"
 
     def poll_from_step():
         return True
 
-    def poll_from_checkpoint():
+    def poll_from_prepare():
         return True
 
     def journey():
         prepared = journey_sdk.step(prepare)
-        anchor = journey_sdk.checkpoint()
         journey_sdk.step(
             poll_from_step,
             retry=6,
@@ -820,10 +738,10 @@ def test_plan_includes_retry_metadata_for_step_and_checkpoint_anchors():
             retry_from=prepared,
         )
         journey_sdk.step(
-            poll_from_checkpoint,
+            poll_from_prepare,
             retry=10,
             retry_delay=2,
-            retry_from=anchor,
+            retry_from=prepared,
         )
 
     plan = journey_sdk.compile_journey(journey)
@@ -838,7 +756,7 @@ def test_plan_includes_retry_metadata_for_step_and_checkpoint_anchors():
     assert step_nodes[2].retry == StepRetry(
         retries=10,
         delay_seconds=2.0,
-        from_checkpoint="cp_1",
+        from_node_id=step_nodes[0].node_id,
     )
 
 
@@ -846,7 +764,7 @@ def test_plan_requires_positive_retry_to_emit_retry_metadata():
     def same_step_retry():
         return True
 
-    def checkpoint_retry():
+    def anchored_retry():
         return True
 
     def delay_only():
@@ -858,10 +776,13 @@ def test_plan_requires_positive_retry_to_emit_retry_metadata():
     def disabled():
         return True
 
+    def anchor_step():
+        return True
+
     def journey():
-        anchor = journey_sdk.checkpoint()
+        anchor = journey_sdk.step(anchor_step)
         journey_sdk.step(same_step_retry, retry=2, retry_delay=1.5)
-        journey_sdk.step(checkpoint_retry, retry=1, retry_from=anchor)
+        journey_sdk.step(anchored_retry, retry=1, retry_from=anchor)
         journey_sdk.step(delay_only, retry_delay=1.5)
         journey_sdk.step(anchor_only, retry_from=anchor)
         journey_sdk.step(disabled, retry=0, retry_delay=0, retry_from=anchor)
@@ -869,19 +790,20 @@ def test_plan_requires_positive_retry_to_emit_retry_metadata():
     plan = journey_sdk.compile_journey(journey)
     step_nodes = [node for node in plan.case_plans[0].nodes if isinstance(node, StepNode)]
 
-    assert step_nodes[0].retry == StepRetry(
+    assert step_nodes[0].retry is None
+    assert step_nodes[1].retry == StepRetry(
         retries=2,
         delay_seconds=1.5,
-        from_node_id=step_nodes[0].node_id,
+        from_node_id=step_nodes[1].node_id,
     )
-    assert step_nodes[1].retry == StepRetry(
+    assert step_nodes[2].retry == StepRetry(
         retries=1,
         delay_seconds=5.0,
-        from_checkpoint="cp_1",
+        from_node_id=step_nodes[0].node_id,
     )
-    assert step_nodes[2].retry is None
     assert step_nodes[3].retry is None
     assert step_nodes[4].retry is None
+    assert step_nodes[5].retry is None
 
 
 def test_execute_step_without_retry_does_not_retry():
@@ -1036,7 +958,7 @@ def test_execute_retries_from_prior_step_result_and_reruns_anchor_step():
     ]
 
 
-def test_execute_retries_from_checkpoint_without_rerunning_prior_steps():
+def test_execute_retries_from_step_anchor_reruns_anchor_step():
     events: list[str] = []
     attempts = {"poll": 0}
 
@@ -1057,29 +979,34 @@ def test_execute_retries_from_checkpoint_without_rerunning_prior_steps():
 
     def journey():
         request = journey_sdk.step(begin_polling)
-        anchor = journey_sdk.checkpoint()
         journey_sdk.step(
             poll,
             request,
             retry=1,
             retry_delay=0,
-            retry_from=anchor,
+            retry_from=request,
         )
         journey_sdk.step(finish, request)
 
     report = journey_sdk.execute(journey)
 
-    assert events == ["begin", "poll_1_req-1", "poll_2_req-1", "finish_req-1"]
+    assert events == [
+        "begin",
+        "poll_1_req-1",
+        "begin",
+        "poll_2_req-1",
+        "finish_req-1",
+    ]
     assert _record_labels(report.case_reports[0]) == ["begin_polling", "poll", "finish"]
 
 
-def test_execute_protocol_value_restores_checkpoint_state_on_retry():
+def test_execute_protocol_value_replays_from_step_anchor_on_retry():
     _ReplayValue.reset()
     events: list[str] = []
     attempts = {"poll": 0}
 
     def create_value():
-        return _ReplayValue("seed-1", mode="checkpoint")
+        return _ReplayValue("seed-1", mode="step-anchor")
 
     def refresh(value):
         events.append(f"refresh_{value.seed}")
@@ -1094,14 +1021,13 @@ def test_execute_protocol_value_restores_checkpoint_state_on_retry():
 
     def journey():
         value = journey_sdk.step(create_value)
-        anchor = journey_sdk.checkpoint()
         journey_sdk.step(refresh, value)
         journey_sdk.step(
             poll,
             value,
             retry=1,
             retry_delay=0,
-            retry_from=anchor,
+            retry_from=value,
         )
 
     journey_sdk.execute(journey)
@@ -1112,9 +1038,7 @@ def test_execute_protocol_value_restores_checkpoint_state_on_retry():
         "refresh_seed-1",
         "poll_2_seed-1",
     ]
-    assert _ReplayValue.events[0] == "store_seed-1_checkpoint_binding_step:n_1"
-    assert "store_seed-1_checkpoint_checkpoint_cp_1" in _ReplayValue.events
-    assert "restore_seed-1_checkpoint_checkpoint_cp_1" in _ReplayValue.events
+    assert _ReplayValue.events[0] == "store_seed-1_step-anchor_binding_step:n_1"
 
 
 def test_execute_step_supports_retryable_target_steps():
@@ -1475,7 +1399,7 @@ def test_execute_develop_step_continues_to_later_steps_without_rerunning_prior_s
     assert _record_labels(report.case_reports[0]) == ["prepare", "publish", "cleanup"]
 
 
-def test_execute_develop_step_retry_rewinds_from_checkpoint_and_refreshes_retry_budget(
+def test_execute_develop_step_retry_rewinds_same_step_and_refreshes_retry_budget(
     tmp_path,
 ):
     state_file = tmp_path / "pause.state"
@@ -1499,8 +1423,7 @@ def test_execute_develop_step_retry_rewinds_from_checkpoint_and_refreshes_retry_
 
     def journey():
         journey_sdk.step(prepare)
-        anchor = journey_sdk.checkpoint()
-        journey_sdk.step(poll, retry=1, retry_delay=0, retry_from=anchor)
+        journey_sdk.step(poll, retry=1, retry_delay=0)
         journey_sdk.step(finish)
 
     plan = journey_sdk.compile_journey(journey)
@@ -1797,7 +1720,7 @@ def test_execute_retries_exception_until_step_succeeds():
     assert _record_labels(report.case_reports[0]) == ["prepare", "poll", "finish"]
 
 
-def test_execute_retries_exception_from_checkpoint_anchor():
+def test_execute_retries_exception_from_step_anchor():
     events: list[str] = []
     attempts = {"refresh": 0, "poll": 0}
 
@@ -1823,8 +1746,7 @@ def test_execute_retries_exception_from_checkpoint_anchor():
 
     def journey():
         journey_sdk.step(warmup)
-        anchor = journey_sdk.checkpoint()
-        journey_sdk.step(refresh)
+        anchor = journey_sdk.step(refresh)
         journey_sdk.step(
             poll,
             retry=2,
@@ -1848,49 +1770,55 @@ def test_execute_retries_exception_from_checkpoint_anchor():
     assert _record_labels(report.case_reports[0]) == ["warmup", "refresh", "poll", "finish"]
 
 
-def test_execute_checkpoint_protocol_store_failure_surfaces_context():
+def test_execute_branch_anchor_protocol_store_failure_surfaces_context():
     _ReplayValue.reset()
     _ReplayValue.fail_store_message = "could not save"
-    _ReplayValue.fail_store_boundary = "checkpoint"
+    _ReplayValue.fail_store_boundary = "branch-anchor"
 
     def create_value():
         return _ReplayValue("seed-1", mode="failure")
 
-    def poll(_value):
+    def finish_a(_value):
+        return True
+
+    def finish_b(_value):
         return True
 
     def journey():
         value = journey_sdk.step(create_value)
-        anchor = journey_sdk.checkpoint()
-        journey_sdk.step(poll, value, retry=1, retry_delay=0, retry_from=anchor)
+        if journey_sdk.branch(start_from=value):
+            journey_sdk.step(finish_a, value)
+        elif journey_sdk.branch(start_from=value):
+            journey_sdk.step(finish_b, value)
 
     with pytest.raises(ExecutionStateSerializationError) as exc_info:
         journey_sdk.execute(journey)
 
-    assert "checkpoint 'cp_1' result" in str(exc_info.value)
+    assert "branch anchor 'create_value' result" in str(exc_info.value)
     assert "could not save" in str(exc_info.value)
 
 
-def test_execute_checkpoint_protocol_restore_failure_surfaces_context():
+def test_execute_branch_anchor_protocol_restore_failure_surfaces_context():
     _ReplayValue.reset()
-    attempts = {"poll": 0}
 
     def create_value():
         return _ReplayValue("seed-1", mode="failure")
 
-    def poll(_value):
-        attempts["poll"] += 1
-        if attempts["poll"] == 1:
-            raise RuntimeError("pending")
+    def finish_a(_value):
+        return True
+
+    def finish_b(_value):
         return True
 
     def journey():
         value = journey_sdk.step(create_value)
-        anchor = journey_sdk.checkpoint()
-        journey_sdk.step(poll, value, retry=1, retry_delay=0, retry_from=anchor)
+        if journey_sdk.branch(start_from=value):
+            journey_sdk.step(finish_a, value)
+        elif journey_sdk.branch(start_from=value):
+            journey_sdk.step(finish_b, value)
 
     _ReplayValue.fail_restore_message = "could not restore"
-    _ReplayValue.fail_restore_boundary = "checkpoint"
+    _ReplayValue.fail_restore_boundary = "branch-anchor"
 
     with pytest.raises(CallableExecutionError) as exc_info:
         journey_sdk.execute(journey)
@@ -2016,7 +1944,7 @@ def test_execute_observer_reports_step_anchor_retry_events():
     ]
 
 
-def test_execute_observer_reports_checkpoint_anchor_retry_events():
+def test_execute_observer_reports_step_anchor_retry_events():
     observer = _RecordingObserver()
     attempts = {"refresh": 0, "poll": 0}
 
@@ -2035,14 +1963,13 @@ def test_execute_observer_reports_checkpoint_anchor_retry_events():
 
     def journey():
         journey_sdk.step(warmup)
-        anchor = journey_sdk.checkpoint()
         request = journey_sdk.step(refresh)
         journey_sdk.step(
             poll,
             request,
             retry=1,
             retry_delay=0,
-            retry_from=anchor,
+            retry_from=request,
         )
 
     _execute_with_observer(journey, observer)
@@ -2330,7 +2257,7 @@ def test_execute_resume_preserves_retry_budget_for_step_anchor(tmp_path):
     assert not state_file.exists()
 
 
-def test_execute_resumes_interrupted_retryable_step_from_checkpoint_anchor(tmp_path):
+def test_execute_resumes_interrupted_retryable_step_from_same_step_anchor(tmp_path):
     state_file = tmp_path / "journey.state"
     events: list[str] = []
     attempts = {"poll": 0}
@@ -2352,12 +2279,10 @@ def test_execute_resumes_interrupted_retryable_step_from_checkpoint_anchor(tmp_p
 
     def journey():
         journey_sdk.step(warmup)
-        anchor = journey_sdk.checkpoint()
         journey_sdk.step(
             poll,
             retry=1,
             retry_delay=0,
-            retry_from=anchor,
         )
         journey_sdk.step(finish)
 
@@ -2393,13 +2318,12 @@ def test_execute_resumes_protocol_value_restore_with_saved_state(tmp_path):
 
     def journey():
         value = journey_sdk.step(create_value)
-        anchor = journey_sdk.checkpoint()
         journey_sdk.step(
             poll,
             value,
             retry=1,
             retry_delay=0,
-            retry_from=anchor,
+            retry_from=value,
         )
         journey_sdk.step(finish)
 
@@ -2415,11 +2339,10 @@ def test_execute_resumes_protocol_value_restore_with_saved_state(tmp_path):
     ]
     assert _ReplayValue.events[0] == "store_seed-1_resume_binding_step:n_1"
     assert "restore_seed-1_resume_state_case_1" in _ReplayValue.events
-    assert "restore_seed-1_resume_checkpoint_cp_1" in _ReplayValue.events
     assert _record_labels(report.case_reports[0]) == ["create_value", "poll", "finish"]
 
 
-def test_execute_resume_preserves_retry_budget_for_checkpoint_anchor(tmp_path):
+def test_execute_resume_preserves_retry_budget_for_step_anchor(tmp_path):
     state_file = tmp_path / "journey.state"
     events: list[str] = []
     attempts = {"refresh": 0, "poll": 0}
@@ -2446,8 +2369,7 @@ def test_execute_resume_preserves_retry_budget_for_checkpoint_anchor(tmp_path):
 
     def journey():
         journey_sdk.step(warmup)
-        anchor = journey_sdk.checkpoint()
-        journey_sdk.step(refresh)
+        anchor = journey_sdk.step(refresh)
         journey_sdk.step(
             poll,
             retry=1,
@@ -2542,7 +2464,7 @@ def test_execute_retry_from_step_anchor_reuses_helper_args_and_refreshes_step_re
     assert _record_labels(report.case_reports[0]) == ["issue_request", "confirm_request"]
 
 
-def test_execute_retry_from_checkpoint_anchor_reuses_helper_args():
+def test_execute_retry_from_step_anchor_reuses_helper_args():
     helper_calls = {"count": 0}
     events: list[str] = []
     attempts = {"poll": 0}
@@ -2569,8 +2491,7 @@ def test_execute_retry_from_checkpoint_anchor_reuses_helper_args():
     def journey():
         payload = next_payload()
         journey_sdk.step(warmup, payload)
-        anchor = journey_sdk.checkpoint()
-        journey_sdk.step(refresh, payload)
+        anchor = journey_sdk.step(refresh, payload)
         journey_sdk.step(
             poll,
             payload,
@@ -2672,7 +2593,7 @@ def test_execute_resumes_multi_case_run_without_rerunning_completed_cases(tmp_pa
     assert state_file.exists()
 
 
-def test_execute_rehydrates_checkpoint_started_branch_cases_without_rerunning_common_steps():
+def test_execute_rehydrates_step_started_branch_cases_from_anchor_post_exit():
     helper_calls = {"count": 0}
     events: list[str] = []
 
@@ -2684,7 +2605,7 @@ def test_execute_rehydrates_checkpoint_started_branch_cases_without_rerunning_co
         events.append(f"prepare_{payload['seed']}")
         return {"token": f"t{payload['seed']}"}
 
-    def shared_after_checkpoint(token):
+    def shared_after_anchor(token):
         events.append(f"shared_{token['token']}")
         return {"shared": token["token"]}
 
@@ -2699,11 +2620,10 @@ def test_execute_rehydrates_checkpoint_started_branch_cases_without_rerunning_co
     def journey():
         payload = next_payload()
         token = journey_sdk.step(prepare, payload)
-        after_setup = journey_sdk.checkpoint()
-        shared = journey_sdk.step(shared_after_checkpoint, token)
-        if journey_sdk.branch(start_from=after_setup):
+        shared = journey_sdk.step(shared_after_anchor, token)
+        if journey_sdk.branch(start_from=token):
             journey_sdk.step(finish_branch_a, shared)
-        elif journey_sdk.branch(start_from=after_setup):
+        elif journey_sdk.branch(start_from=token):
             journey_sdk.step(finish_branch_b, shared)
 
     report = journey_sdk.execute(journey)
@@ -2714,29 +2634,65 @@ def test_execute_rehydrates_checkpoint_started_branch_cases_without_rerunning_co
         f"prepare_{seed}",
         f"shared_t{seed}",
         f"branch_a_t{seed}",
+        f"shared_t{seed}",
         f"branch_b_t{seed}",
     ]
     assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
     assert _record_labels(report.case_reports[0]) == [
         "prepare",
-        "shared_after_checkpoint",
+        "shared_after_anchor",
         "finish_branch_a",
     ]
     assert _record_labels(report.case_reports[1]) == [
         "prepare",
-        "shared_after_checkpoint",
+        "shared_after_anchor",
         "finish_branch_b",
     ]
 
 
-def test_execute_checkpoint_started_branches_restore_protocol_value_state():
+def test_execute_branch_anchor_handles_duplicate_scalar_step_results():
+    events: list[str] = []
+
+    def first_anchor():
+        events.append("first")
+        return True
+
+    def duplicate_scalar(_anchor):
+        events.append("duplicate")
+        return True
+
+    def finish(branch_name):
+        events.append(f"finish_{branch_name}")
+        return True
+
+    def journey():
+        anchor = journey_sdk.step(first_anchor)
+        journey_sdk.step(duplicate_scalar, anchor)
+        if journey_sdk.branch(start_from=anchor):
+            journey_sdk.step(finish, "a")
+        elif journey_sdk.branch(start_from=anchor):
+            journey_sdk.step(finish, "b")
+
+    report = journey_sdk.execute(journey)
+
+    assert events == [
+        "first",
+        "duplicate",
+        "finish_a",
+        "duplicate",
+        "finish_b",
+    ]
+    assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
+
+
+def test_execute_step_started_branches_restore_protocol_value_state():
     _ReplayValue.reset()
     events: list[str] = []
 
     def create_value():
         return _ReplayValue("seed-1", mode="branch")
 
-    def shared_after_checkpoint(value):
+    def shared_after_anchor(value):
         events.append(f"shared_{value.seed}")
         return {"shared": value.seed}
 
@@ -2746,11 +2702,10 @@ def test_execute_checkpoint_started_branches_restore_protocol_value_state():
 
     def journey():
         value = journey_sdk.step(create_value)
-        anchor = journey_sdk.checkpoint()
-        shared = journey_sdk.step(shared_after_checkpoint, value)
-        if journey_sdk.branch(start_from=anchor):
+        shared = journey_sdk.step(shared_after_anchor, value)
+        if journey_sdk.branch(start_from=value):
             journey_sdk.step(finish, "a", shared)
-        elif journey_sdk.branch(start_from=anchor):
+        elif journey_sdk.branch(start_from=value):
             journey_sdk.step(finish, "b", shared)
 
     journey_sdk.execute(journey)
@@ -2758,14 +2713,15 @@ def test_execute_checkpoint_started_branches_restore_protocol_value_state():
     assert events == [
         "shared_seed-1",
         "finish_a_seed-1",
+        "shared_seed-1",
         "finish_b_seed-1",
     ]
     assert _ReplayValue.events[0] == "store_seed-1_branch_binding_step:n_1"
-    assert "store_seed-1_branch_checkpoint_cp_1" in _ReplayValue.events
-    assert "restore_seed-1_branch_checkpoint_cp_1" in _ReplayValue.events
+    assert "store_seed-1_branch_branch-anchor_step:n_1" in _ReplayValue.events
+    assert "restore_seed-1_branch_branch-anchor_step:n_1" in _ReplayValue.events
 
 
-def test_execute_checkpoint_started_branches_keep_retry_counters_independent():
+def test_execute_step_started_branches_keep_retry_counters_independent():
     observer = _RecordingObserver()
     events: list[str] = []
     attempts = {"branch_a": 0, "branch_b": 0}
@@ -2786,8 +2742,7 @@ def test_execute_checkpoint_started_branches_keep_retry_counters_independent():
         return True
 
     def journey():
-        journey_sdk.step(prepare)
-        anchor = journey_sdk.checkpoint()
+        anchor = journey_sdk.step(prepare)
         if journey_sdk.branch(start_from=anchor):
             branch_name = journey_sdk.step(poll, "branch_a", retry=1, retry_delay=0)
             journey_sdk.step(finish, branch_name)
@@ -2889,7 +2844,7 @@ def test_execute_rehydration_rejects_unserializable_step_args():
         journey_sdk.execute(journey)
 
 
-def test_execute_rehydration_rejects_unserializable_step_result_for_checkpoint_replay():
+def test_execute_rehydration_rejects_unserializable_step_result_for_branch_anchor_replay():
     def produce():
         return lambda: None
 
@@ -2901,10 +2856,9 @@ def test_execute_rehydration_rejects_unserializable_step_result_for_checkpoint_r
 
     def journey():
         payload = journey_sdk.step(produce)
-        anchor = journey_sdk.checkpoint()
-        if journey_sdk.branch(start_from=anchor):
+        if journey_sdk.branch(start_from=payload):
             journey_sdk.step(branch_a_step, payload)
-        elif journey_sdk.branch(start_from=anchor):
+        elif journey_sdk.branch(start_from=payload):
             journey_sdk.step(branch_b_step, payload)
 
     with pytest.raises(ExecutionStateSerializationError):
@@ -2978,15 +2932,14 @@ def test_execute_missing_step_exposes_user_friendly_hint():
     assert exc_info.value.hint is not None
 
 
-def test_unknown_checkpoint_error_includes_next_step_hint():
+def test_branch_start_from_type_error_includes_step_hint():
     def journey():
-        if journey_sdk.branch(start_from="missing_checkpoint"):
+        if journey_sdk.branch(start_from="missing_step"):
             journey_sdk.step(lambda: True)
         elif journey_sdk.branch():
             journey_sdk.step(lambda: True)
 
-    with pytest.raises(UnknownCheckpointError) as exc_info:
+    with pytest.raises(TypeError) as exc_info:
         journey_sdk.compile_journey(journey)
 
-    assert "missing_checkpoint" in str(exc_info.value)
-    assert exc_info.value.hint is not None
+    assert "earlier step() result" in str(exc_info.value)

@@ -11,7 +11,7 @@ Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async,
 skill when a Journey SDK journey tests product or business flows that touch browsers, APIs, mobile or edge devices,
 background jobs, third-party services, webhooks, email, AI or voice systems, or delayed side effects. Use the README
 glossary vocabulary when explaining behavior: step boundary, state file, saved step binding, dirty step, replay
-boundary, replay anchor, checkpoint snapshot, step lifecycle, develop-step pause, pause action, rehydration, and
+boundary, replay anchor, branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydration, and
 rehydratable value.
 
 Do not use this skill for generic Python scripts, generic unit tests, or unrelated workflow automation that is not authored as a Journey SDK journey.
@@ -21,11 +21,11 @@ Do not use this skill for generic Python scripts, generic unit tests, or unrelat
 Official tools live under `journeysdk.tools`. They are ordinary Python helpers that return step callables or
 serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted
 resources while steps execute, and make returned values serializable or rehydratable when they cross replay boundaries
-for retry, checkpoint, branch, or `--state` behavior.
+for retry, branch, or `--state` behavior.
 
 - `journeysdk.tools.webhook`: host a local webhook endpoint or acquire a cloud-hosted endpoint, then wait for received webhook requests.
 - `journeysdk.tools.email`: get an inbox, send email, and wait for received email using direct SMTP/IMAP settings or hosted email access.
-- `journeysdk.tools.docker`: start local Docker Compose apps and pair checkpoints with exact snapshots for supported container and volume state.
+- `journeysdk.tools.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
 - `journeysdk.tools.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
 
 ## Core Workflow
@@ -33,7 +33,7 @@ for retry, checkpoint, branch, or `--state` behavior.
 Use this workflow when developing Journey SDK journeys:
 
 1. Inspect nearby journeys and docs before editing. Prefer the existing file's imports, labels, helper style, and tool setup. Check `docs/` examples and `journeysdk/api.py` when behavior is unclear.
-2. Define explicit top-level step functions. Decorate one or more module-level entrypoints with `@journey` or `@journey.journey`, then call `step(...)`, `checkpoint()`, and `branch(...)` inside the entrypoint.
+2. Define explicit top-level step functions. Decorate one or more module-level entrypoints with `@journey` or `@journey.journey`, then call `step(...)` and `branch(...)` inside the entrypoint.
 3. Pass concrete dependencies and prior step results as explicit arguments. Do not pass `None` or empty placeholders into constructors just to satisfy signatures.
 4. Run the narrowest useful Journey CLI command, then broaden validation before finishing.
 
@@ -59,8 +59,8 @@ def account_journey() -> None:
 
 Prefer stable function names because default step labels come from function names. When a label appears in docs, tests, state files, or CLI examples, keep it stable or update every reference in the same change.
 
-Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay. Use `checkpoint()` and
-`branch(start_from=...)` for branch replay anchors and checkpoint snapshots. Keep values that cross replay boundaries
+Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay. Use
+`branch(start_from=step_result)` for branch replay anchors and branch-anchor snapshots. Keep values that cross replay boundaries
 pickle-serializable or implement the Journey rehydration protocol with top-level classes and explicit `__store__` /
 `__restore__` methods.
 
@@ -76,7 +76,7 @@ uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_
 
 Use `--file` to scope discovery to one file, `--journey` to select one decorated entrypoint, and targeted
 `--step LABEL` to execute only the single case that reaches a step label. A targeted run reports `replay_anchor` for
-branch checkpoints but does not skip directly to that checkpoint unless state or retry behavior causes replay.
+branch step anchors but does not skip directly to that anchor unless state or retry behavior causes replay.
 
 Journey writes plans, summaries, prompts, and JSON to stdout. Live diagnostics go to stderr as structured
 `[journey]` log lines with `time`, `level`, `component`, `event`, and `message` fields. Use

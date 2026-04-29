@@ -19,7 +19,7 @@ from .models import (
 )
 from .rehydration import StoredValue
 
-STATE_FORMAT_VERSION = 10
+STATE_FORMAT_VERSION = 11
 
 
 @dataclass
@@ -81,8 +81,7 @@ class ExecutionStateEnvelope:
     current_case_index: int
     completed_case_reports: list[CaseExecutionReport]
     active_case: ActiveCaseState | None
-    successful_step_bindings: dict[str, StepBindingState] = field(default_factory=dict)
-    checkpoint_snapshots: dict[str, RuntimeSnapshotState] = field(default_factory=dict)
+    branch_anchor_snapshots: dict[str, RuntimeSnapshotState] = field(default_factory=dict)
 
 
 def artifact_root_for_state(path: Path | None) -> tuple[Path, bool]:

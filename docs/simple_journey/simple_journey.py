@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from journeysdk import branch, checkpoint, journey, step
+from journeysdk import branch, journey, step
 from journeysdk.tools.webhook import host_webhook_endpoint
 
 _DEMO_PAGE_URL = Path(__file__).with_name("demo_site.html").resolve().as_uri()
@@ -120,9 +120,8 @@ def assert_local_file_contents(file_info: dict[str, str]) -> bool:
 def simple_journey() -> None:
     receive_endpoint_a = host_webhook_endpoint(port=8765, path="/endpoint-a")
 
-    step(assert_demo_homepage)
+    after_setup = step(assert_demo_homepage)
 
-    after_setup = checkpoint()
     if branch(start_from=after_setup):
         step(click_trigger_endpoint_a)
         request_payload = step(receive_endpoint_a)

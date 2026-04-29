@@ -622,52 +622,7 @@ def test_restore_docker_requires_existing_snapshot(tmp_path: Path):
     assert "could not find a stored snapshot manifest" in str(exc_info.value)
 
 
-def test_journey_retry_from_checkpoint_restores_docker_snapshot_once(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-):
-    compose_file = _write_compose_file(tmp_path)
-    runtime = _FakeDockerRuntime()
-    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
-    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
-    attempts = {"count": 0}
-
-    def poll() -> bool:
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise RuntimeError("pending")
-        return True
-
-    def journey():
-        stack = journey_sdk.step(
-            journey_docker.run_docker(
-                compose_file=compose_file,
-                project_name="demo",
-            )
-        )
-        anchor = journey_sdk.checkpoint()
-        journey_sdk.step(
-            poll,
-            retry=1,
-            retry_delay=0,
-            retry_from=anchor,
-        )
-
-    journey_sdk.execute(journey)
-
-    assert sum(
-        1
-        for owner, command in runtime.commands
-        if owner == "store_docker" and "commit" in command
-    ) >= 1
-    assert sum(
-        1
-        for owner, command in runtime.commands
-        if owner == "restore_docker" and "down" in command
-    ) >= 1
-
-
-def test_execute_checkpoint_started_branches_restore_docker_snapshot(
+def test_execute_step_started_branches_restore_docker_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -807,12 +762,11 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
             )
         )
         journey_sdk.step(assert_stack_ready, stack)
-        after_boot = journey_sdk.checkpoint()
         baseline = journey_sdk.step(capture_baseline_state, stack)
-        if journey_sdk.branch(start_from=after_boot):
+        if journey_sdk.branch(start_from=baseline):
             incremented = journey_sdk.step(increment_counter, stack)
             journey_sdk.step(assert_increment_branch, baseline, incremented)
-        elif journey_sdk.branch(start_from=after_boot):
+        elif journey_sdk.branch(start_from=baseline):
             current = journey_sdk.step(read_counter_state, stack)
             journey_sdk.step(assert_restored_counter_branch, baseline, current)
 
@@ -858,7 +812,7 @@ def test_execute_checkpoint_started_branches_restore_docker_snapshot(
     ) == 1
 
 
-def test_journey_resume_restores_docker_snapshot_with_saved_checkpoint_args(
+def test_journey_resume_restores_docker_snapshot_with_saved_step_args(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -885,12 +839,11 @@ def test_journey_resume_restores_docker_snapshot_with_saved_checkpoint_args(
                 project_name="demo",
             )
         )
-        anchor = journey_sdk.checkpoint()
         journey_sdk.step(
             poll,
             retry=1,
             retry_delay=0,
-            retry_from=anchor,
+            retry_from=stack,
         )
         journey_sdk.step(finish)
 

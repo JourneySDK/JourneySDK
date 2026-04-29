@@ -1,7 +1,7 @@
 # Journey Docs
 
 Journey is easiest to learn when the code, the command, and the output stay next to each other. Keep the README
-glossary nearby: the handbook uses its vocabulary for step boundaries, replay boundaries, checkpoint snapshots, and
+glossary nearby: the handbook uses its vocabulary for step boundaries, replay boundaries, branch-anchor snapshots, and
 rehydration.
 
 This directory does two jobs:
@@ -26,7 +26,7 @@ export JOURNEY_CLOUD_API_KEY=<your-api-key>
 export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 ```
 
-- The Docker Compose snapshot example expects local `docker` and `docker compose` access when you execute it.
+- The Docker Compose step-anchor snapshot example expects local `docker` and `docker compose` access when you execute it.
 - With `--state`, CLI Ctrl-C is graceful the first time: Journey lets the active step reach post-exit, then resumes
   after that completed step. Press Ctrl-C again to interrupt the dirty step immediately; that step restarts later with
   saved inputs.
@@ -100,6 +100,6 @@ That output shows the core Journey model:
 - one top-level function becomes one or more executable cases
 - each case is still plain Python steps in order
 - the CLI shows the compiled cases on stdout and streams each step boundary as structured stderr logs
-- stateful runs can replay from step or checkpoint boundaries instead of rerunning everything from scratch
+- stateful runs can replay from step boundaries instead of rerunning everything from scratch
 
 Continue with [01 Getting Started](01-getting-started.md) if Journey is new to you.

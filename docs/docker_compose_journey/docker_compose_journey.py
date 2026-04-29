@@ -1,4 +1,4 @@
-"""Tutorial journey showing Docker Compose checkpoint rewind with app+db state."""
+"""Tutorial journey showing Docker Compose step-anchor rewind with app+db state."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 import urllib.request
 
-from journeysdk import branch, checkpoint, journey, step
+from journeysdk import branch, journey, step
 from journeysdk.tools.docker import (
     DockerComposeStack,
     DockerContainerStatus,
@@ -250,11 +250,10 @@ def docker_compose_journey() -> None:
         )
     )
     step(assert_stack_ready, stack)
-    after_boot = checkpoint()
     baseline = step(capture_baseline_state, stack)
-    if branch(start_from=after_boot):
+    if branch(start_from=baseline):
         incremented = step(increment_counter, stack)
         step(assert_increment_branch, baseline, incremented)
-    elif branch(start_from=after_boot):
+    elif branch(start_from=baseline):
         restored = step(read_counter_state, stack)
         step(assert_restored_counter_branch, baseline, restored)

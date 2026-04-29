@@ -1,4 +1,4 @@
-"""Checkpoint rehydration example package."""
+"""Step-anchor rehydration example package."""
 
 from .rehydration_journey import (
     EVENTS,
@@ -8,7 +8,7 @@ from .rehydration_journey import (
     prepare_context,
     rehydration_journey,
     reset_demo_state,
-    shared_after_checkpoint,
+    shared_after_anchor,
 )
 
 __all__ = [
@@ -19,5 +19,5 @@ __all__ = [
     "prepare_context",
     "rehydration_journey",
     "reset_demo_state",
-    "shared_after_checkpoint",
+    "shared_after_anchor",
 ]

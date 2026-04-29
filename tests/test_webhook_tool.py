@@ -210,6 +210,9 @@ def test_webhook_journey_supports_targeted_execution_and_resume(tmp_path: Path):
         assert file_info["content"] == "stored from test\n"
         return True
 
+    def prepare_branch_anchor() -> bool:
+        return True
+
     def journey():
         receive_endpoint_a = host_webhook_endpoint(
             port=port,
@@ -217,14 +220,13 @@ def test_webhook_journey_supports_targeted_execution_and_resume(tmp_path: Path):
             timeout=0.05,
             poll_interval=0.01,
         )
-        after_setup = journey_sdk.checkpoint()
+        after_setup = journey_sdk.step(prepare_branch_anchor)
         if journey_sdk.branch(start_from=after_setup):
             journey_sdk.step(_send_webhook_later, receive_endpoint_a.url, 0.01)
             request_payload = journey_sdk.step(receive_endpoint_a, retry=1, retry_delay=0)
             journey_sdk.step(assert_webhook, request_payload)
         elif journey_sdk.branch(start_from=after_setup):
-            retry_anchor = journey_sdk.checkpoint()
-            journey_sdk.step(queue_file_write, str(file_target))
+            retry_anchor = journey_sdk.step(queue_file_write, str(file_target))
             file_info = journey_sdk.step(
                 wait_for_file,
                 str(file_target),
@@ -240,7 +242,7 @@ def test_webhook_journey_supports_targeted_execution_and_resume(tmp_path: Path):
     targeted_report = journey_sdk.execute(journey, step="assert_file")
     assert len(targeted_report.case_reports) == 1
     assert targeted_report.case_reports[0].stopped_at_label == "assert_file"
-    assert targeted_report.case_reports[0].replay_anchor == "cp_1"
+    assert targeted_report.case_reports[0].replay_anchor == "prepare_branch_anchor"
 
     state_file = tmp_path / "journey.state"
     wait_attempts["count"] = 0
@@ -255,4 +257,9 @@ def test_webhook_journey_supports_targeted_execution_and_resume(tmp_path: Path):
         for record in resumed_report.case_reports[0].records
         if record.label is not None
     ]
-    assert record_labels == ["queue_file_write", "wait_for_file", "assert_file"]
+    assert record_labels == [
+        "prepare_branch_anchor",
+        "queue_file_write",
+        "wait_for_file",
+        "assert_file",
+    ]

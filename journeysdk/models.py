@@ -55,15 +55,9 @@ class StepRetry:
     retries: int
     delay_seconds: float
     from_node_id: str | None = None
-    from_checkpoint: str | None = None
 
 
-@dataclass
-class CheckpointRef:
-    name: str
-
-
-StepRetryFrom: TypeAlias = PlannedValue | CheckpointRef | None
+StepRetryFrom: TypeAlias = PlannedValue | None
 
 
 @dataclass
@@ -82,12 +76,6 @@ EvaluateNode = StepNode
 
 
 @dataclass
-class CheckpointNode:
-    node_id: str
-    name: str
-
-
-@dataclass
 class BranchMarkerNode:
     node_id: str
     group_id: str
@@ -95,7 +83,7 @@ class BranchMarkerNode:
     start_from: str | None
 
 
-PlanNode: TypeAlias = StepNode | CheckpointNode | BranchMarkerNode
+PlanNode: TypeAlias = StepNode | BranchMarkerNode
 
 
 @dataclass

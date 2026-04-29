@@ -26,8 +26,6 @@ from .models import (
     BranchMarkerNode,
     CaseExecutionReport,
     CasePlan,
-    CheckpointNode,
-    CheckpointRef,
     ExecutionReport,
     JourneyPlan,
     NodeExecutionRecord,
@@ -216,8 +214,12 @@ class _SelectedCase:
 @dataclass(frozen=True)
 class _ReplayBoundary:
     start_index: int
-    checkpoint_name: str | None = None
     preserve_retry_for: str | None = None
+
+
+@dataclass(frozen=True)
+class _RuntimeStepAnchor:
+    node_ids: frozenset[str]
 
 
 @dataclass
@@ -627,11 +629,9 @@ def _rehydration_key(*, kind: str, identifier: str, lineage: tuple[str, ...]) ->
 
 def _case_rehydration_maps(
     case_plan: CasePlan,
-) -> tuple[dict[str, str], dict[str, str], str | None]:
+) -> dict[str, str]:
     step_keys: dict[str, str] = {}
-    checkpoint_keys: dict[str, str] = {}
     lineage: tuple[str, ...] = ()
-    start_checkpoint_key: str | None = None
 
     for node in case_plan.nodes:
         if isinstance(node, StepNode):
@@ -641,19 +641,10 @@ def _case_rehydration_maps(
                 lineage=lineage,
             )
             continue
-        if isinstance(node, CheckpointNode):
-            checkpoint_keys[node.name] = _rehydration_key(
-                kind="checkpoint",
-                identifier=node.name,
-                lineage=lineage,
-            )
-            continue
         if isinstance(node, BranchMarkerNode):
-            if start_checkpoint_key is None and node.start_from is not None:
-                start_checkpoint_key = checkpoint_keys.get(node.start_from)
             lineage = lineage + (f"{node.group_id}={node.active_key}",)
 
-    return step_keys, checkpoint_keys, start_checkpoint_key
+    return step_keys
 
 
 def _callable_execution_error_for_step(
@@ -775,32 +766,28 @@ class _StateController:
             boundary_id=binding_key,
         )
 
-    def checkpoint_store_context(
+    def branch_anchor_store_context(
         self,
         *,
-        checkpoint_key: str,
-        checkpoint_name: str,
+        anchor_key: str,
         binding_key: str,
     ) -> JourneyStoreContext:
         return JourneyStoreContext(
-            artifact_root=self._artifact_dir("checkpoint", checkpoint_key, binding_key),
-            boundary_kind="checkpoint",
-            boundary_id=checkpoint_key,
-            checkpoint_name=checkpoint_name,
+            artifact_root=self._artifact_dir("branch-anchor", anchor_key, binding_key),
+            boundary_kind="branch-anchor",
+            boundary_id=anchor_key,
         )
 
-    def checkpoint_restore_context(
+    def branch_anchor_restore_context(
         self,
         *,
-        checkpoint_key: str,
-        checkpoint_name: str,
+        anchor_key: str,
         binding_key: str,
     ) -> JourneyRestoreContext:
         return JourneyRestoreContext(
-            artifact_root=self._artifact_dir("checkpoint", checkpoint_key, binding_key),
-            boundary_kind="checkpoint",
-            boundary_id=checkpoint_key,
-            checkpoint_name=checkpoint_name,
+            artifact_root=self._artifact_dir("branch-anchor", anchor_key, binding_key),
+            boundary_kind="branch-anchor",
+            boundary_id=anchor_key,
         )
 
     def active_state_store_context(
@@ -847,14 +834,8 @@ class _StateController:
             )
         return active_case
 
-    def successful_step_bindings(self) -> dict[str, StepBindingState]:
-        return {
-            key: _copy_binding(binding)
-            for key, binding in self._state.successful_step_bindings.items()
-        }
-
-    def checkpoint_snapshot_for(self, checkpoint_key: str) -> RuntimeSnapshotState | None:
-        snapshot = self._state.checkpoint_snapshots.get(checkpoint_key)
+    def branch_anchor_snapshot_for(self, anchor_key: str) -> RuntimeSnapshotState | None:
+        snapshot = self._state.branch_anchor_snapshots.get(anchor_key)
         if snapshot is None:
             return None
         return _copy_runtime_snapshot(snapshot)
@@ -877,20 +858,12 @@ class _StateController:
         self._state.active_case = snapshot
         self._write_state()
 
-    def promote_successful_binding(
+    def store_branch_anchor_snapshot(
         self,
-        key: str,
-        binding: StepBindingState,
-    ) -> None:
-        self._state.successful_step_bindings[key] = _copy_binding(binding)
-        self._write_state()
-
-    def store_checkpoint_snapshot(
-        self,
-        checkpoint_key: str,
+        anchor_key: str,
         snapshot: RuntimeSnapshotState,
     ) -> None:
-        self._state.checkpoint_snapshots[checkpoint_key] = _copy_runtime_snapshot(snapshot)
+        self._state.branch_anchor_snapshots[anchor_key] = _copy_runtime_snapshot(snapshot)
         self._write_state()
 
     def complete_case(self, report: CaseExecutionReport) -> None:
@@ -921,10 +894,14 @@ class _StateController:
 
     def _validate_loaded_state(self, state: ExecutionStateEnvelope) -> None:
         expected_cases = _selected_case_refs(self.selected_cases)
-        expected_checkpoint_keys = {
-            checkpoint_key
+        expected_anchor_keys = {
+            step_keys[node.start_from]
             for selected_case in self.selected_cases
-            for checkpoint_key in _case_rehydration_maps(selected_case.case_plan)[1].values()
+            for step_keys in [_case_rehydration_maps(selected_case.case_plan)]
+            for node in selected_case.case_plan.nodes
+            if isinstance(node, BranchMarkerNode)
+            and node.start_from is not None
+            and node.start_from in step_keys
         }
         if state.version != STATE_FORMAT_VERSION:
             raise ExecutionStateMismatchError(
@@ -982,18 +959,14 @@ class _StateController:
                 f"The journey state file '{self.path}' has inconsistent completed-case progress."
             )
 
-        self._validate_step_bindings(
-            state.successful_step_bindings,
-            label="run-wide step bindings",
-        )
-        for checkpoint_key, snapshot in state.checkpoint_snapshots.items():
-            if not isinstance(checkpoint_key, str) or checkpoint_key not in expected_checkpoint_keys:
+        for anchor_key, snapshot in state.branch_anchor_snapshots.items():
+            if not isinstance(anchor_key, str) or anchor_key not in expected_anchor_keys:
                 raise ExecutionStateMismatchError(
-                    f"The journey state file '{self.path}' has invalid checkpoint snapshot data."
+                    f"The journey state file '{self.path}' has invalid branch anchor snapshot data."
                 )
             self._validate_runtime_snapshot(
                 snapshot,
-                label=f"checkpoint snapshot '{checkpoint_key}'",
+                label=f"branch anchor snapshot '{anchor_key}'",
             )
 
         for index, report in enumerate(state.completed_case_reports):
@@ -1217,9 +1190,8 @@ class _RunSession:
         rehydration_enabled: bool,
         state_controller: _StateController | None = None,
         restored_state: ActiveCaseState | None = None,
-        checkpoint_seed: RuntimeSnapshotState | None = None,
-        checkpoint_restore_name: str | None = None,
-        successful_bindings: dict[str, StepBindingState] | None = None,
+        branch_anchor_seed: RuntimeSnapshotState | None = None,
+        branch_anchor_key: str | None = None,
         observer: _ExecutionObserver | None = None,
     ) -> None:
         self.journey_plan = journey_plan
@@ -1242,40 +1214,31 @@ class _RunSession:
         self.replay_from_index = 0
         self._dirty_node_id: str | None = None
         self._paused_step: PausedStepState | None = None
-        self._pending_checkpoint_restore_name = checkpoint_restore_name
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
         self._active_step_lifecycle: _StepLifecycle | None = None
-        (
-            self._step_key_by_id,
-            self._checkpoint_key_by_name,
-            _,
-        ) = _case_rehydration_maps(case_plan)
-        self._checkpoint_name_by_key = {
-            key: name
-            for name, key in self._checkpoint_key_by_name.items()
-        }
+        self._step_key_by_id = _case_rehydration_maps(case_plan)
         self._step_index_by_id = {
             node.node_id: index
             for index, node in enumerate(case_plan.nodes)
             if isinstance(node, StepNode)
         }
-        self._checkpoint_index_by_name = {
-            node.name: index
-            for index, node in enumerate(case_plan.nodes)
-            if isinstance(node, CheckpointNode)
+        self._branch_anchor_step_ids = {
+            node.start_from
+            for node in case_plan.nodes
+            if isinstance(node, BranchMarkerNode) and node.start_from is not None
         }
+        self._runtime_step_result_ids: dict[int, set[str]] = {}
 
-        if successful_bindings is not None:
-            for key, binding in successful_bindings.items():
-                self._step_bindings[key] = _copy_binding(binding)
-                self._step_binding_contexts[key] = self._binding_restore_context(key)
-        if checkpoint_seed is not None:
-            self._restore_checkpoint_seed(
-                checkpoint_seed,
-                checkpoint_name=checkpoint_restore_name,
+        if branch_anchor_seed is not None:
+            if branch_anchor_key is None:
+                raise ExecutionStateMismatchError(
+                    "Branch anchor replay state is missing its anchor key."
+                )
+            self._restore_branch_anchor_seed(
+                branch_anchor_seed,
+                anchor_key=branch_anchor_key,
             )
-            self._pending_checkpoint_restore_name = None
         if restored_state is not None:
             self._restore_state(restored_state)
 
@@ -1322,49 +1285,25 @@ class _RunSession:
             return
         self._state_controller.update_active_case(self.snapshot_state())
 
-    def _restore_checkpoint_seed(
+    def _restore_branch_anchor_seed(
         self,
         snapshot: RuntimeSnapshotState,
         *,
-        checkpoint_name: str | None,
+        anchor_key: str,
     ) -> None:
         restored = _copy_runtime_snapshot(snapshot)
         self._record_indices = restored.record_indices
         self.records = restored.records
-        checkpoint_key = None
-        if checkpoint_name is not None:
-            checkpoint_key = self._checkpoint_key_by_name[checkpoint_name]
         for key, binding in restored.step_bindings.items():
             self._step_bindings[key] = binding
-            self._step_binding_contexts[key] = self._checkpoint_restore_context(
+            self._step_binding_contexts[key] = self._branch_anchor_restore_context(
                 binding_key=key,
-                checkpoint_key=checkpoint_key,
+                anchor_key=anchor_key,
             )
             self._step_input_cache.pop(key, None)
             self._step_result_cache.pop(key, None)
         self._retry_remaining = restored.retry_remaining
         self._step_attempts = restored.step_attempts
-        self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
-        self._restore_snapshot_results(restored.step_bindings)
-
-    def _apply_checkpoint_restore(
-        self,
-        snapshot: RuntimeSnapshotState,
-        *,
-        checkpoint_name: str,
-    ) -> None:
-        restored = _copy_runtime_snapshot(snapshot)
-        checkpoint_key = self._checkpoint_key_by_name[checkpoint_name]
-        self._record_indices = restored.record_indices
-        self.records = restored.records
-        for key, binding in restored.step_bindings.items():
-            self._step_bindings[key] = binding
-            self._step_binding_contexts[key] = self._checkpoint_restore_context(
-                binding_key=key,
-                checkpoint_key=checkpoint_key,
-            )
-            self._step_input_cache.pop(key, None)
-            self._step_result_cache.pop(key, None)
         self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
         self._restore_snapshot_results(restored.step_bindings)
 
@@ -1425,7 +1364,6 @@ class _RunSession:
                 or self.stop_after_index <= paused_step.node_index
             ):
                 self.stop_after_index = next_step_index
-            self._pending_checkpoint_restore_name = None
             self._paused_step = None
             self._persist_state()
             return
@@ -1481,7 +1419,7 @@ class _RunSession:
         if self.cursor >= len(self.case_plan.nodes):
             raise InvalidBranchUsageError(
                 "The journey executed more steps than the compiled plan expected.",
-                hint="Check for conditional logic or helper calls that add extra step() or checkpoint() calls at runtime.",
+                hint="Check for conditional logic or helper calls that add extra step() calls at runtime.",
             )
         node = self.case_plan.nodes[self.cursor]
         if not isinstance(node, expected_type):
@@ -1489,7 +1427,7 @@ class _RunSession:
             actual = type(node).__name__
             raise InvalidBranchUsageError(
                 f"The journey took a different path than the compiled plan at position {self.cursor + 1}: expected {expected}, got {actual}.",
-                hint="Make sure the journey calls step() and checkpoint() in the same structure each time it runs.",
+                hint="Make sure the journey calls step() in the same structure each time it runs.",
             )
         self.cursor += 1
         return node
@@ -1565,13 +1503,10 @@ class _RunSession:
             )
         return _ReplayBoundary(
             start_index=self._retry_anchor_index(node, node_index),
-            checkpoint_name=node.retry.from_checkpoint,
             preserve_retry_for=preserve_retry_for,
         )
 
     def _apply_replay_boundary(self, boundary: _ReplayBoundary) -> None:
-        if boundary.checkpoint_name is not None:
-            self._pending_checkpoint_restore_name = boundary.checkpoint_name
         self._trim_from(
             boundary.start_index,
             preserve_retry_for=boundary.preserve_retry_for,
@@ -1588,18 +1523,16 @@ class _RunSession:
         anchor_index: int | None = None
         if node.retry.from_node_id is not None:
             anchor_index = self._step_index_by_id.get(node.retry.from_node_id)
-        elif node.retry.from_checkpoint is not None:
-            anchor_index = self._checkpoint_index_by_name.get(node.retry.from_checkpoint)
 
         if anchor_index is None:
             raise InvalidBranchUsageError(
                 f"Retry anchor for step '{node.label or node.node_id}' is missing from the compiled journey path.",
-                hint="Make sure retry_from=... points to an earlier step() result or checkpoint() in the same journey path.",
+                hint="Make sure retry_from=... points to an earlier step() result in the same journey path.",
             )
         if anchor_index > node_index:
             raise InvalidBranchUsageError(
                 f"Retry anchor for step '{node.label or node.node_id}' appears after the step itself.",
-                hint="Point retry_from=... to an earlier step() result or checkpoint().",
+                hint="Point retry_from=... to an earlier step() result.",
             )
         return anchor_index
 
@@ -1734,15 +1667,16 @@ class _RunSession:
             binding.result = None
         self._step_result_cache.pop(binding_key, None)
 
-    def _promote_step_result(
-        self,
-        node: StepNode,
-        binding: StepBindingState,
-    ) -> None:
-        if self._state_controller is None or not self._rehydration_enabled:
-            return
-        binding_key = self._step_key_by_id[node.node_id]
-        self._state_controller.promote_successful_binding(binding_key, binding)
+    def _remember_step_result(self, node: StepNode, result: Any) -> None:
+        self._runtime_step_result_ids.setdefault(id(result), set()).add(node.node_id)
+
+    def step_anchor_for_value(self, value: object) -> _RuntimeStepAnchor:
+        node_ids = self._runtime_step_result_ids.get(id(value))
+        if not node_ids:
+            raise TypeError(
+                "branch(start_from=...) accepts a value returned by an earlier step() call or None."
+            )
+        return _RuntimeStepAnchor(frozenset(node_ids))
 
     def _handle_step_exception(
         self,
@@ -2022,30 +1956,24 @@ class _RunSession:
     def _binding_restore_context(self, binding_key: str) -> JourneyRestoreContext:
         return self._require_state_controller().binding_restore_context(binding_key)
 
-    def _checkpoint_store_context(
+    def _branch_anchor_store_context(
         self,
-        checkpoint_name: str,
+        anchor_key: str,
         binding_key: str,
     ) -> JourneyStoreContext:
-        checkpoint_key = self._checkpoint_key_by_name[checkpoint_name]
-        return self._require_state_controller().checkpoint_store_context(
-            checkpoint_key=checkpoint_key,
-            checkpoint_name=checkpoint_name,
+        return self._require_state_controller().branch_anchor_store_context(
+            anchor_key=anchor_key,
             binding_key=binding_key,
         )
 
-    def _checkpoint_restore_context(
+    def _branch_anchor_restore_context(
         self,
         *,
         binding_key: str,
-        checkpoint_key: str | None,
+        anchor_key: str,
     ) -> JourneyRestoreContext:
-        if checkpoint_key is None:
-            return self._binding_restore_context(binding_key)
-        checkpoint_name = self._checkpoint_name_by_key[checkpoint_key]
-        return self._require_state_controller().checkpoint_restore_context(
-            checkpoint_key=checkpoint_key,
-            checkpoint_name=checkpoint_name,
+        return self._require_state_controller().branch_anchor_restore_context(
+            anchor_key=anchor_key,
             binding_key=binding_key,
         )
 
@@ -2146,7 +2074,7 @@ class _RunSession:
         output: Any,
         binding: StepBindingState,
     ) -> bool:
-        self._promote_step_result(node, binding)
+        self._remember_step_result(node, output)
         self._retry_remaining.pop(node.node_id, None)
         self._dirty_node_id = None
         self.replay_from_index = max(self.replay_from_index, node_index + 1)
@@ -2159,6 +2087,32 @@ class _RunSession:
             duration_seconds=time.perf_counter() - started_at,
         )
         return should_stop
+
+    def _store_branch_anchor_snapshot(self, node: StepNode) -> None:
+        if (
+            self._state_controller is None
+            or not self._rehydration_enabled
+            or node.node_id not in self._branch_anchor_step_ids
+        ):
+            return
+
+        anchor_key = self._step_key_by_id[node.node_id]
+        snapshot = RuntimeSnapshotState(
+            record_indices=list(self._record_indices),
+            records=list(self.records),
+            step_bindings={
+                key: self._freeze_binding(
+                    key,
+                    binding,
+                    context=self._branch_anchor_store_context(anchor_key, key),
+                    description_prefix=f"branch anchor '{node.label or node.node_id}'",
+                )
+                for key, binding in self._step_bindings.items()
+            },
+            retry_remaining=dict(self._retry_remaining),
+            step_attempts=dict(self._step_attempts),
+        )
+        self._state_controller.store_branch_anchor_snapshot(anchor_key, snapshot)
 
     def _close_step_exit_objects(
         self,
@@ -2202,14 +2156,13 @@ class _RunSession:
                     f"Retry replay is missing the saved result for step '{node.label or node.node_id}'.",
                     hint="This usually means the journey changed after the run started. Start over or use a new state file.",
                 )
-            return cast(
-                R,
-                self._materialize_step_result(
-                    binding_key,
-                    binding,
-                    description=f"saved result for step '{node.label or node.node_id}'",
-                ),
+            result = self._materialize_step_result(
+                binding_key,
+                binding,
+                description=f"saved result for step '{node.label or node.node_id}'",
             )
+            self._remember_step_result(node, result)
+            return cast(R, result)
 
         if binding is not None and binding.has_result and not self._has_record_for(node_index):
             result = self._materialize_step_result(
@@ -2217,6 +2170,7 @@ class _RunSession:
                 binding,
                 description=f"saved result for step '{node.label or node.node_id}'",
             )
+            self._remember_step_result(node, result)
             self.replay_from_index = max(self.replay_from_index, node_index + 1)
             should_stop = self._record(node_index, node, ok=True, result=result)
             if should_stop:
@@ -2238,57 +2192,12 @@ class _RunSession:
         )
         return lifecycle.run(fn, tuple(args), dict(kwargs))
 
-    def checkpoint(self) -> CheckpointRef:
-        checkpoint_index = self.cursor
-        checkpoint_node = self._consume(CheckpointNode)
-        checkpoint_key = self._checkpoint_key_by_name[checkpoint_node.name]
-        if self._pending_checkpoint_restore_name == checkpoint_node.name:
-            snapshot = self._require_state_controller().checkpoint_snapshot_for(checkpoint_key)
-            if snapshot is None:
-                raise InvalidBranchUsageError(
-                    f"Replay is missing the saved checkpoint snapshot for '{checkpoint_node.name}'.",
-                    hint="This usually means the journey changed after the run started. Start over or use a new state file.",
-                )
-            self._apply_checkpoint_restore(
-                snapshot,
-                checkpoint_name=checkpoint_node.name,
-            )
-            self._pending_checkpoint_restore_name = None
-            return CheckpointRef(name=checkpoint_node.name)
-
-        if checkpoint_index >= self.replay_from_index:
-            should_stop = self._record(
-                checkpoint_index,
-                checkpoint_node,
-                ok=True,
-                result=checkpoint_node.name,
-            )
-            if should_stop:
-                raise _StopCase()
-            if self._state_controller is not None and self._rehydration_enabled:
-                snapshot = RuntimeSnapshotState(
-                    record_indices=list(self._record_indices),
-                    records=list(self.records),
-                    step_bindings={
-                        key: self._freeze_binding(
-                            key,
-                            binding,
-                            context=self._checkpoint_store_context(checkpoint_node.name, key),
-                            description_prefix=f"checkpoint '{checkpoint_node.name}'",
-                        )
-                        for key, binding in self._step_bindings.items()
-                    },
-                    retry_remaining=dict(self._retry_remaining),
-                    step_attempts=dict(self._step_attempts),
-                )
-                self._state_controller.store_checkpoint_snapshot(
-                    checkpoint_key,
-                    snapshot,
-                )
-
-        return CheckpointRef(name=checkpoint_node.name)
-
-    def branch(self, *, start_from: str | None, frame: FrameType) -> bool:
+    def branch(
+        self,
+        *,
+        start_from: _RuntimeStepAnchor | None,
+        frame: FrameType,
+    ) -> bool:
         site = resolve_branch_call_site(frame)
         spec = self.validation.branch_conditions.get(site)
         if spec is None:
@@ -2340,10 +2249,16 @@ class _RunSession:
                 "The journey took a different branch path than the compiled plan expected.",
                 hint="Make sure the journey calls journey.branch(...) in the same order during execution that it used during planning.",
             )
-        if start_from != node.start_from:
+        if node.start_from is None:
+            start_from_matches_plan = start_from is None
+        elif start_from is None:
+            start_from_matches_plan = False
+        else:
+            start_from_matches_plan = node.start_from in start_from.node_ids
+        if not start_from_matches_plan:
             raise InvalidBranchUsageError(
-                "journey.branch(start_from=...) used a checkpoint that does not match the compiled plan.",
-                hint="Make sure each journey.branch(start_from=...) points to the same checkpoint it used during planning.",
+                "journey.branch(start_from=...) used a step that does not match the compiled plan.",
+                hint="Make sure each journey.branch(start_from=...) points to the same earlier step result it used during planning.",
             )
 
         if marker_index >= self.replay_from_index:
@@ -2528,6 +2443,7 @@ class _StepLifecycle:
 
     def _post_exit(self) -> None:
         self._enter(_STEP_LIFECYCLE_POST_EXIT)
+        self.session._store_branch_anchor_snapshot(self.node)
         _raise_if_interrupted_after_step()
 
 
@@ -2571,18 +2487,27 @@ def _select_cases(plan: JourneyPlan, step: str | None) -> list[_SelectedCase]:
 def _replay_anchor_for(case_plan: CasePlan, stop_after_index: int | None) -> str | None:
     if stop_after_index is None:
         return None
+    step_by_id = {
+        node.node_id: node
+        for node in case_plan.nodes
+        if isinstance(node, StepNode)
+    }
     upto = min(stop_after_index, len(case_plan.nodes) - 1)
     for index in range(upto, -1, -1):
         node = case_plan.nodes[index]
         if isinstance(node, BranchMarkerNode) and node.start_from is not None:
-            return node.start_from
+            anchor = step_by_id.get(node.start_from)
+            if anchor is None:
+                return node.start_from
+            return anchor.label or anchor.node_id
     return None
 
 
-def _start_checkpoint_name_for(case_plan: CasePlan) -> str | None:
+def _branch_start_anchor_key_for(case_plan: CasePlan) -> str | None:
+    step_keys = _case_rehydration_maps(case_plan)
     for node in case_plan.nodes:
         if isinstance(node, BranchMarkerNode) and node.start_from is not None:
-            return node.start_from
+            return step_keys.get(node.start_from)
     return None
 
 
@@ -2676,11 +2601,6 @@ def _stable_node_payload(node: Any) -> Any:
             "retry": _stable_value(asdict(node.retry)) if node.retry is not None else None,
             "source_fingerprint": node.source_fingerprint,
         }
-    if isinstance(node, CheckpointNode):
-        return {
-            "node_id": node.node_id,
-            "name": node.name,
-        }
     return _stable_value(asdict(node))
 
 
@@ -2755,27 +2675,14 @@ def _replay_boundary_for_case_step(
         for index, item in enumerate(case_plan.nodes)
         if isinstance(item, StepNode)
     }
-    checkpoint_index_by_name = {
-        item.name: index
-        for index, item in enumerate(case_plan.nodes)
-        if isinstance(item, CheckpointNode)
-    }
     if node.retry.from_node_id is not None:
         anchor_index = step_index_by_id.get(node.retry.from_node_id)
-        checkpoint_name = None
-    elif node.retry.from_checkpoint is not None:
-        anchor_index = checkpoint_index_by_name.get(node.retry.from_checkpoint)
-        checkpoint_name = node.retry.from_checkpoint
     else:
         anchor_index = node_index
-        checkpoint_name = None
 
     if anchor_index is None or anchor_index > node_index:
         return None
-    return _ReplayBoundary(
-        start_index=anchor_index,
-        checkpoint_name=checkpoint_name,
-    )
+    return _ReplayBoundary(start_index=anchor_index)
 
 
 def _record_matches_node(
@@ -2797,8 +2704,6 @@ def _record_matches_node(
             binding.fn_ref == node.fn_ref
             and binding.source_fingerprint == node.source_fingerprint
         )
-    if isinstance(node, CheckpointNode):
-        return record.result == node.name
     if isinstance(node, BranchMarkerNode):
         return record.result == node.active_key
     return False
@@ -2820,7 +2725,7 @@ def _snapshot_matches_prefix(
     if [index for index, _ in prefix] != list(range(boundary_index)):
         return False
 
-    step_keys, _, _ = _case_rehydration_maps(case_plan)
+    step_keys = _case_rehydration_maps(case_plan)
     for index, record in prefix:
         node = case_plan.nodes[index]
         binding = (
@@ -2838,7 +2743,7 @@ def _trim_snapshot_to_prefix(
     case_plan: CasePlan,
     boundary_index: int,
 ) -> RuntimeSnapshotState:
-    step_keys, _, _ = _case_rehydration_maps(case_plan)
+    step_keys = _case_rehydration_maps(case_plan)
     keep_step_ids = {
         node.node_id
         for node in case_plan.nodes[:boundary_index]
@@ -3061,24 +2966,13 @@ def _execute_plan(
                 case_index=case_index,
                 case_id=selected_case.case_plan.case_id,
             )
-            _, checkpoint_keys, _ = _case_rehydration_maps(selected_case.case_plan)
-            start_checkpoint_name = _start_checkpoint_name_for(selected_case.case_plan)
-            start_checkpoint_key = (
-                checkpoint_keys.get(start_checkpoint_name)
-                if start_checkpoint_name is not None
-                else None
-            )
-            checkpoint_seed = (
-                state_controller.checkpoint_snapshot_for(start_checkpoint_key)
+            start_anchor_key = _branch_start_anchor_key_for(selected_case.case_plan)
+            branch_anchor_seed = (
+                state_controller.branch_anchor_snapshot_for(start_anchor_key)
                 if rehydration_enabled
                 and restored_state is None
                 and selected_case.stop_after_index is None
-                and start_checkpoint_key is not None
-                else None
-            )
-            successful_bindings = (
-                state_controller.successful_step_bindings()
-                if checkpoint_seed is not None
+                and start_anchor_key is not None
                 else None
             )
             run_session = _RunSession(
@@ -3090,11 +2984,10 @@ def _execute_plan(
                 rehydration_enabled=rehydration_enabled,
                 state_controller=state_controller,
                 restored_state=restored_state,
-                checkpoint_seed=checkpoint_seed,
-                checkpoint_restore_name=(
-                    start_checkpoint_name if checkpoint_seed is not None else None
+                branch_anchor_seed=branch_anchor_seed,
+                branch_anchor_key=(
+                    start_anchor_key if branch_anchor_seed is not None else None
                 ),
-                successful_bindings=successful_bindings,
                 observer=execution_observer,
             )
             if restored_state is None:

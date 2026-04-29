@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from journeysdk import checkpoint, journey, step
+from journeysdk import journey, step
 
 EVENTS: list[str] = []
 _ATTEMPTS = {
     "same_step": 0,
     "report_issue": 0,
-    "checkpoint_refresh": 0,
-    "checkpoint_wait": 0,
+    "anchor_refresh": 0,
+    "anchor_wait": 0,
 }
 
 
@@ -65,23 +65,23 @@ def load_status_request() -> dict[str, str]:
 
 
 def refresh_status_cache() -> dict[str, int]:
-    _ATTEMPTS["checkpoint_refresh"] += 1
-    cache = {"refresh_number": _ATTEMPTS["checkpoint_refresh"]}
+    _ATTEMPTS["anchor_refresh"] += 1
+    cache = {"refresh_number": _ATTEMPTS["anchor_refresh"]}
     EVENTS.append(f"refresh_status_cache:{cache['refresh_number']}")
     return cache
 
 
-def wait_for_checkpoint_retry(
+def wait_for_anchor_retry(
     request: dict[str, str],
     cache: dict[str, int],
 ) -> dict[str, str]:
-    _ATTEMPTS["checkpoint_wait"] += 1
+    _ATTEMPTS["anchor_wait"] += 1
     EVENTS.append(
-        "wait_for_checkpoint_retry:"
-        f"{request['request_id']}:refresh_{cache['refresh_number']}:attempt_{_ATTEMPTS['checkpoint_wait']}"
+        "wait_for_anchor_retry:"
+        f"{request['request_id']}:refresh_{cache['refresh_number']}:attempt_{_ATTEMPTS['anchor_wait']}"
     )
-    if _ATTEMPTS["checkpoint_wait"] < 2:
-        raise RuntimeError("checkpoint retry demo is still waiting")
+    if _ATTEMPTS["anchor_wait"] < 2:
+        raise RuntimeError("step-anchor retry demo is still waiting")
     return {
         "request_id": request["request_id"],
         "status": "ready",
@@ -89,10 +89,10 @@ def wait_for_checkpoint_retry(
     }
 
 
-def assert_checkpoint_retry_ready(result: dict[str, str]) -> bool:
-    EVENTS.append(f"assert_checkpoint_retry_ready:{result['request_id']}")
+def assert_anchor_retry_ready(result: dict[str, str]) -> bool:
+    EVENTS.append(f"assert_anchor_retry_ready:{result['request_id']}")
     if result.get("status") != "ready":
-        raise AssertionError(f"Unexpected checkpoint retry status: {result.get('status')!r}")
+        raise AssertionError(f"Unexpected retry status: {result.get('status')!r}")
     if result.get("refresh_number") != "2":
         raise AssertionError(
             f"Expected the second cache refresh to win, got {result.get('refresh_number')!r}."
@@ -120,16 +120,15 @@ def retry_from_step_result_journey() -> None:
 
 
 @journey
-def retry_from_checkpoint_journey() -> None:
+def retry_from_step_anchor_journey() -> None:
     request = step(load_status_request)
-    retry_anchor = checkpoint()
-    cache = step(refresh_status_cache)
+    retry_anchor = step(refresh_status_cache)
     result = step(
-        wait_for_checkpoint_retry,
+        wait_for_anchor_retry,
         request,
-        cache,
+        retry_anchor,
         retry=1,
         retry_delay=0,
         retry_from=retry_anchor,
     )
-    step(assert_checkpoint_retry_ready, result)
+    step(assert_anchor_retry_ready, result)

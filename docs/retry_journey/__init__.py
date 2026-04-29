@@ -2,7 +2,7 @@
 
 from .retry_journey import (
     EVENTS,
-    assert_checkpoint_retry_ready,
+    assert_anchor_retry_ready,
     assert_report_ready,
     issue_report_request,
     load_status_request,
@@ -10,16 +10,16 @@ from .retry_journey import (
     refresh_status_cache,
     reset_demo_state,
     retry_current_step_journey,
-    retry_from_checkpoint_journey,
+    retry_from_step_anchor_journey,
     retry_from_step_result_journey,
-    wait_for_checkpoint_retry,
+    wait_for_anchor_retry,
     wait_for_report,
     wait_for_same_step,
 )
 
 __all__ = [
     "EVENTS",
-    "assert_checkpoint_retry_ready",
+    "assert_anchor_retry_ready",
     "assert_report_ready",
     "issue_report_request",
     "load_status_request",
@@ -27,9 +27,9 @@ __all__ = [
     "refresh_status_cache",
     "reset_demo_state",
     "retry_current_step_journey",
-    "retry_from_checkpoint_journey",
+    "retry_from_step_anchor_journey",
     "retry_from_step_result_journey",
-    "wait_for_checkpoint_retry",
+    "wait_for_anchor_retry",
     "wait_for_report",
     "wait_for_same_step",
 ]

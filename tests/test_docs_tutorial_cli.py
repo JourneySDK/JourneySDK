@@ -102,7 +102,7 @@ def test_branching_readme_target_command_reports_replay_anchor(
     logs = capture.err
 
     assert exit_code == 0
-    assert "stopped_at=assert_manual_review_path replay_anchor=cp_1" in logs
+    assert "stopped_at=assert_manual_review_path replay_anchor=classify_signup_request" in logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -166,7 +166,7 @@ def test_retry_readme_commands_show_retry_behavior(
             "--file",
             "docs/retry_journey/retry_journey.py",
             "--journey",
-            "retry_from_checkpoint_journey",
+            "retry_from_step_anchor_journey",
         ]
     )
     output = capsys.readouterr().err

@@ -4,7 +4,7 @@ The first real Journey payoff appears when one authored function turns into more
 
 This chapter covers three related ideas:
 
-- `checkpoint()` lets later cases replay from a known point
+- step anchors let later cases replay from a known point
 - `branch()` lets one function produce several linear cases
 - `--step` and `--develop-step` let you run only the case that reaches one target label
 
@@ -13,7 +13,7 @@ This chapter covers three related ideas:
 Read `docs/branching_journey/branching_journey.py`.
 
 ```python
-from journeysdk import branch, checkpoint, journey, step
+from journeysdk import branch, journey, step
 
 
 @journey
@@ -21,23 +21,21 @@ def branching_journey() -> None:
     signup_request = step(load_signup_request)
     classified = step(classify_signup_request, signup_request)
 
-    after_classification = checkpoint()
     if branch():
         step(assert_fast_track_path, classified)
-    elif branch(start_from=after_classification):
+    elif branch(start_from=classified):
         step(assert_manual_review_path, classified)
 ```
 
 Why this shape matters:
 
 - `load_signup_request` and `classify_signup_request` are shared setup
-- the checkpoint gives later execution a replay anchor and can produce checkpoint snapshots
+- `branch(start_from=classified)` gives later execution a replay anchor at that step's post-exit boundary
 - each `branch(...)` arm becomes its own case
 
-`checkpoint()` is marker-only. External system state belongs on the values that
-cross that replay boundary, not on the checkpoint itself. If a step result needs
-custom rehydration behavior, define it at module top level and make that value
-implement the Journey rehydration protocol:
+External system state belongs on the step values that cross replay boundaries.
+If a step result needs custom rehydration behavior, define it at module top
+level and make that value implement the Journey rehydration protocol:
 
 ```python
 class BrowserSession:
@@ -50,12 +48,13 @@ class BrowserSession:
 
 
 session = step(open_browser_session)
-after_login = checkpoint()
+if branch(start_from=session):
+    ...
 ```
 
 Journey stores and restores replayable step values whenever execution truly
-rewinds to that boundary, such as a checkpoint-started later branch. The
-protocol is documented in the README's Journey Rehydration Protocol section.
+rewinds to a step boundary, such as a step-started later branch. The protocol is
+documented in the README's Journey Rehydration Protocol section.
 
 Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
 targeted run uses the compiled labels to choose one case.
@@ -83,13 +82,13 @@ Execution
 [journey] time=... level=INFO component=executor event=execution_log message="  branch bg_1=branch_2"
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_manual_review_path attempt=1 start"
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_manual_review_path attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_manual_review_path replay_anchor=cp_1"
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_manual_review_path replay_anchor=classify_signup_request"
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
 That output is the reason `--step` is so useful during development: Journey chooses the single case that reaches the
-label you care about. The reported `replay_anchor` names the branch checkpoint, but this targeted run still starts from
-the selected case's beginning.
+label you care about. The reported `replay_anchor` names the branch step anchor, but this targeted run still starts
+from the selected case's beginning.
 
 ### Stop After the Target Step While You Iterate
 
@@ -118,12 +117,12 @@ open and prompt after each paused step. Journey reloads and recompiles the selec
 continue, so edits to the retried step or later steps are picked up immediately; if code that Journey would have reused
 from the already-run prefix changed, the selected case starts again from the beginning.
 
-## Rehydrate Later Cases from a Checkpoint
+## Rehydrate Later Cases from a Step Anchor
 
 Read `docs/rehydration_journey/rehydration_journey.py`.
 
 ```python
-from journeysdk import branch, checkpoint, journey, step
+from journeysdk import branch, journey, step
 
 
 @journey
@@ -131,21 +130,20 @@ def rehydration_journey() -> None:
     payload = next_external_payload()
     context = step(prepare_context, payload)
 
-    after_setup = checkpoint()
-    shared = step(shared_after_checkpoint, context)
+    shared = step(shared_after_anchor, context)
 
-    if branch(start_from=after_setup):
+    if branch(start_from=context):
         step(assert_branch_a, shared)
-    elif branch(start_from=after_setup):
+    elif branch(start_from=context):
         step(assert_branch_b, shared)
 ```
 
 This example is intentionally small. It exists to show one idea clearly: in a full multi-case run, later branches can
-restart from a saved checkpoint snapshot instead of rerunning shared setup.
+restart from a saved step anchor instead of rerunning earlier shared setup.
 
-If a value created before the checkpoint implements `__store__` /
-`__restore__`, Journey restores that external state before the later branch
-continues from the checkpoint anchor.
+If a value created by the anchor step implements `__store__` / `__restore__`,
+Journey restores that external state before the later branch continues from the
+anchor's post-exit boundary.
 
 ### Target the Second Branch
 
@@ -157,29 +155,30 @@ uv run journey --file docs/rehydration_journey/rehydration_journey.py --step ass
 Plan
 Journey docs/rehydration_journey/rehydration_journey.py:rehydration_journey
 journey_id=rehydration_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare_context', 'shared_after_checkpoint', 'assert_branch_a']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare_context', 'shared_after_checkpoint', 'assert_branch_b']
+- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare_context', 'shared_after_anchor', 'assert_branch_a']
+- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare_context', 'shared_after_anchor', 'assert_branch_b']
 Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
 [journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
 [journey] time=... level=INFO component=executor event=execution_log message="  step prepare_context attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step shared_after_checkpoint attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step shared_after_anchor attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  branch bg_1=branch_2"
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_branch_b attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_branch_b replay_anchor=cp_1"
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_branch_b replay_anchor=prepare_context"
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-The `replay_anchor=cp_1` part tells you which checkpoint is the branch replay anchor. For a targeted `--step` run it is
-reported metadata; Journey does not skip directly to that checkpoint unless existing state or retry behavior causes
-replay.
+The `replay_anchor=prepare_context` part tells you which step is the branch replay anchor. For a targeted `--step` run
+it is reported metadata; Journey still executes from the selected case's required beginning unless existing state or
+retry behavior causes replay.
 
 ## What To Notice
 
 - Authoring stays sequential, even when execution becomes multi-case.
-- `checkpoint()` is not just a marker for humans. It can create checkpoint snapshots and names replay anchors.
-- External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, checkpoint
+- Branch `start_from` points to an earlier step result, and later branch cases resume from that step's post-exit
+  boundary.
+- External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, branch
   rewinds, and `--state` all use the same rehydration path.
 - `--step` picks one case. `--develop-step` picks one case and stops after the target so you can iterate faster.
 - Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.

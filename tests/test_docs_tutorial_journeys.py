@@ -112,7 +112,7 @@ def test_branching_journey_compiles_and_targets_the_manual_path():
 
     assert len(report.case_reports) == 1
     assert report.case_reports[0].stopped_at_label == "assert_manual_review_path"
-    assert report.case_reports[0].replay_anchor == "cp_1"
+    assert report.case_reports[0].replay_anchor == "classify_signup_request"
     assert branching_docs.EVENTS == [
         "load_signup_request:signup-001",
         "classify_signup_request:signup-001",
@@ -120,7 +120,7 @@ def test_branching_journey_compiles_and_targets_the_manual_path():
     ]
 
 
-def test_retry_examples_show_same_step_step_anchor_and_checkpoint_anchor():
+def test_retry_examples_show_same_step_and_step_anchors():
     retry_docs.reset_demo_state()
     journey.execute(retry_docs.retry_current_step_journey)
     assert retry_docs.EVENTS == [
@@ -140,14 +140,14 @@ def test_retry_examples_show_same_step_step_anchor_and_checkpoint_anchor():
     ]
 
     retry_docs.reset_demo_state()
-    journey.execute(retry_docs.retry_from_checkpoint_journey)
+    journey.execute(retry_docs.retry_from_step_anchor_journey)
     assert retry_docs.EVENTS == [
         "load_status_request:status-001",
         "refresh_status_cache:1",
-        "wait_for_checkpoint_retry:status-001:refresh_1:attempt_1",
+        "wait_for_anchor_retry:status-001:refresh_1:attempt_1",
         "refresh_status_cache:2",
-        "wait_for_checkpoint_retry:status-001:refresh_2:attempt_2",
-        "assert_checkpoint_retry_ready:status-001",
+        "wait_for_anchor_retry:status-001:refresh_2:attempt_2",
+        "assert_anchor_retry_ready:status-001",
     ]
 
 

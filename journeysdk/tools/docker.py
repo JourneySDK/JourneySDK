@@ -200,7 +200,7 @@ def store_docker(
     *,
     snapshot_name: str = "default",
 ) -> None:
-    """Store one Docker Compose snapshot for checkpoint replay."""
+    """Store one Docker Compose snapshot for Journey replay."""
 
     _store_docker_snapshot(
         stack=stack,
@@ -335,7 +335,7 @@ def restore_docker(
     *,
     snapshot_name: str = "default",
 ) -> None:
-    """Restore one stored Docker Compose snapshot for checkpoint replay."""
+    """Restore one stored Docker Compose snapshot for Journey replay."""
 
     _restore_docker_snapshot(
         stack=stack,
@@ -652,11 +652,6 @@ def _snapshot_dir(
 
 
 def _snapshot_name_for_context(context: JourneyStoreContext) -> str:
-    if context.checkpoint_name is not None:
-        return _normalize_snapshot_name(
-            owner="DockerComposeStack.__store__",
-            value=context.checkpoint_name,
-        )
     return _slugify(f"{context.boundary_kind}-{context.boundary_id}")
 
 

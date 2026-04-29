@@ -13,7 +13,7 @@ This chapter covers both cases:
 Read `docs/retry_journey/retry_journey.py`.
 
 ```python
-from journeysdk import checkpoint, journey, step
+from journeysdk import journey, step
 
 
 @journey
@@ -36,31 +36,31 @@ def retry_from_step_result_journey() -> None:
 
 
 @journey
-def retry_from_checkpoint_journey() -> None:
+def retry_from_step_anchor_journey() -> None:
     request = step(load_status_request)
-    retry_anchor = checkpoint()
-    cache = step(refresh_status_cache)
+    retry_anchor = step(refresh_status_cache)
     result = step(
-        wait_for_checkpoint_retry,
+        wait_for_anchor_retry,
         request,
-        cache,
+        retry_anchor,
         retry=1,
         retry_delay=0,
         retry_from=retry_anchor,
     )
-    step(assert_checkpoint_retry_ready, result)
+    step(assert_anchor_retry_ready, result)
 ```
 
 Those three journeys represent the three most common retry boundaries:
 
 - retry only the failing step
 - retry from an earlier step result
-- retry from a checkpoint and replay everything after it
+- retry from an earlier setup step and replay everything from that step
 
-Checkpoint replay follows the same rule as `--state`: Journey reuses saved step
-bindings before the replay boundary. If one of those values needs custom side
-effects, put that logic on a module-level value type with `__store__` /
-`__restore__` as described in the README's Journey Rehydration Protocol section.
+Step-anchor replay follows the same rule as `--state`: Journey reuses saved step
+bindings before the replay boundary, then reruns from the anchor step. If one of
+those values needs custom side effects, put that logic on a module-level value
+type with `__store__` / `__restore__` as described in the README's Journey
+Rehydration Protocol section.
 
 That matters when the replayable value wraps external state instead of being a
 plain pickleable object:
@@ -82,13 +82,12 @@ def next_context() -> ExternalState:
 @journey
 def retry_with_external_state() -> None:
     context = step(next_context)
-    anchor = checkpoint()
-    step(refresh_after_checkpoint, context)
+    anchor = step(refresh_after_anchor, context)
     step(wait_until_ready, context, retry=1, retry_delay=0, retry_from=anchor)
 ```
 
-Journey stores that step result before the replay boundary and reuses it on
-retries and resume, so the same external-state logic works for checkpoint
+Journey stores step results before the replay boundary and reuses them on
+retries and resume, so the same external-state logic works for step-anchor
 rewinds and `--state` restores.
 
 ### Retry the Current Step
@@ -144,28 +143,28 @@ Execution
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-### Retry from a Checkpoint
+### Retry from an Earlier Setup Step
 
 ```bash
-uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_checkpoint_journey
+uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_step_anchor_journey
 ```
 
 ```console
 Plan
-Journey docs/retry_journey/retry_journey.py:retry_from_checkpoint_journey
-journey_id=retry_from_checkpoint_journey function_ref=...
-- case_1 branch_env={} labels=['load_status_request', 'refresh_status_cache', 'wait_for_checkpoint_retry', 'assert_checkpoint_retry_ready']
+Journey docs/retry_journey/retry_journey.py:retry_from_step_anchor_journey
+journey_id=retry_from_step_anchor_journey function_ref=...
+- case_1 branch_env={} labels=['load_status_request', 'refresh_status_cache', 'wait_for_anchor_retry', 'assert_anchor_retry_ready']
 Summary: 1 journey planned, 1 case planned, 0 failed
 
 Execution
 [journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
 [journey] time=... level=INFO component=executor event=execution_log message="  step load_status_request attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_checkpoint_retry attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: checkpoint retry demo is still waiting"
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_anchor_retry attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: step-anchor retry demo is still waiting"
 [journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=2 start"
 [journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=2 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_checkpoint_retry attempt=2 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step assert_checkpoint_retry_ready attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_anchor_retry attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=execution_log message="  step assert_anchor_retry_ready attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=4 duration=..."
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
@@ -285,7 +284,8 @@ Expected stderr:
 
 - Retries are explicit. Journey does not silently retry behind your back.
 - `retry_from=` is the switch that decides the replay boundary.
-- Checkpoint snapshots store saved bindings on the first hit and restore them when replay rewinds to that checkpoint.
+- Step anchors define replay boundaries. Retry from a step reruns the anchor step; branch `start_from` resumes from the
+  anchor step's completed post-exit state.
 - Any value that Journey may need to replay later must be pickle-serializable or rehydratable.
 - `--state` keeps successful step bindings so the rerun can skip what already succeeded.
 - First Ctrl-C in a CLI `--state` run resumes after the completed step; second Ctrl-C restarts the dirty step from the

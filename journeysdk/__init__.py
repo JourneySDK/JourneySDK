@@ -1,6 +1,6 @@
 """journey v1 API."""
 
-from .api import branch, checkpoint, journey, step
+from .api import branch, journey, step
 from .errors import (
     AmbiguousStepSelectionError,
     AmbiguousJourneySelectionError,
@@ -13,7 +13,6 @@ from .errors import (
     JourneySelectionError,
     NoJourneysFoundError,
     StepNotFoundError,
-    UnknownCheckpointError,
     UnsupportedControlFlowError,
     UnsupportedLoopError,
 )
@@ -78,11 +77,9 @@ __all__ = [
     "StepNotFoundError",
     "StepResult",
     "StepRetry",
-    "UnknownCheckpointError",
     "UnsupportedControlFlowError",
     "UnsupportedLoopError",
     "branch",
-    "checkpoint",
     "compile_journey",
     "execute",
     "journey",

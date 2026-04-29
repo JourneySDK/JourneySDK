@@ -100,7 +100,7 @@ class InvalidBranchUsageError(CompilationError):
 
     def __init__(
         self,
-        message: str = "This journey uses branch or checkpoint selection in an unsupported way.",
+        message: str = "This journey uses branch selection in an unsupported way.",
         *,
         hint: str | None = None,
     ) -> None:
@@ -125,18 +125,6 @@ class UnsupportedLoopError(UnsupportedControlFlowError):
     def __init__(
         self,
         message: str = "This journey uses a loop form that journey v1 does not support.",
-        *,
-        hint: str | None = None,
-    ) -> None:
-        super().__init__(message, hint=hint)
-
-
-class UnknownCheckpointError(CompilationError):
-    """Raised when a branch references a missing checkpoint."""
-
-    def __init__(
-        self,
-        message: str = "A step or branch references a checkpoint that was never created earlier in the journey.",
         *,
         hint: str | None = None,
     ) -> None:

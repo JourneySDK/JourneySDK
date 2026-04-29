@@ -125,19 +125,6 @@ class _JourneyValidator(ast.NodeVisitor):
             return func.attr == "branch"
         return False
 
-    def _is_branch_selector_call(self, call: ast.Call) -> bool:
-        func = call.func
-        is_checkpoint = False
-        if isinstance(func, ast.Name):
-            is_checkpoint = func.id == "checkpoint"
-        elif isinstance(func, ast.Attribute):
-            is_checkpoint = func.attr == "checkpoint"
-
-        if not is_checkpoint:
-            return False
-
-        return any(keyword.arg == "branches" for keyword in call.keywords)
-
     def _find_branch_calls(self, node: ast.AST) -> list[ast.Call]:
         found: list[ast.Call] = []
         for subnode in ast.walk(node):
@@ -150,14 +137,6 @@ class _JourneyValidator(ast.NodeVisitor):
     def _contains_ok_attribute(self, node: ast.AST) -> bool:
         for subnode in ast.walk(node):
             if isinstance(subnode, ast.Attribute) and subnode.attr == "ok":
-                return True
-        return False
-
-    def _has_selector_call(self, node: ast.AST) -> bool:
-        for subnode in ast.walk(node):
-            if not isinstance(subnode, ast.Call):
-                continue
-            if isinstance(subnode.func, ast.Attribute) and subnode.func.attr == "is_":
                 return True
         return False
 
@@ -182,17 +161,7 @@ class _JourneyValidator(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> Any:
         if isinstance(node.value, ast.Call):
-            if self._is_branch_selector_call(node.value):
-                self._add_issue(
-                    InvalidBranchUsageError,
-                    "checkpoint(branches=[...]) is no longer supported.",
-                    hint=(
-                        "Create a plain checkpoint first, then use "
-                        "`if journey.branch(start_from=checkpoint):` / "
-                        "`elif journey.branch(start_from=checkpoint):`."
-                    ),
-                )
-            elif self._is_branch_call(node.value):
+            if self._is_branch_call(node.value):
                 self._add_issue(
                     InvalidBranchUsageError,
                     "journey.branch(...) is only valid as a direct if/elif condition.",
@@ -259,12 +228,6 @@ class _JourneyValidator(ast.NodeVisitor):
                     direct_branch_calls.append(call_node)
                     self.allowed_branch_call_ids.add(id(call_node))
             else:
-                if self._has_selector_call(if_node.test):
-                    self._add_issue(
-                        InvalidBranchUsageError,
-                        "Branch selectors with `.is_(...)` are no longer supported.",
-                        hint="Use journey.branch(...) directly as the whole if/elif condition instead.",
-                    )
                 if self._contains_ok_attribute(if_node.test):
                     self._add_issue(
                         UnsupportedControlFlowError,
@@ -338,24 +301,6 @@ class _JourneyValidator(ast.NodeVisitor):
                 UnsupportedControlFlowError,
                 "Direct resume(...) calls are not supported in journey v1.",
                 hint="Use `journey --state ...` to resume a run instead.",
-            )
-
-        if self._is_branch_selector_call(node):
-            self._add_issue(
-                InvalidBranchUsageError,
-                "checkpoint(branches=[...]) is no longer supported.",
-                hint=(
-                    "Create a plain checkpoint first, then use "
-                    "`if journey.branch(start_from=checkpoint):` / "
-                    "`elif journey.branch(start_from=checkpoint):`."
-                ),
-            )
-
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "is_":
-            self._add_issue(
-                InvalidBranchUsageError,
-                "Branch selectors with `.is_(...)` are no longer supported.",
-                hint="Use journey.branch(...) directly as the whole if/elif condition instead.",
             )
 
         branch_calls = self._find_branch_calls(node)

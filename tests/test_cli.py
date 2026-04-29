@@ -662,8 +662,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
 
         @journey.journey
         def flow():
-            journey.step(prepare)
-            after_prepare = journey.checkpoint()
+            after_prepare = journey.step(prepare)
             if journey.branch():
                 journey.step(finish_fast)
             elif journey.branch(start_from=after_prepare):
@@ -687,7 +686,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
         "- case_2 ok steps=2 duration="
         in log_output
     )
-    assert "stopped_at=finish_manual replay_anchor=cp_1" in log_output
+    assert "stopped_at=finish_manual replay_anchor=prepare" in log_output
     assert "  step prepare attempt=1 ok duration=" in log_output
     assert "  branch bg_1=branch_2" in log_output
     assert "  step finish_manual attempt=1 ok duration=" in log_output
@@ -1194,7 +1193,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in second_output
 
 
-def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
+def test_execute_develop_step_retry_same_step_after_failed_pause(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1229,8 +1228,7 @@ def test_execute_develop_step_retry_from_checkpoint_after_failed_pause(
         @journey.journey
         def flow():
             journey.step(prepare)
-            anchor = journey.checkpoint()
-            journey.step(poll, retry=1, retry_delay=0, retry_from=anchor)
+            journey.step(poll, retry=1, retry_delay=0)
             journey.step(finish)
         """,
     )
@@ -1839,7 +1837,7 @@ def test_execute_continues_and_summarizes_compile_failures_by_default(
 
         @journey.journey
         def broken():
-            if journey.branch(start_from="missing_checkpoint"):
+            if journey.branch(start_from="missing_step"):
                 journey.step(branch_a_step)
             elif journey.branch():
                 journey.step(branch_b_step)

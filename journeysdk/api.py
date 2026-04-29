@@ -7,7 +7,6 @@ from typing import ParamSpec, TypeGuard, TypeVar, cast
 
 from .errors import InvalidBranchUsageError
 from .models import (
-    CheckpointRef,
     PlannedValue,
     StepRetryDelay,
     StepRetryFrom,
@@ -64,52 +63,39 @@ def is_journey_callable(obj: object) -> TypeGuard[JourneyEntrypoint]:
 
 def branch(
     *,
-    start_from: CheckpointRef | str | None = None,
+    start_from: object | None = None,
 ) -> bool:
     """Select one inline branch inside a direct ``if`` / ``elif`` chain.
 
-    ``start_from`` names the checkpoint where this branch begins for downstream
-    single-step execution and for full-case checkpoint replay. When a targeted
-    execution reaches a step inside this branch, the execution report exposes
-    that checkpoint as the branch replay anchor, but targeted execution still
-    starts from the selected case's beginning. When all cases are executed,
-    later branches that start from the same checkpoint can restore saved state
-    from that checkpoint instead of rerunning earlier shared steps.
+    ``start_from`` points at an earlier ``step(...)`` result. In a full
+    multi-case run, later branch cases can restore to that step's completed
+    post-exit boundary instead of rerunning earlier shared setup. Targeted
+    execution reports that step as metadata in ``replay_anchor``, but still
+    starts from the selected case's required beginning unless state or retry
+    replay says otherwise.
 
     Args:
-        start_from: Optional checkpoint reference, checkpoint name, or ``None``.
-            Use this when the branch should be associated with an earlier
-            ``checkpoint()`` result.
+        start_from: Optional result from an earlier full ``step(...)`` call.
 
     Returns:
         ``True`` only for the selected branch on the active journey path.
 
     Raises:
-        TypeError: If ``start_from`` is not a ``CheckpointRef``, string, or
-            ``None``.
+        TypeError: If ``start_from`` is not an earlier step result during
+            planning or execution.
         InvalidBranchUsageError: If called outside planning or execution.
 
     Example:
         ```python
-        from journeysdk import branch, checkpoint, step
+        from journeysdk import branch, step
 
-        after_login = checkpoint()
+        account = step(create_account)
         if branch():
             step(finish_fast_path)
-        elif branch(start_from=after_login):
-            step(finish_review_path)
+        elif branch(start_from=account):
+            step(finish_review_path, account)
         ```
     """
-    start_from_name: str | None
-    if isinstance(start_from, CheckpointRef):
-        start_from_name = start_from.name
-    elif isinstance(start_from, str) or start_from is None:
-        start_from_name = start_from
-    else:
-        raise TypeError(
-            "branch(start_from=...) accepts a checkpoint reference, a checkpoint name, or None."
-        )
-
     session = get_session()
     if session is None:
         raise InvalidBranchUsageError(
@@ -120,6 +106,36 @@ def branch(
             ),
         )
 
+    if getattr(session, "mode", None) == "plan":
+        if start_from is None:
+            start_from_node_id = None
+        elif isinstance(start_from, PlannedValue):
+            if start_from.access_path:
+                raise InvalidBranchUsageError(
+                    "branch(start_from=...) must point to a full earlier step() result.",
+                    hint="Pass the earlier step() result itself, not one of its attributes.",
+                )
+            if start_from.kind != "step":
+                raise InvalidBranchUsageError(
+                    "branch(start_from=...) must point to the result of an earlier step() call.",
+                    hint="Save the earlier step() result in a variable and pass that variable to branch(start_from=...).",
+                )
+            start_from_node_id = start_from.node_id
+        else:
+            raise TypeError(
+                "branch(start_from=...) accepts an earlier step() result or None."
+            )
+    else:
+        if start_from is None:
+            start_from_node_id = None
+        else:
+            resolver = getattr(session, "step_anchor_for_value", None)
+            if not callable(resolver):
+                raise TypeError(
+                    "branch(start_from=...) accepts an earlier step() result or None."
+                )
+            start_from_node_id = resolver(start_from)
+
     caller = inspect.currentframe()
     caller_frame = caller.f_back if caller is not None else None
     if caller_frame is None:
@@ -127,7 +143,7 @@ def branch(
             "branch() could not determine where it was called from.",
             hint="Call branch() directly as the whole condition in an if/elif chain.",
         )
-    return cast(bool, session.branch(start_from=start_from_name, frame=caller_frame))
+    return cast(bool, session.branch(start_from=start_from_node_id, frame=caller_frame))
 
 
 def step(
@@ -150,8 +166,8 @@ def step(
     raises an exception and ``retry`` is greater than 0.
 
     When a run uses retries, ``journey --state ...``, or branches that start
-    from an earlier checkpoint, journey may need to save and restore step
-    inputs and outputs. Any value that may be replayed that way must be
+    from an earlier step, journey may need to save and restore step inputs and
+    outputs. Any value that may be replayed that way must be
     pickle-serializable or implement the Journey rehydration protocol.
     In CLI runs with ``--state``, first Ctrl-C lets the active step finish and
     resume after it; pressing Ctrl-C again interrupts the dirty step, which
@@ -169,9 +185,9 @@ def step(
             0 extra retries.
         retry_delay: Optional delay between retry attempts in seconds or as a
             ``datetime.timedelta``. The default is 5 seconds.
-        retry_from: Optional retry anchor. Use an earlier ``step()`` result, a
-            ``checkpoint()`` reference, or ``None``. When retries are enabled,
-            ``None`` retries the current step. The default is ``None``.
+        retry_from: Optional retry anchor. Use an earlier ``step()`` result or
+            ``None``. When retries are enabled, ``None`` retries the current
+            step. The default is ``None``.
         **kwargs: Keyword arguments forwarded to ``fn``. Values that may need
             to be replayed later must be pickle-serializable or implement the
             Journey rehydration protocol.
@@ -217,32 +233,3 @@ def step(
             **kwargs,
         ),
     )
-
-
-def checkpoint() -> CheckpointRef:
-    """Mark a checkpoint that later steps or branches can refer to.
-
-    Returns:
-        A ``CheckpointRef`` anchor that later steps or branches can reuse.
-
-    Raises:
-        InvalidBranchUsageError: If called outside planning or execution.
-
-    Example:
-        ```python
-        from journeysdk import branch, checkpoint, step
-
-        after_signup = checkpoint()
-        if branch():
-            step(finish_instant)
-        elif branch(start_from=after_signup):
-            step(finish_manual)
-        ```
-    """
-    session = get_session()
-    if session is None:
-        raise InvalidBranchUsageError(
-            "checkpoint() can only be used while a journey is being planned or executed.",
-            hint="Call checkpoint() inside a function decorated with @journey.",
-        )
-    return cast(CheckpointRef, session.checkpoint())

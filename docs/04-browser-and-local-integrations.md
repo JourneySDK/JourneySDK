@@ -5,7 +5,7 @@ Journey does not care whether a step talks to a browser, a file on disk, or a we
 This chapter shows both sides of that idea:
 
 - one journey that mixes Playwright, a local webhook, and a downloaded file
-- one journey that snapshots a local Docker Compose app behind a checkpoint
+- one journey that snapshots a local Docker Compose app behind a step anchor
 - one journey that captures a browser session so a later run can reopen it
 
 ## One Journey Can Mix Browser, Webhook, and Local File Work
@@ -49,16 +49,15 @@ def local_file_is_written() -> dict[str, str]:
 And the journey that ties them together still reads like sequential Python:
 
 ```python
-from journeysdk import branch, checkpoint, journey, step
+from journeysdk import branch, journey, step
 
 
 @journey
 def simple_journey() -> None:
     receive_endpoint_a = host_webhook_endpoint(port=8765, path="/endpoint-a")
 
-    step(assert_demo_homepage)
+    after_setup = step(assert_demo_homepage)
 
-    after_setup = checkpoint()
     if branch(start_from=after_setup):
         step(click_trigger_endpoint_a)
         request_payload = step(receive_endpoint_a)
@@ -92,7 +91,7 @@ Execution
 [journey] time=... level=INFO component=executor event=execution_log message="  step click_store_local_file attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step local_file_is_written attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_local_file_contents attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_local_file_contents replay_anchor=cp_1"
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=4 duration=... stopped_at=assert_local_file_contents replay_anchor=assert_demo_homepage"
 Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -108,11 +107,11 @@ Read these files together:
 - `docs/docker_compose_journey/app/Dockerfile`
 - `docs/docker_compose_journey/app/server.py`
 
-This example is intentionally branched. It boots a tiny HTTP app plus Postgres, captures a checkpoint snapshot at
-`after_boot`, then uses two later branches to show what restore means in practice:
+This example is intentionally branched. It boots a tiny HTTP app plus Postgres, captures a branch-anchor snapshot after
+`capture_baseline_state`, then uses two later branches to show what restore means in practice:
 
 - branch A increments a database-backed counter from `0` to `1`
-- branch B replays from the same checkpoint snapshot and sees the counter back at `0`
+- branch B replays from the same step-anchor snapshot and sees the counter back at `0`
 
 The Docker helper is still just a normal Journey step factory:
 
@@ -137,22 +136,21 @@ stack = step(
 step(assert_stack_ready, stack)
 ```
 
-The checkpoint stays marker-only. The interesting state lives on the `stack`
-value, and `DockerComposeStack` implements Journey's rehydration protocol:
+The interesting state lives on the `stack` value, and `DockerComposeStack`
+implements Journey's rehydration protocol:
 
 ```python
-after_boot = checkpoint()
+baseline = step(capture_baseline_state, stack)
 ```
 
 The interesting part is the branch structure. One shared step captures the baseline counter before either
 branch mutates anything, then the branches diverge:
 
 ```python
-baseline = step(capture_baseline_state, stack)
-if branch(start_from=after_boot):
+if branch(start_from=baseline):
     incremented = step(increment_counter, stack)
     step(assert_increment_branch, baseline, incremented)
-elif branch(start_from=after_boot):
+elif branch(start_from=baseline):
     restored = step(read_counter_state, stack)
     step(assert_restored_counter_branch, baseline, restored)
 ```
@@ -182,12 +180,12 @@ Execution
 [journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
 [journey] time=... level=INFO component=executor event=execution_log message="  step read_counter_state attempt=1 ok duration=..."
 [journey] time=... level=INFO component=executor event=execution_log message="  step assert_restored_counter_branch attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=5 duration=... replay_anchor=cp_1"
+[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=5 duration=..."
 Summary: 1 journey executed, 2 cases executed, 0 failed
 ```
 
 That second case is the whole point. Branch A already changed the counter to `1`, but branch B still reads `0`
-because Journey restored the `after_boot` checkpoint snapshot before `read_counter_state` ran.
+because Journey restored the `capture_baseline_state` step-anchor snapshot before `read_counter_state` ran.
 
 ### Target the Restore Branch While Iterating
 
@@ -195,9 +193,9 @@ because Journey restored the `after_boot` checkpoint snapshot before `read_count
 uv run journey --file docs/docker_compose_journey/docker_compose_journey.py --step assert_restored_counter_branch
 ```
 
-That targeted run still reports `replay_anchor=cp_1`, so you can focus on the restore branch without changing the
-checkpoint behavior. The targeted run reports the replay anchor as metadata; it does not skip directly to the
-checkpoint unless existing state or retry behavior causes replay.
+That targeted run reports `replay_anchor=capture_baseline_state`, so you can focus on the restore branch without
+changing the branch behavior. The targeted run reports the replay anchor as metadata; it does not skip directly to the
+anchor unless existing state or retry behavior causes replay.
 
 Docker snapshotting is strict on purpose. In v1 it aims for exact rollback of
 container filesystems plus Docker-managed volume contents, so it rejects bind

@@ -1,4 +1,4 @@
-"""Tutorial journey package for checkpoint and branch examples."""
+"""Tutorial journey package for step-anchored branch examples."""
 
 from .branching_journey import (
     EVENTS,

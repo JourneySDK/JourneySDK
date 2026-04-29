@@ -17,7 +17,6 @@ class JourneyStoreContext:
     artifact_root: Path
     boundary_kind: str
     boundary_id: str
-    checkpoint_name: str | None = None
 
     def child(self, segment: str) -> "JourneyStoreContext":
         return replace(self, artifact_root=self.artifact_root / segment)
@@ -30,7 +29,6 @@ class JourneyRestoreContext:
     artifact_root: Path
     boundary_kind: str
     boundary_id: str
-    checkpoint_name: str | None = None
 
     def child(self, segment: str) -> "JourneyRestoreContext":
         return replace(self, artifact_root=self.artifact_root / segment)

@@ -1,8 +1,8 @@
-"""Tutorial journey showing checkpoint and branch selection."""
+"""Tutorial journey showing step-anchored branch selection."""
 
 from __future__ import annotations
 
-from journeysdk import branch, checkpoint, journey, step
+from journeysdk import branch, journey, step
 
 EVENTS: list[str] = []
 
@@ -48,8 +48,7 @@ def branching_journey() -> None:
     signup_request = step(load_signup_request)
     classified = step(classify_signup_request, signup_request)
 
-    after_classification = checkpoint()
     if branch():
         step(assert_fast_track_path, classified)
-    elif branch(start_from=after_classification):
+    elif branch(start_from=classified):
         step(assert_manual_review_path, classified)

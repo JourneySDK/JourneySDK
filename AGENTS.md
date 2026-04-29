@@ -3,12 +3,12 @@
 ## Project
 
 Journey SDK is a workflow-as-code QA toolkit for long, branching, async, cross-system user journeys. Authors write one
-journey in sequential Python with primitives like `step`, `checkpoint`, `branch`, and `step(..., retry=...)`, and
+journey in sequential Python with primitives like `step`, `branch`, and `step(..., retry=...)`, and
 Journey SDK compiles or executes the resulting linear cases.
 
 See `README.md` for the deeper product description, use cases, tutorial context, and glossary. Use that vocabulary
-consistently: step boundary, state file, saved step binding, dirty step, replay boundary, replay anchor, checkpoint
-snapshot, step lifecycle, develop-step pause, pause action, rehydration, and rehydratable value.
+consistently: step boundary, state file, saved step binding, dirty step, replay boundary, replay anchor,
+branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydration, and rehydratable value.
 
 ## Key files
 
@@ -31,8 +31,8 @@ snapshot, step lifecycle, develop-step pause, pause action, rehydration, and reh
 
 CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
-case that reaches a target step label. Targeted `--step` runs report `replay_anchor` for branch checkpoints, but they
-do not skip directly to that checkpoint unless state or retry behavior causes replay.
+case that reaches a target step label. Targeted `--step` runs report `replay_anchor` for branch step anchors, but they
+do not skip directly to that anchor unless state or retry behavior causes replay.
 
 Journey diagnostics use `journeysdk.logger.get_logger(...)` and emit `[journey] ...` lines to stderr by default. The
 CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout for plans, summaries, prompts, and JSON.

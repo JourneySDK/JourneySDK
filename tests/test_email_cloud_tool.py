@@ -132,8 +132,7 @@ def test_cloud_email_journey_supports_targeted_execution(monkeypatch: pytest.Mon
 
         def journey():
             inbox = journey_sdk.step(get_email_inbox())
-            after_setup = journey_sdk.checkpoint()
-            if journey_sdk.branch(start_from=after_setup):
+            if journey_sdk.branch(start_from=inbox):
                 journey_sdk.step(
                     send_email(subject="Targeted", text_body="Email body"),
                     inbox,
@@ -147,13 +146,13 @@ def test_cloud_email_journey_supports_targeted_execution(monkeypatch: pytest.Mon
                     inbox,
                 )
                 journey_sdk.step(assert_message, message)
-            elif journey_sdk.branch(start_from=after_setup):
+            elif journey_sdk.branch(start_from=inbox):
                 journey_sdk.step(noop)
 
         targeted_report = journey_sdk.execute(journey, step="assert_message")
         assert len(targeted_report.case_reports) == 1
         assert targeted_report.case_reports[0].stopped_at_label == "assert_message"
-        assert targeted_report.case_reports[0].replay_anchor == "cp_1"
+        assert targeted_report.case_reports[0].replay_anchor == "get_email_inbox"
 
 
 def test_cloud_email_inbox_handle_survives_resume(

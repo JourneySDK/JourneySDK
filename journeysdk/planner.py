@@ -9,14 +9,11 @@ from typing import ParamSpec, TypeVar
 
 from .errors import (
     InvalidBranchUsageError,
-    UnknownCheckpointError,
 )
 from .models import (
     BranchCase,
     BranchMarkerNode,
     CasePlan,
-    CheckpointNode,
-    CheckpointRef,
     JourneyPlan,
     PlanNode,
     PlannedValue,
@@ -57,9 +54,7 @@ class _PlanSession:
         self.nodes: list[PlanNode] = []
         self._node_counter = 0
         self._group_counter = 0
-        self._checkpoint_counter = 0
         self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
-        self._checkpoints_seen: set[str] = set()
         self._steps_seen: set[str] = set()
         self._journey_webhook_epoch = 0
 
@@ -70,10 +65,6 @@ class _PlanSession:
     def _next_group_id(self) -> str:
         self._group_counter += 1
         return f"bg_{self._group_counter}"
-
-    def _next_checkpoint_name(self) -> str:
-        self._checkpoint_counter += 1
-        return f"cp_{self._checkpoint_counter}"
 
     def step(
         self,
@@ -95,7 +86,6 @@ class _PlanSession:
             retry_from=retry_from,
             current_node_id=node_id,
             known_step_ids=self._steps_seen,
-            known_checkpoint_names=self._checkpoints_seen,
         )
         node = StepNode(
             node_id=node_id,
@@ -110,22 +100,6 @@ class _PlanSession:
         self._steps_seen.add(node.node_id)
         return PlannedValue(node_id=node.node_id, kind="step")
 
-    def checkpoint(self) -> CheckpointRef:
-        name = self._next_checkpoint_name()
-        if name in self._checkpoints_seen:
-            raise InvalidBranchUsageError(
-                f"Checkpoint '{name}' was created more than once in the same journey path.",
-                hint="Create each checkpoint only once before referencing it from a branch or retry.",
-            )
-        self._checkpoints_seen.add(name)
-
-        node = CheckpointNode(
-            node_id=self._next_node_id(),
-            name=name,
-        )
-        self.nodes.append(node)
-        return CheckpointRef(name=name)
-
     def branch(self, *, start_from: str | None, frame: FrameType) -> bool:
         site = resolve_branch_call_site(frame)
         spec = self.validation.branch_conditions.get(site)
@@ -135,10 +109,10 @@ class _PlanSession:
                 hint="Use journey.branch(...) directly as `if journey.branch(...):` or `elif journey.branch(...):`.",
             )
 
-        if start_from is not None and start_from not in self._checkpoints_seen:
-            raise UnknownCheckpointError(
-                f"Branch '{spec.branch_key}' starts from checkpoint '{start_from}', but that checkpoint was never created earlier in the journey.",
-                hint="Create the checkpoint with checkpoint() before using it in branch(start_from=...).",
+        if start_from is not None and start_from not in self._steps_seen:
+            raise InvalidBranchUsageError(
+                f"Branch '{spec.branch_key}' starts from step '{start_from}', but that step was never created earlier in the journey.",
+                hint="Pass the result of an earlier step(...) call to branch(start_from=...).",
             )
 
         state = self._active_branch_chains.get(spec.template_key)
@@ -206,12 +180,10 @@ def _resolve_step_retry(
     retry_from: StepRetryFrom,
     current_node_id: str,
     known_step_ids: set[str],
-    known_checkpoint_names: set[str],
 ) -> StepRetry | None:
     resolved_retry = _normalize_retry_count(retry)
     delay_seconds = _duration_to_seconds(retry_delay, field_name="retry_delay")
     from_node_id: str | None = None
-    from_checkpoint: str | None = None
 
     if retry_from is None:
         from_node_id = current_node_id
@@ -229,17 +201,9 @@ def _resolve_step_retry(
             )
         from_node_id = retry_from.node_id
 
-    elif isinstance(retry_from, CheckpointRef):
-        if retry_from.name not in known_checkpoint_names:
-            raise UnknownCheckpointError(
-                f"step(..., retry_from=...) references checkpoint '{retry_from.name}', but that checkpoint was never created earlier in the journey.",
-                hint="Create the checkpoint with checkpoint() before using it in `retry_from=...`.",
-            )
-        from_checkpoint = retry_from.name
-
     else:
         raise TypeError(
-            "step(..., retry_from=...) accepts an earlier step() result, a checkpoint() result, or None."
+            "step(..., retry_from=...) accepts an earlier step() result or None."
         )
 
     if resolved_retry == 0:
@@ -249,7 +213,6 @@ def _resolve_step_retry(
         retries=resolved_retry,
         delay_seconds=delay_seconds,
         from_node_id=from_node_id,
-        from_checkpoint=from_checkpoint,
     )
 
 

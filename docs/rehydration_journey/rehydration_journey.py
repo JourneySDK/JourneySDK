@@ -1,8 +1,8 @@
-"""Example journey showing checkpoint-started branch rehydration."""
+"""Example journey showing step-started branch rehydration."""
 
 from __future__ import annotations
 
-from journeysdk import branch, checkpoint, journey, step
+from journeysdk import branch, journey, step
 
 EVENTS: list[str] = []
 _EXTERNAL_SEED_COUNTER = 0
@@ -25,7 +25,7 @@ def prepare_context(payload: dict[str, int]) -> dict[str, str]:
     return {"token": f"seed-{payload['seed']}"}
 
 
-def shared_after_checkpoint(context: dict[str, str]) -> dict[str, str]:
+def shared_after_anchor(context: dict[str, str]) -> dict[str, str]:
     EVENTS.append(f"shared_{context['token']}")
     return {"shared": context["token"]}
 
@@ -45,10 +45,9 @@ def rehydration_journey() -> None:
     payload = next_external_payload()
     context = step(prepare_context, payload)
 
-    after_setup = checkpoint()
-    shared = step(shared_after_checkpoint, context)
+    shared = step(shared_after_anchor, context)
 
-    if branch(start_from=after_setup):
+    if branch(start_from=context):
         step(assert_branch_a, shared)
-    elif branch(start_from=after_setup):
+    elif branch(start_from=context):
         step(assert_branch_b, shared)
