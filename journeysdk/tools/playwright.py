@@ -326,7 +326,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         instruction: str,
         *,
         model: str | None = None,
-        max_steps: int = 8,
+        max_steps: int = 15,
         action_timeout_seconds: float = 5.0,
         memory: str | None = None,
     ) -> JourneyPlaywrightPromptResult:
