@@ -13,6 +13,7 @@ PromptOutputSpec = Mapping[str, PromptOutputFieldSpec]
 @dataclass(frozen=True)
 class PromptOutputSchema:
     fields: tuple[str, ...]
+    properties: dict[str, object]
     response_format: dict[str, object]
     prompt_text: str
 
@@ -59,6 +60,7 @@ def normalize_prompt_output_spec(
     prompt_text = json.dumps(properties, sort_keys=True, indent=2)
     return PromptOutputSchema(
         fields=tuple(properties),
+        properties=properties,
         response_format=response_format,
         prompt_text=prompt_text,
     )

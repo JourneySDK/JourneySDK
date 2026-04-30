@@ -385,6 +385,20 @@ def _prompt_html(
     return f"<html><head><title>{title}</title></head><body>{body}</body></html>"
 
 
+def _prompt_visible_text(
+    *,
+    elements: list[dict[str, object]],
+    visible_texts: set[str],
+) -> str:
+    values: list[str] = []
+    for element in elements:
+        name = element.get("name")
+        if isinstance(name, str) and name:
+            values.append(name)
+    values.extend(sorted(visible_texts))
+    return "\n".join(values)
+
+
 def _make_prompt_page(
     *,
     title: str,
@@ -427,6 +441,11 @@ def _make_prompt_page(
         if "document.documentElement.outerHTML" in script:
             events.append(("prompt_rendered_html", self._fake_prompt_title))
             return self._fake_prompt_html
+        if "document.body.innerText" in script:
+            return _prompt_visible_text(
+                elements=self._fake_prompt_elements,
+                visible_texts=self._fake_prompt_visible_texts,
+            )
         if items is None and "window.localStorage" in script:
             return {}
         if items is not None and "window.localStorage.clear" in script:
@@ -446,6 +465,9 @@ def _make_prompt_page(
     def wait_for_load_state(self, state: str, *, timeout: int) -> None:
         events.append(("prompt_wait_for_load_state", self._fake_prompt_title, state, timeout))
 
+    def wait_for_timeout(self, timeout: int) -> None:
+        events.append(("prompt_wait_for_timeout", self._fake_prompt_title, timeout))
+
     page.title = MethodType(title_method, page)
     page.screenshot = MethodType(screenshot, page)
     page.evaluate = MethodType(evaluate, page)
@@ -453,6 +475,7 @@ def _make_prompt_page(
     page.get_by_text = MethodType(get_by_text, page)
     page.wait_for_url = MethodType(wait_for_url, page)
     page.wait_for_load_state = MethodType(wait_for_load_state, page)
+    page.wait_for_timeout = MethodType(wait_for_timeout, page)
     return page
 
 
@@ -970,6 +993,8 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         ("prompt_screenshot", "Login page"),
         ("prompt_rendered_html", "Welcome popup"),
         ("prompt_screenshot", "Welcome popup"),
+        ("prompt_wait_for_load_state", "Welcome popup", "networkidle", 2000),
+        ("prompt_wait_for_timeout", "Welcome popup", 500),
         ("prompt_rendered_html", "Welcome popup"),
         ("prompt_screenshot", "Welcome popup"),
     ]
@@ -1058,6 +1083,51 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
     assert "Return the final answer using these output fields JSON:" in final_prompt_text
     assert "popup_title" in final_prompt_text
     assert "has_welcome_text" in final_prompt_text
+
+
+def test_journey_playwright_prompt_final_output_includes_visible_error_text(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        visible_texts={
+            "Password is incorrect. Try again, or use another method.",
+        },
+    )
+    context.pages.append(page)
+    fake_completion = _FakeCompletion(
+        [
+            "finish()",
+            '{"error": ""}',
+        ]
+    )
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: fake_completion,
+    )
+
+    result = page.prompt(
+        "sign in",
+        model="openai/gpt-4.1-mini",
+        output={"error": "An error message if found."},
+    )
+
+    assert result.output == {
+        "error": "Password is incorrect. Try again, or use another method.",
+    }
+    final_prompt_text = fake_completion.calls[1]["messages"][1]["content"][0]["text"]
+    assert "<journey-visible-text>" in final_prompt_text
+    assert "Password is incorrect. Try again, or use another method." in final_prompt_text
+    assert (
+        "Do not return an empty string for such a field"
+        in fake_completion.calls[1]["messages"][0]["content"]
+    )
+    assert ("prompt_wait_for_load_state", "Login", "networkidle", 2000) in events
+    assert ("prompt_wait_for_timeout", "Login", 500) in events
 
 
 def test_journey_playwright_prompt_rejects_invalid_output_specs(monkeypatch):
@@ -1188,6 +1258,8 @@ def test_journey_playwright_prompt_retries_rejected_python(
         ("prompt_fill", "Chat", "#composer", "I need to fix a toilet", 5000),
         ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
+        ("prompt_wait_for_load_state", "Chat", "networkidle", 2000),
+        ("prompt_wait_for_timeout", "Chat", 500),
         ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
     ]

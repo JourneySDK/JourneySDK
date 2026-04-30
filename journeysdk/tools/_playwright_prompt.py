@@ -59,10 +59,15 @@ Rules:
 _FINAL_OUTPUT_SYSTEM_MESSAGE = """You produce the final answer for a completed Journey browser prompt.
 
 Use the rendered HTML, screenshot, known pages, and executed steps to answer the original instruction.
+Base the final output on the current visible page state, not on the fact that finish() was called.
+If a requested output field asks for an error, validation message, warning, status, or problem, copy the visible
+message exactly when present. Do not return an empty string for such a field when the current visible page text or
+screenshot contains a matching message.
 Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
+_VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
 _PROMPT_LOGGER = get_logger("playwright-prompt")
 
 
@@ -169,6 +174,7 @@ class _PromptSession:
                     detail="Prompt marked complete.",
                 )
                 self._steps.append(finish_step)
+                self._settle_active_page_for_final_output()
                 final_observation = self._build_observation()
                 final_output = self._request_final_output(
                     observation=final_observation,
@@ -340,6 +346,7 @@ class _PromptSession:
                 for page in pages
             ],
             "rendered_html": rendered_html,
+            "visible_text": _visible_text(active_page),
             "steps": _steps_observation(tuple(self._steps)),
             "screenshot_data_url": screenshot_data_url,
         }
@@ -432,6 +439,11 @@ class _PromptSession:
             "Executed steps JSON:",
             json.dumps(observation["steps"], sort_keys=True, indent=2),
             "",
+            "Active page visible text:",
+            "<journey-visible-text>",
+            cast(str, observation["visible_text"]),
+            "</journey-visible-text>",
+            "",
             "Active page rendered HTML:",
             "<journey-rendered-html>",
             cast(str, observation["rendered_html"]),
@@ -497,10 +509,15 @@ class _PromptSession:
         response_text = _extract_completion_text(response).strip()
         if self._output_schema is None:
             return response_text
-        return parse_prompt_structured_output(
+        structured_output = parse_prompt_structured_output(
             response_text,
             self._output_schema,
             owner="JourneyPlaywrightPage.prompt(...)",
+        )
+        return _fill_visible_message_fields(
+            structured_output,
+            schema=self._output_schema,
+            visible_text=cast(str, observation["visible_text"]),
         )
 
     def _memory_for_observation(
@@ -629,6 +646,22 @@ class _PromptSession:
                 except Exception:
                     pass
                 self._pages.append(page)
+
+    def _settle_active_page_for_final_output(self) -> None:
+        active_page = self._pages[self._active_page_index]
+        try:
+            active_page.wait_for_load_state(
+                "networkidle",
+                timeout=min(self._timeout_ms, 2000),
+            )
+        except Exception:
+            pass
+        wait_for_timeout = getattr(active_page, "wait_for_timeout", None)
+        if callable(wait_for_timeout):
+            try:
+                wait_for_timeout(500)
+            except Exception:
+                pass
 
     def _prompt_pages(self) -> list[JourneyPlaywrightPromptPage]:
         prompt_pages: list[JourneyPlaywrightPromptPage] = []
@@ -866,6 +899,70 @@ def _prompt_output_summary(value: str | dict[str, object]) -> str:
     return truncate_prompt_memory_text(json.dumps(value, sort_keys=True))
 
 
+_VISIBLE_MESSAGE_FIELD_TERMS = (
+    "error",
+    "validation",
+    "warning",
+    "problem",
+    "issue",
+    "failure",
+    "failed",
+    "invalid",
+    "incorrect",
+)
+_VISIBLE_MESSAGE_TEXT_TERMS = (
+    "cannot",
+    "denied",
+    "error",
+    "expired",
+    "failed",
+    "failure",
+    "incorrect",
+    "invalid",
+    "not found",
+    "required",
+    "try again",
+    "unable",
+    "wrong",
+)
+
+
+def _fill_visible_message_fields(
+    output: dict[str, object],
+    *,
+    schema: PromptOutputSchema,
+    visible_text: str,
+) -> dict[str, object]:
+    fallback_message = _extract_visible_message(visible_text)
+    if not fallback_message:
+        return output
+    repaired = dict(output)
+    for field_name in schema.fields:
+        if repaired.get(field_name) != "":
+            continue
+        field_schema = schema.properties.get(field_name)
+        description = ""
+        if isinstance(field_schema, dict):
+            raw_description = field_schema.get("description")
+            if isinstance(raw_description, str):
+                description = raw_description
+        field_hint = f"{field_name} {description}".lower()
+        if any(term in field_hint for term in _VISIBLE_MESSAGE_FIELD_TERMS):
+            repaired[field_name] = fallback_message
+    return repaired
+
+
+def _extract_visible_message(visible_text: str) -> str:
+    lines = [line.strip() for line in visible_text.splitlines() if line.strip()]
+    for window_size in (1, 2, 3):
+        for index in range(0, max(len(lines) - window_size + 1, 0)):
+            candidate = " ".join(lines[index : index + window_size])
+            normalized = candidate.lower()
+            if any(term in normalized for term in _VISIBLE_MESSAGE_TEXT_TERMS):
+                return candidate
+    return ""
+
+
 def _page_summary(page: JourneyPlaywrightPromptPage) -> str:
     return _format_page_summary(index=page.index, title=page.title, url=page.url)
 
@@ -1093,6 +1190,15 @@ def _rendered_html(page: PlaywrightPage) -> str:
             "JourneyPlaywrightPage.prompt(...) expected rendered HTML to be a string."
         )
     return html
+
+
+def _visible_text(page: PlaywrightPage) -> str:
+    text = page.evaluate(_VISIBLE_TEXT_SCRIPT)
+    if not isinstance(text, str):
+        raise RuntimeError(
+            "JourneyPlaywrightPage.prompt(...) expected visible text to be a string."
+        )
+    return text
 
 
 def _extract_completion_text(response: object) -> str:
