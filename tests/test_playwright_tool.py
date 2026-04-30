@@ -966,14 +966,14 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_structured_result(
     assert 'click on a \\"Sign in\\" button and get the title' in log_output
     assert "model='anthropic/claude-sonnet-4-5'" in log_output
     assert "active=page 0 'Login page' at http://example.test/login" in log_output
-    assert "step 1/8: inspecting page 0 'Login page'" in log_output
-    assert "step 1/8: AI will click selector '#sign-in'" in log_output
+    assert "step 1/15: inspecting page 0 'Login page'" in log_output
+    assert "step 1/15: AI will click selector '#sign-in'" in log_output
     assert "event=prompt_code" in log_output
     assert 'page.locator(\\"#sign-in\\").click(timeout=timeout_ms)' in log_output
     assert "discovered page 1 'Welcome popup' at http://example.test/sign-in-popup" in log_output
     assert "active page changed to page 1 'Welcome popup'" in log_output
     assert (
-        "step 3/8: finished with answer: The opened popup title is Welcome popup."
+        "step 3/15: finished with answer: The opened popup title is Welcome popup."
         in log_output
     )
 
@@ -1050,12 +1050,12 @@ def test_journey_playwright_prompt_retries_rejected_python(
         ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
     ]
-    assert "step 1/8: AI will click selector '#attach'" in log_output
+    assert "step 1/15: AI will click selector '#attach'" in log_output
     assert 'page.locator(\\"#attach\\").click(timeout=timeout_ms)' in log_output
-    assert "step 1/8: rejected on page 0 'Chat'" in log_output
+    assert "step 1/15: rejected on page 0 'Chat'" in log_output
     assert "AssertionError: No click handler registered for '#attach'" in log_output
     assert (
-        "step 2/8: AI will fill selector '#composer' with "
+        "step 2/15: AI will fill selector '#composer' with "
         "'I need to fix a toilet'"
     ) in log_output
     assert (
@@ -1198,6 +1198,68 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
         journey_sdk.step(run_prompt)
 
     journey_sdk.execute(memory_journey, no_memory=True)
+
+
+def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    completion = _FakeCompletion(['finish("Done.")'])
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: completion,
+    )
+
+    load_calls: list[tuple[Path, str]] = []
+    write_calls: list[tuple[object, ...]] = []
+
+    def load_memory(path: Path, key: str) -> dict[str, object]:
+        load_calls.append((path, key))
+        return {
+            "successful_steps": [
+                {
+                    "target": 'page.locator("#cached").click(timeout=timeout_ms)',
+                    "detail": "worked before",
+                }
+            ]
+        }
+
+    def fail_memory_write(*args: object, **kwargs: object) -> object:
+        del kwargs
+        write_calls.append(args)
+        raise AssertionError("prompt memory updates should be disabled")
+
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "load_prompt_memory_entry",
+        load_memory,
+    )
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "write_prompt_memory_entry",
+        fail_memory_write,
+    )
+
+    def run_prompt() -> journey_playwright.JourneyPlaywrightPromptResult:
+        return page.prompt("finish", model="openai/gpt-4.1-mini", memory="readonly")
+
+    def memory_journey() -> None:
+        journey_sdk.step(run_prompt)
+
+    journey_sdk.execute(memory_journey, no_memory_update=True)
+
+    prompt_text = completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert load_calls
+    assert not write_calls
+    assert "Prompt memory JSON:" in prompt_text
+    assert "#cached" in prompt_text
 
 
 def test_journey_playwright_prompt_enforces_max_steps(

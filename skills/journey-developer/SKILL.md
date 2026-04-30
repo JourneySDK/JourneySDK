@@ -102,6 +102,12 @@ Use `--no-memory` when a journey contains AI-driven prompts but the run should n
 uv run journey --file docs/playwright_prompt_journey/playwright_prompt_journey.py --no-memory
 ```
 
+Use `--no-memory-update` when the run should read existing prompt memory but skip writing updates:
+
+```bash
+uv run journey --file docs/playwright_prompt_journey/playwright_prompt_journey.py --no-memory-update
+```
+
 ## Develop One Step
 
 Use `--develop-step LABEL --state .journey/develop-step.state` for agent-friendly edit-run loops. Noninteractive

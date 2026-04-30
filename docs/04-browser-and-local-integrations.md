@@ -369,7 +369,7 @@ rendered HTML, or full model prompts.
 
 Memory names must be literal strings and unique within one compiled journey. That keeps planning deterministic and
 makes memory files easy to review in version control. Use `--no-memory` when you want to run without reading or
-updating prompt memory.
+updating prompt memory, or `--no-memory-update` when existing memory should still be read but not rewritten.
 
 ## What To Notice
 

@@ -19,6 +19,7 @@ from journeysdk._prompt_memory import (
     load_prompt_memory_entry,
     normalize_prompt_instruction,
     prompt_memory_key,
+    prompt_memory_updates_disabled,
     resolve_prompt_memory_path,
     truncate_prompt_memory_text,
     write_prompt_memory_entry,
@@ -438,6 +439,7 @@ class _PromptSession:
             self._memory_path is None
             or self._memory_key is None
             or self._memory_page_signature is None
+            or prompt_memory_updates_disabled()
         ):
             return
         entry = _memory_entry_from_result(

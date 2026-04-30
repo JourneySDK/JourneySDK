@@ -117,6 +117,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "debug",
             "--fail-fast",
             "--no-memory",
+            "--no-memory-update",
         ]
     )
     assert execute_args.file == "journeys.py"
@@ -127,6 +128,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.log_level == "debug"
     assert execute_args.fail_fast is True
     assert execute_args.no_memory is True
+    assert execute_args.no_memory_update is True
 
     pause_args = parser.parse_args(
         [
@@ -166,6 +168,49 @@ def test_execute_develop_step_rejects_json_mode(
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
     assert "--develop-step cannot be used with --json" in captured.err
+
+
+def test_execute_forwards_no_memory_update_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+
+        def finish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(finish)
+        """,
+    )
+    captured_flags: list[bool] = []
+
+    def fake_execute_all_targets(
+        compiled: object,
+        *,
+        root: Path,
+        fail_fast: bool,
+        state: str | None = None,
+        stream_live: bool = False,
+        no_memory: bool = False,
+        no_memory_update: bool = False,
+    ) -> tuple[list[object], list[object]]:
+        del compiled, root, fail_fast, state, stream_live
+        assert no_memory is False
+        captured_flags.append(no_memory_update)
+        return [], []
+
+    monkeypatch.setattr("journeysdk.cli._execute_all_targets", fake_execute_all_targets)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--file", "flow.py", "--no-memory-update", "--log-level", "off"])
+
+    assert exit_code == 0
+    assert captured_flags == [True]
 
 
 def test_execute_interactive_requires_develop_step(

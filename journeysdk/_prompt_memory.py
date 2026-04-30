@@ -149,6 +149,15 @@ def resolve_prompt_memory_path(
     return root / f"{name}{PROMPT_MEMORY_SUFFIX}"
 
 
+def prompt_memory_updates_disabled() -> bool:
+    session = get_session()
+    disabled = getattr(session, "prompt_memory_disabled", None)
+    if callable(disabled) and disabled():
+        return True
+    update_disabled = getattr(session, "prompt_memory_update_disabled", None)
+    return bool(callable(update_disabled) and update_disabled())
+
+
 def prompt_memory_key(
     *,
     tool: str,

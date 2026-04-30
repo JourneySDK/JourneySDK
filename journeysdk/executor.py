@@ -1196,6 +1196,7 @@ class _RunSession:
         observer: _ExecutionObserver | None = None,
         prompt_memory_root: Path | None = None,
         prompt_memory_disabled: bool = False,
+        prompt_memory_update_disabled: bool = False,
     ) -> None:
         self.journey_plan = journey_plan
         self.case_plan = case_plan
@@ -1221,6 +1222,7 @@ class _RunSession:
         self._observer = observer or _ExecutionObserver()
         self._prompt_memory_root = prompt_memory_root
         self._prompt_memory_disabled = prompt_memory_disabled
+        self._prompt_memory_update_disabled = prompt_memory_update_disabled
         self._active_step_lifecycle: _StepLifecycle | None = None
         self._step_key_by_id = _case_rehydration_maps(case_plan)
         self._step_index_by_id = {
@@ -2013,6 +2015,9 @@ class _RunSession:
 
     def prompt_memory_disabled(self) -> bool:
         return self._prompt_memory_disabled
+
+    def prompt_memory_update_disabled(self) -> bool:
+        return self._prompt_memory_update_disabled
 
     def _ensure_no_active_step_lifecycle(self) -> None:
         if self._active_step_lifecycle is not None:
@@ -2938,6 +2943,7 @@ def _execute_plan(
     state: str | Path | None = None,
     observer: _ExecutionObserver | None = None,
     no_memory: bool = False,
+    no_memory_update: bool = False,
     prompt_memory_root: str | Path | None = None,
 ) -> ExecutionReport | _PausedExecution:
     target_step = develop_step if develop_step is not None else step
@@ -3019,6 +3025,7 @@ def _execute_plan(
                 observer=execution_observer,
                 prompt_memory_root=resolved_prompt_memory_root,
                 prompt_memory_disabled=no_memory,
+                prompt_memory_update_disabled=no_memory or no_memory_update,
             )
             if restored_state is None:
                 state_controller.begin_case(
@@ -3121,6 +3128,7 @@ def execute(
     step: str | None = None,
     state: str | Path | None = None,
     no_memory: bool = False,
+    no_memory_update: bool = False,
 ) -> ExecutionReport:
     """Compile a journey and execute full cases or one targeted step flow.
 
@@ -3129,6 +3137,7 @@ def execute(
         step: Optional target step label.
         state: Optional state file for replay and resume.
         no_memory: Disable prompt-memory reads and writes for this run.
+        no_memory_update: Disable prompt-memory writes while still allowing reads.
     """
 
     plan = compile_journey(journey_fn)
@@ -3138,4 +3147,5 @@ def execute(
         step=step,
         state=state,
         no_memory=no_memory,
+        no_memory_update=no_memory_update,
     )
