@@ -344,7 +344,9 @@ def assert_dashboard(session: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
     return page
 ```
 
-The same live page can also run a bounded LLM action loop and return a structured result:
+The same live page can also run a bounded LLM action loop. `page.prompt(...)` returns a
+`JourneyPlaywrightPromptResult`; by default, `result.output` is a plain string. Pass `output=...` when you want
+provider-enforced structured output in `result.output`:
 
 ```python
 from journeysdk.tools.playwright import JourneyPlaywrightPromptResult, open_page
@@ -356,6 +358,9 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
             'click on a "Sign in" button and get the title of the opened popup',
             model="anthropic/claude-sonnet-4-5",
             memory="sign-in-popup",
+            output={
+                "popup_title": "The title of the opened popup.",
+            },
         )
     finally:
         page.__exit__(None, None, None)
@@ -366,6 +371,8 @@ Set provider credentials with the provider's normal environment variables such a
 The optional `memory="sign-in-popup"` argument stores compact lessons from successful runs in
 `sign-in-popup.memory.json` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.
+The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
+`dict[str, object]` in `result.output` instead of plain text.
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
 enabled, Journey stores the step inputs and outputs it may need to replay later, so those values must be

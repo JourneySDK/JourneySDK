@@ -64,6 +64,9 @@ CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout f
 
 - Official tools with AI-driven `prompt(...)` methods should accept `memory: str | None = None` and use the shared
   helpers in `journeysdk._prompt_memory`.
+- Official tools with AI-driven `prompt(...)` methods should accept `output=...` for optional structured output and
+  use the shared helpers in `journeysdk._prompt_output`. Omitted `output` stores plain text on `result.output`;
+  explicit `output` uses native model structured-output support and stores a dictionary on `result.output`.
 - Memory files are named `[memory].memory.json`, live beside the journey source file, and are intended to be
   reviewable in version control.
 - `--no-memory` and `execute(..., no_memory=True)` must disable all prompt-memory reads and writes.

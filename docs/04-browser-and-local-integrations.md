@@ -334,7 +334,9 @@ Journey SDK already includes Playwright and LiteLLM. Set your provider credentia
 environment variables such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Pick a multimodal model explicitly with
 `model=...`, or set `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
 
-The helper can stay small:
+The helper can stay small. `page.prompt(...)` returns a `JourneyPlaywrightPromptResult`. Without `output=...`,
+`result.output` is a plain string. With `output=...`, Journey uses the model provider's structured-output feature and
+`result.output` is a dictionary with those fields:
 
 ```python
 def capture_popup_title() -> JourneyPlaywrightPromptResult:
@@ -344,22 +346,25 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
             'click on a "Sign in" button and get the title of the opened popup',
             model="anthropic/claude-sonnet-4-5",
             memory="sign-in-popup",
+            output={
+                "popup_title": "The title of the opened popup.",
+            },
         )
     finally:
         page.__exit__(None, None, None)
 ```
 
-The next step can assert against the structured result:
+The next step can assert against the structured output:
 
 ```python
 def assert_prompt_result(result: JourneyPlaywrightPromptResult) -> bool:
-    assert result.text
-    assert result.pages
+    assert isinstance(result.output, dict)
+    assert result.output["popup_title"]
     return True
 ```
 
-`result.text` is the model's final user-facing answer. `result.pages` reports the original page plus any popup or tab
-the prompt loop discovered, and `result.steps` records the bounded action history without storing hidden reasoning.
+`result.output` is the model's final answer. `result.pages` reports the original page plus any popup or tab the prompt
+loop discovered, and `result.steps` records the bounded action history without storing hidden reasoning.
 
 The `memory="sign-in-popup"` argument gives this prompt a named memory file. After a successful run, Journey writes
 `docs/playwright_prompt_journey/sign-in-popup.memory.json` beside the journey source. Later runs with the same prompt
@@ -377,7 +382,8 @@ updating prompt memory, or `--no-memory-update` when existing memory should stil
 - The same journey can branch into a webhook case and a local file case.
 - `JourneyPlaywrightPage` is just another step value. Returning it lets Journey save it at a step boundary, close it,
   rehydrate it, and pass it into later steps.
-- `JourneyPlaywrightPage.prompt(...)` works on a live page handle and returns a structured result instead of mutating the saved-page semantics of the original handle.
+- `JourneyPlaywrightPage.prompt(...)` works on a live page handle and returns a prompt result with either plain text or
+  explicit structured output instead of mutating the saved-page semantics of the original handle.
 - Steps that open a page but return other data should close the page explicitly, as shown in `continue_authenticated_dashboard()`.
 - Targeted execution is especially useful for UI work because you can rerun only the branch you are debugging.
 

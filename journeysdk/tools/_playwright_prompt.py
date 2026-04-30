@@ -24,6 +24,12 @@ from journeysdk._prompt_memory import (
     truncate_prompt_memory_text,
     write_prompt_memory_entry,
 )
+from journeysdk._prompt_output import (
+    PromptOutputSchema,
+    PromptOutputSpec,
+    normalize_prompt_output_spec,
+    parse_prompt_structured_output,
+)
 from playwright.sync_api import Page as PlaywrightPage
 
 JOURNEY_PLAYWRIGHT_PROMPT_MODEL_ENV = "JOURNEY_PLAYWRIGHT_PROMPT_MODEL"
@@ -37,17 +43,23 @@ Available names:
 - pages: a tuple of known Playwright sync Page objects
 - timeout_ms: the configured action timeout in milliseconds
 - switch_page(index): switch the active page to a known page index and return that Page
-- finish(text): finish the loop with the final user-facing answer
+- finish(): finish the browser action loop; Journey will ask for the final output separately
 
 Rules:
 - Inspect the rendered HTML and screenshot, then choose the fewest Playwright commands needed.
 - Prefer robust Playwright locators such as get_by_role, get_by_text, get_by_label, and locator.
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
 - Use switch_page(index) before acting on a popup or tab listed in known pages.
-- Call finish("...") only when the instruction is complete.
+- Call finish() only when the instruction is complete.
 - If the previous step was rejected, correct the Python and try again.
 - If prompt memory is provided, use it as a hint from prior successful runs,
   but trust the current rendered HTML and screenshot over stale memory.
+"""
+
+_FINAL_OUTPUT_SYSTEM_MESSAGE = """You produce the final answer for a completed Journey browser prompt.
+
+Use the rendered HTML, screenshot, known pages, and executed steps to answer the original instruction.
+Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
@@ -74,7 +86,7 @@ class JourneyPlaywrightPromptStep:
 
 @dataclass(frozen=True)
 class JourneyPlaywrightPromptResult:
-    text: str
+    output: str | dict[str, object]
     model: str
     active_page_index: int
     pages: tuple[JourneyPlaywrightPromptPage, ...]
@@ -89,14 +101,14 @@ class _CompletionCallable(Protocol):
         messages: list[dict[str, object]],
         max_tokens: int,
         temperature: float,
+        response_format: dict[str, object] | None = None,
+        enable_json_schema_validation: bool | None = None,
     ) -> object:
         ...
 
 
 class _PromptFinished(Exception):
-    def __init__(self, text: str) -> None:
-        super().__init__(text)
-        self.text = text
+    pass
 
 
 class _PromptSession:
@@ -109,6 +121,7 @@ class _PromptSession:
         max_steps: int,
         action_timeout_seconds: float,
         memory_path: Path | None,
+        output_schema: PromptOutputSchema | None,
     ) -> None:
         self._original_page = page
         self._instruction = instruction
@@ -116,6 +129,7 @@ class _PromptSession:
         self._max_steps = max_steps
         self._timeout_ms = int(action_timeout_seconds * 1000)
         self._memory_path = memory_path
+        self._output_schema = output_schema
         self._memory_key: str | None = None
         self._memory_page_signature: str | None = None
         self._memory_entry: dict[str, object] | None = None
@@ -141,39 +155,40 @@ class _PromptSession:
                     code=code,
                     target=target,
                 )
-            except _PromptFinished as finished:
+            except _PromptFinished:
                 self._log_new_pages(previous_page_count=previous_page_count)
                 self._log_active_page_change(
                     previous_active_page_index=previous_active_page_index,
                 )
-                self._steps.append(
-                    JourneyPlaywrightPromptStep(
-                        index=step_index,
-                        page_index=self._active_page_index,
-                        action="finish",
-                        target="",
-                        status="ok",
-                        detail=finished.text,
-                    )
+                finish_step = JourneyPlaywrightPromptStep(
+                    index=step_index,
+                    page_index=self._active_page_index,
+                    action="finish",
+                    target="",
+                    status="ok",
+                    detail="Prompt marked complete.",
+                )
+                self._steps.append(finish_step)
+                final_observation = self._build_observation()
+                final_output = self._request_final_output(
+                    observation=final_observation,
                 )
                 _emit_prompt_log(
-                    f"step {step_index}/{self._max_steps}: finished with "
-                    f"answer: {finished.text}",
+                    f"step {step_index}/{self._max_steps}: finished with output: "
+                    f"{_prompt_output_summary(final_output)}",
                     event="prompt_finish",
                     step=step_index,
                     max_steps=self._max_steps,
-                    answer=finished.text,
+                    output=_prompt_output_summary(final_output),
                 )
-                pages = tuple(self._prompt_pages())
-                result = JourneyPlaywrightPromptResult(
-                    text=finished.text,
+                self._write_memory(final_output=final_output)
+                return JourneyPlaywrightPromptResult(
+                    output=final_output,
                     model=self._model,
                     active_page_index=self._active_page_index,
-                    pages=pages,
+                    pages=tuple(self._prompt_pages()),
                     steps=tuple(self._steps),
                 )
-                self._write_memory(result)
-                return result
             except Exception as exc:
                 self._log_new_pages(previous_page_count=previous_page_count)
                 self._log_active_page_change(
@@ -325,17 +340,7 @@ class _PromptSession:
                 for page in pages
             ],
             "rendered_html": rendered_html,
-            "steps": [
-                {
-                    "index": step.index,
-                    "page_index": step.page_index,
-                    "action": step.action,
-                    "target": step.target,
-                    "status": step.status,
-                    "detail": step.detail,
-                }
-                for step in self._steps
-            ],
+            "steps": _steps_observation(tuple(self._steps)),
             "screenshot_data_url": screenshot_data_url,
         }
 
@@ -407,6 +412,97 @@ class _PromptSession:
         response_text = _extract_completion_text(response)
         return _strip_code_fences(response_text)
 
+    def _request_final_output(
+        self,
+        *,
+        observation: dict[str, object],
+    ) -> str | dict[str, object]:
+        prompt_parts = [
+            f"Instruction:\n{self._instruction}",
+            "",
+            "Known pages JSON:",
+            json.dumps(
+                observation["pages"],
+                sort_keys=True,
+                indent=2,
+            ),
+            "",
+            f"Active page index: {observation['active_page_index']}",
+            "",
+            "Executed steps JSON:",
+            json.dumps(observation["steps"], sort_keys=True, indent=2),
+            "",
+            "Active page rendered HTML:",
+            "<journey-rendered-html>",
+            cast(str, observation["rendered_html"]),
+            "</journey-rendered-html>",
+        ]
+        if self._output_schema is None:
+            prompt_parts.extend(
+                [
+                    "",
+                    "Return the final answer as plain text.",
+                ]
+            )
+            response_format = None
+            enable_json_schema_validation = None
+        else:
+            prompt_parts.extend(
+                [
+                    "",
+                    "Return the final answer using these output fields JSON:",
+                    self._output_schema.prompt_text,
+                ]
+            )
+            response_format = self._output_schema.response_format
+            enable_json_schema_validation = True
+
+        screenshot_data_url = cast(str, observation["screenshot_data_url"])
+        try:
+            kwargs: dict[str, object] = {}
+            if response_format is not None:
+                kwargs["response_format"] = response_format
+                kwargs["enable_json_schema_validation"] = enable_json_schema_validation
+            response = self._completion(
+                model=self._model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": _FINAL_OUTPUT_SYSTEM_MESSAGE,
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "\n".join(prompt_parts),
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": screenshot_data_url},
+                            },
+                        ],
+                    },
+                ],
+                max_tokens=1000,
+                temperature=0.0,
+                **kwargs,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "JourneyPlaywrightPage.prompt(...) failed to call "
+                f"model {self._model!r} for final output: {exc}"
+            ) from exc
+
+        response_text = _extract_completion_text(response).strip()
+        if self._output_schema is None:
+            return response_text
+        return parse_prompt_structured_output(
+            response_text,
+            self._output_schema,
+            owner="JourneyPlaywrightPage.prompt(...)",
+        )
+
     def _memory_for_observation(
         self,
         observation: dict[str, object],
@@ -434,7 +530,7 @@ class _PromptSession:
                 )
         return self._memory_entry
 
-    def _write_memory(self, result: JourneyPlaywrightPromptResult) -> None:
+    def _write_memory(self, *, final_output: str | dict[str, object]) -> None:
         if (
             self._memory_path is None
             or self._memory_key is None
@@ -445,7 +541,9 @@ class _PromptSession:
         entry = _memory_entry_from_result(
             instruction=self._instruction,
             page_signature=self._memory_page_signature,
-            result=result,
+            final_output=final_output,
+            pages=tuple(self._prompt_pages()),
+            steps=tuple(self._steps),
         )
         if self._memory_entry is not None:
             entry["successful_steps"] = _merge_memory_steps(
@@ -498,12 +596,13 @@ class _PromptSession:
             namespace["pages"] = tuple(self._pages)
             return target_page
 
-        def finish(text: object) -> None:
-            final_text = _require_text_value(
-                text,
-                "JourneyPlaywrightPage.prompt(...) finish(...) requires a non-empty string.",
-            )
-            raise _PromptFinished(final_text)
+        def finish(*args: object, **kwargs: object) -> None:
+            if args or kwargs:
+                raise ValueError(
+                    "JourneyPlaywrightPage.prompt(...) finish() does not accept "
+                    "arguments; Journey requests the final output separately."
+                )
+            raise _PromptFinished()
 
         namespace["switch_page"] = switch_page
         namespace["finish"] = finish
@@ -553,6 +652,7 @@ def prompt_page(
     max_steps: int,
     action_timeout_seconds: float,
     memory: str | None = None,
+    output: PromptOutputSpec | None = None,
 ) -> JourneyPlaywrightPromptResult:
     normalized_instruction = _require_text_value(
         instruction,
@@ -565,6 +665,10 @@ def prompt_page(
         memory,
         owner="JourneyPlaywrightPage.prompt(...)",
     )
+    output_schema = normalize_prompt_output_spec(
+        output,
+        owner="JourneyPlaywrightPage.prompt(...)",
+    )
     session = _PromptSession(
         page=page,
         instruction=normalized_instruction,
@@ -572,6 +676,7 @@ def prompt_page(
         max_steps=normalized_max_steps,
         action_timeout_seconds=normalized_timeout,
         memory_path=memory_path,
+        output_schema=output_schema,
     )
     return session.run()
 
@@ -608,13 +713,15 @@ def _memory_entry_from_result(
     *,
     instruction: str,
     page_signature: str,
-    result: JourneyPlaywrightPromptResult,
+    final_output: str | dict[str, object],
+    pages: tuple[JourneyPlaywrightPromptPage, ...],
+    steps: tuple[JourneyPlaywrightPromptStep, ...],
 ) -> dict[str, object]:
     return {
         "tool": "playwright",
         "instruction": normalize_prompt_instruction(instruction),
         "page_signature": page_signature,
-        "final_answer": truncate_prompt_memory_text(result.text),
+        "final_output": _truncate_memory_value(final_output),
         "pages": [
             {
                 "index": page.index,
@@ -622,10 +729,10 @@ def _memory_entry_from_result(
                 "title": truncate_prompt_memory_text(page.title),
                 "is_original": page.is_original,
             }
-            for page in result.pages
+            for page in pages
         ],
-        "successful_steps": _memory_steps(result.steps, status="ok"),
-        "rejected_steps": _memory_steps(result.steps, status="rejected"),
+        "successful_steps": _memory_steps(steps, status="ok"),
+        "rejected_steps": _memory_steps(steps, status="rejected"),
     }
 
 
@@ -647,6 +754,41 @@ def _memory_steps(
         }
         for step in selected[-MAX_PROMPT_MEMORY_ITEMS:]
     ]
+
+
+def _steps_observation(
+    steps: tuple[JourneyPlaywrightPromptStep, ...],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "index": step.index,
+            "page_index": step.page_index,
+            "action": step.action,
+            "target": step.target,
+            "status": step.status,
+            "detail": step.detail,
+        }
+        for step in steps
+    ]
+
+
+def _truncate_memory_value(value: object) -> object:
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        return truncate_prompt_memory_text(value)
+    if isinstance(value, list):
+        return [
+            _truncate_memory_value(item)
+            for item in value[-MAX_PROMPT_MEMORY_ITEMS:]
+        ]
+    if isinstance(value, dict):
+        return {
+            truncate_prompt_memory_text(key): _truncate_memory_value(item)
+            for key, item in list(value.items())[-MAX_PROMPT_MEMORY_ITEMS:]
+            if isinstance(key, str)
+        }
+    return truncate_prompt_memory_text(value)
 
 
 def _merge_memory_steps(
@@ -718,6 +860,12 @@ def _emit_prompt_code_log(*, step_label: str, code: str) -> None:
         )
 
 
+def _prompt_output_summary(value: str | dict[str, object]) -> str:
+    if isinstance(value, str):
+        return truncate_prompt_memory_text(value)
+    return truncate_prompt_memory_text(json.dumps(value, sort_keys=True))
+
+
 def _page_summary(page: JourneyPlaywrightPromptPage) -> str:
     return _format_page_summary(index=page.index, title=page.title, url=page.url)
 
@@ -783,9 +931,7 @@ def _describe_direct_function_call(call: ast.Call) -> str | None:
     if call.func.id == "switch_page":
         return f"switch to page {_call_arg_description(call, 0)}"
     if call.func.id == "finish":
-        if call.args:
-            return f"finish with answer {_node_description(call.args[0])}"
-        return "finish the prompt"
+        return "finish the browser action loop"
     return None
 
 

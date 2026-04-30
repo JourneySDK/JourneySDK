@@ -28,10 +28,12 @@ for retry, branch, or `--state` behavior.
 - `journeysdk.tools.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
 - `journeysdk.tools.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
 
-Prompt-capable official tools use named prompt memory. Pass a literal, unique `memory="name"` to a tool's
-`prompt(...)` method when prior successful runs should teach later runs compact lessons. Journey stores
-`name.memory.json` beside the journey source. Use `--no-memory` for runs that should ignore and avoid updating those
-files.
+Prompt-capable official tools use named prompt memory and optional structured output. Pass a literal, unique
+`memory="name"` to a tool's `prompt(...)` method when prior successful runs should teach later runs compact lessons.
+Journey stores `name.memory.json` beside the journey source. Use `--no-memory` for runs that should ignore and avoid
+updating those files. Prompt methods return a result object with `result.output`. Omit `output` when that field should
+contain plain text; pass `output={"field": "description"}` or JSON-schema field fragments when it should contain a
+provider-validated `dict[str, object]`.
 
 ## Core Workflow
 

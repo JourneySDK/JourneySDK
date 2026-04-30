@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -329,6 +330,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         max_steps: int = 15,
         action_timeout_seconds: float = 5.0,
         memory: str | None = None,
+        output: Mapping[str, str | Mapping[str, object]] | None = None,
     ) -> JourneyPlaywrightPromptResult:
         """Use an LLM to inspect and interact with the live page.
 
@@ -338,6 +340,10 @@ class JourneyPlaywrightPage(PlaywrightPage):
             max_steps: Maximum generated Python snippets before failing.
             action_timeout_seconds: Timeout passed to generated Playwright actions.
             memory: Optional named prompt memory stored as `[memory].memory.json`.
+            output: Optional structured-output fields. String values are field
+                descriptions for string output fields; mapping values are
+                JSON-schema property fragments. When omitted, result.output is
+                plain text.
         """
 
         if not self._is_live:
@@ -352,6 +358,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
             max_steps=max_steps,
             action_timeout_seconds=action_timeout_seconds,
             memory=memory,
+            output=output,
         )
 
 
