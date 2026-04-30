@@ -68,6 +68,17 @@ tool tests should cover successful cleanup of returned handles, nested returned
 handles, cleanup failure, the outside-step guard for resource helpers, explicit
 cleanup for non-returned live resources, and rehydration of returned values.
 
+## Prompt Memory Pattern
+
+Official tools that add an AI-driven `prompt(...)` method should use the shared helpers in
+`journeysdk._prompt_memory` instead of inventing their own storage. The method should accept
+`memory: str | None = None`, respect `--no-memory` and `execute(..., no_memory=True)`, and store only compact
+summaries from successful runs. Do not persist screenshots, rendered HTML, full model prompts, or other raw
+observations that may contain secrets.
+
+Memory files are named `[memory].memory.json` and live beside the journey source. Planning must be able to validate
+literal memory names and reject duplicates before execution.
+
 ## Manual Release Flow
 
 1. Update the package version in `pyproject.toml`.

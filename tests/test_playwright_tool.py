@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -1061,6 +1062,142 @@ def test_journey_playwright_prompt_retries_rejected_python(
         'page.locator(\\"#composer\\").fill'
         '(\\"I need to fix a toilet\\", timeout=timeout_ms)'
     ) in log_output
+
+
+def test_journey_playwright_prompt_writes_and_reuses_named_memory(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Chat",
+        url="http://example.test/chat?session=secret#composer",
+        context=context,
+        events=events,
+        elements=[
+            _prompt_element("#attach", name="Attach file"),
+            _prompt_element(
+                "#composer",
+                name="Message",
+                role="textbox",
+                tag_name="div",
+                text="",
+            ),
+        ],
+    )
+    context.pages.append(page)
+
+    first_completion = _FakeCompletion(
+        [
+            'page.locator("#attach").click(timeout=timeout_ms)',
+            'page.locator("#composer").fill("hello", timeout=timeout_ms)',
+            'finish("Started the chat.")',
+        ]
+    )
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: first_completion,
+    )
+
+    page.prompt(
+        "say hello",
+        model="openai/gpt-4.1-mini",
+        memory="chat-start",
+    )
+
+    memory_path = tmp_path / "chat-start.memory.json"
+    memory_payload = json.loads(memory_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(memory_payload)
+    assert memory_payload["version"] == 1
+    assert "rendered-html" not in serialized
+    assert "data:image" not in serialized
+    assert "png:Chat" not in serialized
+    assert '<div id="composer"' not in serialized
+    entry = next(iter(memory_payload["entries"].values()))
+    assert entry["final_answer"] == "Started the chat."
+    assert entry["page_signature"] == (
+        '{"title":"Chat","url":"http://example.test/chat"}'
+    )
+    assert entry["successful_steps"][0]["target"] == (
+        'page.locator("#composer").fill("hello", timeout=timeout_ms)'
+    )
+    assert entry["rejected_steps"][0]["target"] == (
+        'page.locator("#attach").click(timeout=timeout_ms)'
+    )
+
+    second_completion = _FakeCompletion(['finish("Done from memory.")'])
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: second_completion,
+    )
+    page.prompt(
+        "say hello",
+        model="openai/gpt-4.1-mini",
+        memory="chat-start",
+    )
+    second_prompt_text = second_completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert "Prompt memory JSON:" in second_prompt_text
+    assert "#attach" in second_prompt_text
+    assert "#composer" in second_prompt_text
+    assert "hello" in second_prompt_text
+
+    third_completion = _FakeCompletion(['finish("Done without memory.")'])
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: third_completion,
+    )
+    page.prompt(
+        "say goodbye",
+        model="openai/gpt-4.1-mini",
+        memory="chat-start",
+    )
+    third_prompt_text = third_completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert "Prompt memory JSON:" not in third_prompt_text
+
+
+def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: _FakeCompletion(['finish("Done.")']),
+    )
+
+    def fail_memory_access(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("prompt memory should be disabled")
+
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "load_prompt_memory_entry",
+        fail_memory_access,
+    )
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "write_prompt_memory_entry",
+        fail_memory_access,
+    )
+
+    def run_prompt() -> journey_playwright.JourneyPlaywrightPromptResult:
+        return page.prompt("finish", model="openai/gpt-4.1-mini", memory="disabled")
+
+    def memory_journey() -> None:
+        journey_sdk.step(run_prompt)
+
+    journey_sdk.execute(memory_journey, no_memory=True)
 
 
 def test_journey_playwright_prompt_enforces_max_steps(

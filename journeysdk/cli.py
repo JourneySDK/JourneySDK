@@ -802,6 +802,7 @@ def _execute_all_targets(
     fail_fast: bool,
     state: str | None = None,
     stream_live: bool = False,
+    no_memory: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     executed: list[_ExecutedJourney] = []
     errors: list[_CommandError] = []
@@ -829,6 +830,8 @@ def _execute_all_targets(
                 plan=item.plan,
                 state=state,
                 observer=observer,
+                no_memory=no_memory,
+                prompt_memory_root=item.file_path.parent,
             )
         except Exception as exc:
             _CLI_LOGGER.error(
@@ -876,6 +879,7 @@ def _execute_target_step(
     step: str,
     state: str | None = None,
     stream_live: bool = False,
+    no_memory: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     selected, errors = _select_targeted_journey(compiled, step=step)
     if selected is None:
@@ -905,6 +909,8 @@ def _execute_target_step(
             step=step,
             state=state,
             observer=observer,
+            no_memory=no_memory,
+            prompt_memory_root=selected.file_path.parent,
         )
     except Exception as exc:
         _CLI_LOGGER.error(
@@ -992,6 +998,7 @@ def _execute_target_pause(
     state: str | None = None,
     stream_live: bool = False,
     interactive: bool = False,
+    no_memory: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     selected, errors = _select_targeted_journey(compiled, step=develop_step)
     if selected is None:
@@ -1035,6 +1042,8 @@ def _execute_target_pause(
                 pause_action=pause_action,
                 state=str(managed_state),
                 observer=observer,
+                no_memory=no_memory,
+                prompt_memory_root=selected.file_path.parent,
             )
             if isinstance(outcome, _PausedExecution):
                 outcome.close_pending_exits()
@@ -1077,6 +1086,8 @@ def _execute_target_pause(
                 pause_action=pause_action,
                 state=str(managed_state),
                 observer=observer,
+                no_memory=no_memory,
+                prompt_memory_root=selected.file_path.parent,
             )
             if isinstance(outcome, _PausedExecution):
                 try:
@@ -1329,6 +1340,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     fail_fast=args.fail_fast,
                     state=args.state,
                     stream_live=True,
+                    no_memory=args.no_memory,
                 )
                 executed.extend(run_results)
             else:
@@ -1340,6 +1352,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         state=args.state,
                         stream_live=True,
                         interactive=args.interactive,
+                        no_memory=args.no_memory,
                     )
                 else:
                     run_results, run_errors = _execute_target_step(
@@ -1348,6 +1361,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         step=args.step,
                         state=args.state,
                         stream_live=True,
+                        no_memory=args.no_memory,
                     )
                 executed.extend(run_results)
     except KeyboardInterrupt:
@@ -1393,6 +1407,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prompt to continue or retry after each --develop-step pause",
     )
     parser.add_argument("--state", help="Persist and resume execution state in one file")
+    parser.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Disable prompt-memory reads and writes for this run",
+    )
     parser.add_argument("--json", action="store_true", help="Emit execution JSON")
     parser.add_argument(
         "--log-level",

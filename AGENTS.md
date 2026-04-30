@@ -60,6 +60,17 @@ CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout f
 - Callback URLs may remain unauthenticated when the generated URL itself is the capability used by the system
   under test.
 
+## Prompt memory pattern
+
+- Official tools with AI-driven `prompt(...)` methods should accept `memory: str | None = None` and use the shared
+  helpers in `journeysdk._prompt_memory`.
+- Memory files are named `[memory].memory.json`, live beside the journey source file, and are intended to be
+  reviewable in version control.
+- `--no-memory` and `execute(..., no_memory=True)` must disable all prompt-memory reads and writes.
+- Store compact lessons from successful runs only. Do not persist screenshots, rendered HTML, full model prompts, or
+  raw observations.
+- Keep memory names literal and unique within a compiled journey so planning can report mistakes before execution.
+
 ## Change guidance
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.

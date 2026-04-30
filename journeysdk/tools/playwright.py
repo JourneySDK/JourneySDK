@@ -328,8 +328,17 @@ class JourneyPlaywrightPage(PlaywrightPage):
         model: str | None = None,
         max_steps: int = 8,
         action_timeout_seconds: float = 5.0,
+        memory: str | None = None,
     ) -> JourneyPlaywrightPromptResult:
-        """Use an LLM to inspect and interact with the live page."""
+        """Use an LLM to inspect and interact with the live page.
+
+        Args:
+            instruction: Natural-language task for the prompt loop.
+            model: Optional LiteLLM model name.
+            max_steps: Maximum generated Python snippets before failing.
+            action_timeout_seconds: Timeout passed to generated Playwright actions.
+            memory: Optional named prompt memory stored as `[memory].memory.json`.
+        """
 
         if not self._is_live:
             raise RuntimeError(
@@ -342,6 +351,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
             model=model,
             max_steps=max_steps,
             action_timeout_seconds=action_timeout_seconds,
+            memory=memory,
         )
 
 

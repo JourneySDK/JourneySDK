@@ -23,6 +23,11 @@ from .models import (
     StepRetry,
     _duration_to_seconds,
 )
+from ._prompt_memory import (
+    PromptMemoryReference,
+    collect_prompt_memory_references,
+    format_duplicate_prompt_memory_error,
+)
 from .session import use_session
 from .types import JourneyEntrypoint, StepFunction
 from .utils import callable_ref, callable_source_fingerprint
@@ -45,10 +50,19 @@ class _ActiveBranchChain:
     cases: list[BranchCase]
 
 
+PromptMemoryRefsByName = dict[str, dict[tuple[str, int, int, str], PromptMemoryReference]]
+
+
 class _PlanSession:
     mode = "plan"
 
-    def __init__(self, branch_env: BranchEnv, *, validation: JourneyValidation) -> None:
+    def __init__(
+        self,
+        branch_env: BranchEnv,
+        *,
+        validation: JourneyValidation,
+        prompt_memory_refs_by_name: PromptMemoryRefsByName,
+    ) -> None:
         self.branch_env = dict(branch_env)
         self.validation = validation
         self.nodes: list[PlanNode] = []
@@ -57,6 +71,8 @@ class _PlanSession:
         self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
         self._steps_seen: set[str] = set()
         self._journey_webhook_epoch = 0
+        self._prompt_memory_refs_by_name = prompt_memory_refs_by_name
+        self._prompt_memory_refs_seen_in_session: set[tuple[str, int, int, str]] = set()
 
     def _next_node_id(self) -> str:
         self._node_counter += 1
@@ -79,6 +95,7 @@ class _PlanSession:
             raise TypeError(
                 "step(...) needs a callable as its first argument."
             )
+        self._register_step_prompt_memory_references(fn)
         node_id = self._next_node_id()
         resolved_retry = _resolve_step_retry(
             retry=retry,
@@ -99,6 +116,38 @@ class _PlanSession:
         self.nodes.append(node)
         self._steps_seen.add(node.node_id)
         return PlannedValue(node_id=node.node_id, kind="step")
+
+    def _register_step_prompt_memory_references(self, fn: object) -> None:
+        for reference in collect_prompt_memory_references(fn):
+            refs_by_identity = self._prompt_memory_refs_by_name.setdefault(
+                reference.name,
+                {},
+            )
+            seen_in_session = reference.identity in self._prompt_memory_refs_seen_in_session
+            self._prompt_memory_refs_seen_in_session.add(reference.identity)
+            if reference.identity in refs_by_identity:
+                if seen_in_session:
+                    raise InvalidBranchUsageError(
+                        format_duplicate_prompt_memory_error(
+                            reference.name,
+                            (refs_by_identity[reference.identity], reference),
+                        ),
+                        hint=(
+                            "Use one unique memory name per prompt(...) invocation "
+                            "in a compiled journey."
+                        ),
+                    )
+                continue
+            if refs_by_identity:
+                references = tuple(refs_by_identity.values()) + (reference,)
+                raise InvalidBranchUsageError(
+                    format_duplicate_prompt_memory_error(reference.name, references),
+                    hint=(
+                        "Use one unique memory name per prompt(...) call in a "
+                        "compiled journey."
+                    ),
+                )
+            refs_by_identity[reference.identity] = reference
 
     def branch(self, *, start_from: str | None, frame: FrameType) -> bool:
         site = resolve_branch_call_site(frame)
@@ -226,10 +275,15 @@ def compile_journey(journey_fn: JourneyEntrypoint) -> JourneyPlan:
 
     queue: deque[BranchEnv] = deque([{}])
     case_plans: list[CasePlan] = []
+    prompt_memory_refs_by_name: PromptMemoryRefsByName = {}
 
     while queue:
         env = queue.popleft()
-        session = _PlanSession(env, validation=validation)
+        session = _PlanSession(
+            env,
+            validation=validation,
+            prompt_memory_refs_by_name=prompt_memory_refs_by_name,
+        )
 
         try:
             with use_session(session):

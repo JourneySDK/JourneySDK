@@ -343,6 +343,7 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
         return page.prompt(
             'click on a "Sign in" button and get the title of the opened popup',
             model="anthropic/claude-sonnet-4-5",
+            memory="sign-in-popup",
         )
     finally:
         page.__exit__(None, None, None)
@@ -359,6 +360,16 @@ def assert_prompt_result(result: JourneyPlaywrightPromptResult) -> bool:
 
 `result.text` is the model's final user-facing answer. `result.pages` reports the original page plus any popup or tab
 the prompt loop discovered, and `result.steps` records the bounded action history without storing hidden reasoning.
+
+The `memory="sign-in-popup"` argument gives this prompt a named memory file. After a successful run, Journey writes
+`docs/playwright_prompt_journey/sign-in-popup.memory.json` beside the journey source. Later runs with the same prompt
+memory can show the model compact lessons from the prior successful run, such as selectors that worked or selectors
+that were rejected before the run recovered. Prompt memory stores summaries only; it does not store screenshots,
+rendered HTML, or full model prompts.
+
+Memory names must be literal strings and unique within one compiled journey. That keeps planning deterministic and
+makes memory files easy to review in version control. Use `--no-memory` when you want to run without reading or
+updating prompt memory.
 
 ## What To Notice
 

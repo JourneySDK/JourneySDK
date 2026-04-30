@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import time
 from collections.abc import Iterator
@@ -1193,6 +1194,8 @@ class _RunSession:
         branch_anchor_seed: RuntimeSnapshotState | None = None,
         branch_anchor_key: str | None = None,
         observer: _ExecutionObserver | None = None,
+        prompt_memory_root: Path | None = None,
+        prompt_memory_disabled: bool = False,
     ) -> None:
         self.journey_plan = journey_plan
         self.case_plan = case_plan
@@ -1216,6 +1219,8 @@ class _RunSession:
         self._paused_step: PausedStepState | None = None
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
+        self._prompt_memory_root = prompt_memory_root
+        self._prompt_memory_disabled = prompt_memory_disabled
         self._active_step_lifecycle: _StepLifecycle | None = None
         self._step_key_by_id = _case_rehydration_maps(case_plan)
         self._step_index_by_id = {
@@ -2002,6 +2007,12 @@ class _RunSession:
             lifecycle is not None
             and lifecycle.phase == _STEP_LIFECYCLE_EXECUTION
         )
+
+    def prompt_memory_root(self) -> Path | None:
+        return self._prompt_memory_root
+
+    def prompt_memory_disabled(self) -> bool:
+        return self._prompt_memory_disabled
 
     def _ensure_no_active_step_lifecycle(self) -> None:
         if self._active_step_lifecycle is not None:
@@ -2906,6 +2917,17 @@ def _refresh_develop_state_for_plan(
     return _DevelopStateRefresh()
 
 
+def _resolve_prompt_memory_root(
+    journey_fn: JourneyEntrypoint,
+    *,
+    prompt_memory_root: str | Path | None,
+) -> Path:
+    if prompt_memory_root is not None:
+        return Path(prompt_memory_root)
+    source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
+    return Path(source_file).resolve().parent
+
+
 def _execute_plan(
     journey_fn: JourneyEntrypoint,
     *,
@@ -2915,6 +2937,8 @@ def _execute_plan(
     pause_action: str | None = None,
     state: str | Path | None = None,
     observer: _ExecutionObserver | None = None,
+    no_memory: bool = False,
+    prompt_memory_root: str | Path | None = None,
 ) -> ExecutionReport | _PausedExecution:
     target_step = develop_step if develop_step is not None else step
     selected_cases = _select_cases(plan, target_step)
@@ -2949,6 +2973,10 @@ def _execute_plan(
         allow_stale_develop_pause=(
             develop_step is not None and effective_pause_action is None
         ),
+    )
+    resolved_prompt_memory_root = _resolve_prompt_memory_root(
+        journey_fn,
+        prompt_memory_root=prompt_memory_root,
     )
 
     case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
@@ -2989,6 +3017,8 @@ def _execute_plan(
                     start_anchor_key if branch_anchor_seed is not None else None
                 ),
                 observer=execution_observer,
+                prompt_memory_root=resolved_prompt_memory_root,
+                prompt_memory_disabled=no_memory,
             )
             if restored_state is None:
                 state_controller.begin_case(
@@ -3090,8 +3120,22 @@ def execute(
     *,
     step: str | None = None,
     state: str | Path | None = None,
+    no_memory: bool = False,
 ) -> ExecutionReport:
-    """Compile a journey and execute full cases or one targeted step flow."""
+    """Compile a journey and execute full cases or one targeted step flow.
+
+    Args:
+        journey_fn: Journey entrypoint to compile and execute.
+        step: Optional target step label.
+        state: Optional state file for replay and resume.
+        no_memory: Disable prompt-memory reads and writes for this run.
+    """
 
     plan = compile_journey(journey_fn)
-    return _execute_plan(journey_fn, plan=plan, step=step, state=state)
+    return _execute_plan(
+        journey_fn,
+        plan=plan,
+        step=step,
+        state=state,
+        no_memory=no_memory,
+    )

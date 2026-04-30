@@ -28,6 +28,11 @@ for retry, branch, or `--state` behavior.
 - `journeysdk.tools.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
 - `journeysdk.tools.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
 
+Prompt-capable official tools use named prompt memory. Pass a literal, unique `memory="name"` to a tool's
+`prompt(...)` method when prior successful runs should teach later runs compact lessons. Journey stores
+`name.memory.json` beside the journey source. Use `--no-memory` for runs that should ignore and avoid updating those
+files.
+
 ## Core Workflow
 
 Use this workflow when developing Journey SDK journeys:
@@ -91,6 +96,12 @@ saved inputs:
 uv run journey --file docs/resume_journey/resume_journey.py --state .journey/run.state
 ```
 
+Use `--no-memory` when a journey contains AI-driven prompts but the run should not read or update prompt-memory files:
+
+```bash
+uv run journey --file docs/playwright_prompt_journey/playwright_prompt_journey.py --no-memory
+```
+
 ## Develop One Step
 
 Use `--develop-step LABEL --state .journey/develop-step.state` for agent-friendly edit-run loops. Noninteractive
@@ -120,5 +131,7 @@ in-process continue/retry prompt.
 - Prefer explicit step functions over anonymous lambdas or deeply nested closures.
 - Store external resource handles as serializable descriptors or rehydratable top-level classes, not as live sockets, browsers, sessions, or clients.
 - Keep official tool usage side-effect free during planning; acquire live resources inside step execution.
+- Use literal, unique prompt-memory names for AI-driven `prompt(...)` calls, and keep generated `*.memory.json` files
+  reviewable if they are committed.
 - Use `journeysdk.logger.get_logger("component")` for SDK/tool/tutorial diagnostics instead of printing directly to stderr.
 - Use noninteractive `--develop-step` with persistent state for coding agents, and run the full relevant journey or test suite before wrapping up.

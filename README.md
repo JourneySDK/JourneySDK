@@ -355,6 +355,7 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
         return page.prompt(
             'click on a "Sign in" button and get the title of the opened popup',
             model="anthropic/claude-sonnet-4-5",
+            memory="sign-in-popup",
         )
     finally:
         page.__exit__(None, None, None)
@@ -362,6 +363,9 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
 
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
 `ANTHROPIC_API_KEY`, and either pass `model=...` or set `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
+The optional `memory="sign-in-popup"` argument stores compact lessons from successful runs in
+`sign-in-popup.memory.json` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
+updating prompt memory.
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
 enabled, Journey stores the step inputs and outputs it may need to replay later, so those values must be

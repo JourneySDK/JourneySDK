@@ -116,6 +116,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "--log-level",
             "debug",
             "--fail-fast",
+            "--no-memory",
         ]
     )
     assert execute_args.file == "journeys.py"
@@ -125,6 +126,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.json is True
     assert execute_args.log_level == "debug"
     assert execute_args.fail_fast is True
+    assert execute_args.no_memory is True
 
     pause_args = parser.parse_args(
         [
