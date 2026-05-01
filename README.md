@@ -373,6 +373,8 @@ The optional `memory="sign-in-popup"` argument stores compact lessons from succe
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.
 The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
 `dict[str, object]` in `result.output` instead of plain text.
+If the browser task cannot be completed because the page shows a blocking app state, such as a locked account or
+invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning a successful prompt result.
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
 enabled, Journey stores the step inputs and outputs it may need to replay later, so those values must be

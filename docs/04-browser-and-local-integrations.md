@@ -365,6 +365,8 @@ def assert_prompt_result(result: JourneyPlaywrightPromptResult) -> bool:
 
 `result.output` is the model's final answer. `result.pages` reports the original page plus any popup or tab the prompt
 loop discovered, and `result.steps` records the bounded action history without storing hidden reasoning.
+If the requested browser task cannot complete because the page shows a blocking app state, such as a locked account or
+invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning a successful prompt result.
 
 The `memory="sign-in-popup"` argument gives this prompt a named memory file. After a successful run, Journey writes
 `docs/playwright_prompt_journey/sign-in-popup.memory.json` beside the journey source. Later runs with the same prompt

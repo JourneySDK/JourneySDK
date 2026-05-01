@@ -325,6 +325,13 @@ class _FakeCompletion:
         }
 
 
+_PROMPT_COMPLETED = '{"completed": true, "reason": ""}'
+
+
+def _prompt_failed(reason: str) -> str:
+    return json.dumps({"completed": False, "reason": reason})
+
+
 def _prompt_element(
     selector: str,
     *,
@@ -910,6 +917,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
             'page.locator("#sign-in").click(timeout=timeout_ms)',
             "switch_page(1)",
             "finish()",
+            _PROMPT_COMPLETED,
             "The opened popup title is Welcome popup.",
         ]
     )
@@ -969,7 +977,15 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         ),
     )
     assert fake_completion.calls[0]["model"] == "anthropic/claude-sonnet-4-5"
-    assert fake_completion.calls[3]["response_format"] is None
+    verdict_call = fake_completion.calls[3]
+    assert verdict_call["enable_json_schema_validation"] is True
+    assert verdict_call["response_format"] == (
+        journey_playwright_prompt._PROMPT_COMPLETION_VERDICT_RESPONSE_FORMAT
+    )
+    assert "Return whether the original browser task is completed." in verdict_call[
+        "messages"
+    ][1]["content"][0]["text"]
+    assert fake_completion.calls[4]["response_format"] is None
     assert not hasattr(journey_playwright_prompt, "_COLLECT_ELEMENTS_SCRIPT")
     first_prompt_text = fake_completion.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-rendered-html>" in first_prompt_text
@@ -980,7 +996,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         fake_completion.calls[1]["messages"][1]["content"][0]["text"].find('"title": "Welcome popup"')
         != -1
     )
-    final_prompt_text = fake_completion.calls[3]["messages"][1]["content"][0]["text"]
+    final_prompt_text = fake_completion.calls[4]["messages"][1]["content"][0]["text"]
     assert "Executed steps JSON:" in final_prompt_text
     assert '"action": "finish"' in final_prompt_text
     assert "Return the final answer as plain text." in final_prompt_text
@@ -1029,6 +1045,7 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
     fake_completion = _FakeCompletion(
         [
             "finish()",
+            _PROMPT_COMPLETED,
             '{"popup_title": "Welcome popup", "has_welcome_text": true}',
         ]
     )
@@ -1055,7 +1072,12 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
         "has_welcome_text": True,
     }
     assert fake_completion.calls[0]["response_format"] is None
-    final_call = fake_completion.calls[1]
+    verdict_call = fake_completion.calls[1]
+    assert verdict_call["enable_json_schema_validation"] is True
+    assert verdict_call["response_format"] == (
+        journey_playwright_prompt._PROMPT_COMPLETION_VERDICT_RESPONSE_FORMAT
+    )
+    final_call = fake_completion.calls[2]
     assert final_call["enable_json_schema_validation"] is True
     assert final_call["response_format"] == {
         "type": "json_schema",
@@ -1101,6 +1123,7 @@ def test_journey_playwright_prompt_final_output_includes_visible_error_text(monk
     fake_completion = _FakeCompletion(
         [
             "finish()",
+            _PROMPT_COMPLETED,
             '{"error": ""}',
         ]
     )
@@ -1111,7 +1134,7 @@ def test_journey_playwright_prompt_final_output_includes_visible_error_text(monk
     )
 
     result = page.prompt(
-        "sign in",
+        "report the visible sign-in error",
         model="openai/gpt-4.1-mini",
         output={"error": "An error message if found."},
     )
@@ -1119,15 +1142,106 @@ def test_journey_playwright_prompt_final_output_includes_visible_error_text(monk
     assert result.output == {
         "error": "Password is incorrect. Try again, or use another method.",
     }
-    final_prompt_text = fake_completion.calls[1]["messages"][1]["content"][0]["text"]
+    final_prompt_text = fake_completion.calls[2]["messages"][1]["content"][0]["text"]
     assert "<journey-visible-text>" in final_prompt_text
     assert "Password is incorrect. Try again, or use another method." in final_prompt_text
     assert (
         "Do not return an empty string for such a field"
-        in fake_completion.calls[1]["messages"][0]["content"]
+        in fake_completion.calls[2]["messages"][0]["content"]
     )
     assert ("prompt_wait_for_load_state", "Login", "networkidle", 2000) in events
     assert ("prompt_wait_for_timeout", "Login", 500) in events
+
+
+def test_journey_playwright_prompt_finish_with_blocking_error_raises(
+    monkeypatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+    reason = (
+        "Your account is locked. You will be able to try again in 59 minutes. "
+        "For more information, please contact alfie@heyalfie.com."
+    )
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        visible_texts={reason},
+    )
+    context.pages.append(page)
+    fake_completion = _FakeCompletion(
+        [
+            "finish()",
+            _prompt_failed(reason),
+        ]
+    )
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: fake_completion,
+    )
+
+    with pytest.raises(RuntimeError, match="Your account is locked"):
+        page.prompt(
+            'Sign in as e2etest@heyalfie.com using password "1111"',
+            model="openai/gpt-4.1-mini",
+            memory="sign-in",
+        )
+    log_output = capsys.readouterr().err
+
+    assert len(fake_completion.calls) == 2
+    verdict_call = fake_completion.calls[1]
+    assert verdict_call["enable_json_schema_validation"] is True
+    assert verdict_call["response_format"] == (
+        journey_playwright_prompt._PROMPT_COMPLETION_VERDICT_RESPONSE_FORMAT
+    )
+    verdict_prompt_text = verdict_call["messages"][1]["content"][0]["text"]
+    assert "<journey-visible-text>" in verdict_prompt_text
+    assert reason in verdict_prompt_text
+    assert "event=prompt_failed" in log_output
+    assert not (tmp_path / "sign-in.memory.json").exists()
+
+
+def test_journey_playwright_prompt_fail_action_raises_without_final_output(
+    monkeypatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+    reason = "Your account is locked. Try again later."
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        visible_texts={reason},
+    )
+    context.pages.append(page)
+    fake_completion = _FakeCompletion([f"fail({reason!r})"])
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_litellm_completion",
+        lambda: fake_completion,
+    )
+
+    with pytest.raises(RuntimeError, match="Your account is locked"):
+        page.prompt(
+            "sign in",
+            model="openai/gpt-4.1-mini",
+            memory="sign-in",
+        )
+    log_output = capsys.readouterr().err
+
+    assert len(fake_completion.calls) == 1
+    assert fake_completion.calls[0]["response_format"] is None
+    assert "event=prompt_failed" in log_output
+    assert not (tmp_path / "sign-in.memory.json").exists()
 
 
 def test_journey_playwright_prompt_rejects_invalid_output_specs(monkeypatch):
@@ -1175,7 +1289,9 @@ def test_journey_playwright_prompt_rejects_malformed_structured_output(monkeypat
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
-        lambda: _FakeCompletion(["finish()", '{"popup_title": "Welcome", "extra": true}']),
+        lambda: _FakeCompletion(
+            ["finish()", _PROMPT_COMPLETED, '{"popup_title": "Welcome", "extra": true}']
+        ),
     )
 
     with pytest.raises(RuntimeError, match="unexpected fields"):
@@ -1215,6 +1331,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
             'page.locator("#attach").click(timeout=timeout_ms)',
             'page.locator("#composer").fill("I need to fix a toilet", timeout=timeout_ms)',
             "finish()",
+            _PROMPT_COMPLETED,
             "Started the chat.",
         ]
     )
@@ -1307,6 +1424,7 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
             'page.locator("#attach").click(timeout=timeout_ms)',
             'page.locator("#composer").fill("hello", timeout=timeout_ms)',
             "finish()",
+            _PROMPT_COMPLETED,
             "Started the chat.",
         ]
     )
@@ -1342,7 +1460,7 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
         'page.locator("#attach").click(timeout=timeout_ms)'
     )
 
-    second_completion = _FakeCompletion(["finish()", "Done from memory."])
+    second_completion = _FakeCompletion(["finish()", _PROMPT_COMPLETED, "Done from memory."])
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
@@ -1359,7 +1477,9 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
     assert "#composer" in second_prompt_text
     assert "hello" in second_prompt_text
 
-    third_completion = _FakeCompletion(["finish()", "Done without memory."])
+    third_completion = _FakeCompletion(
+        ["finish()", _PROMPT_COMPLETED, "Done without memory."]
+    )
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
@@ -1387,7 +1507,7 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
-        lambda: _FakeCompletion(["finish()", "Done."]),
+        lambda: _FakeCompletion(["finish()", _PROMPT_COMPLETED, "Done."]),
     )
 
     def fail_memory_access(*args: object, **kwargs: object) -> object:
@@ -1424,7 +1544,7 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
         events=events,
     )
     context.pages.append(page)
-    completion = _FakeCompletion(["finish()", "Done."])
+    completion = _FakeCompletion(["finish()", _PROMPT_COMPLETED, "Done."])
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
@@ -1518,7 +1638,9 @@ def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):
         events=events,
     )
     context.pages.append(page)
-    completion = _FakeCompletion(['page.locator("#sign-in"', "finish()", "Recovered."])
+    completion = _FakeCompletion(
+        ['page.locator("#sign-in"', "finish()", _PROMPT_COMPLETED, "Recovered."]
+    )
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
@@ -1548,7 +1670,12 @@ def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
         journey_playwright_prompt,
         "_load_litellm_completion",
         lambda: _FakeCompletion(
-            ['{"action":"hover","target":"e1","value":null}', "finish()", "Recovered."]
+            [
+                '{"action":"hover","target":"e1","value":null}',
+                "finish()",
+                _PROMPT_COMPLETED,
+                "Recovered.",
+            ]
         ),
     )
 
@@ -1570,7 +1697,7 @@ def test_journey_playwright_prompt_rejects_blank_finish_then_recovers(monkeypatc
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_litellm_completion",
-        lambda: _FakeCompletion(['finish("")', "finish()", "Done."]),
+        lambda: _FakeCompletion(['finish("")', "finish()", _PROMPT_COMPLETED, "Done."]),
     )
 
     result = page.prompt("finish clearly", model="openai/gpt-4.1-mini")

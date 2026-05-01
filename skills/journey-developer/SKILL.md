@@ -33,7 +33,8 @@ Prompt-capable official tools use named prompt memory and optional structured ou
 Journey stores `name.memory.json` beside the journey source. Use `--no-memory` for runs that should ignore and avoid
 updating those files. Prompt methods return a result object with `result.output`. Omit `output` when that field should
 contain plain text; pass `output={"field": "description"}` or JSON-schema field fragments when it should contain a
-provider-validated `dict[str, object]`.
+provider-validated `dict[str, object]`. If the requested browser task cannot complete because the page shows a blocking
+app state, the prompt method raises instead of returning a successful prompt result.
 
 ## Core Workflow
 
