@@ -15,7 +15,7 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
     try:
         return page.prompt(
             'click on a "Sign in" button and get the title of the opened popup',
-            model="anthropic/claude-sonnet-4-5",
+            model="anthropic:claude-sonnet-4-5",
             memory="sign-in-popup",
             output={
                 "popup_title": "The title of the opened popup.",

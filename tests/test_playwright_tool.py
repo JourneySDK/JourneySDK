@@ -287,66 +287,102 @@ class _FakePromptLocator:
             assert self._selector.removeprefix("text=") in self._page._fake_prompt_visible_texts
 
 
-class _FakeCompletion:
-    def __init__(self, responses: list[str | dict[str, object]]) -> None:
-        self._responses = list(responses)
-        self.calls: list[dict[str, object]] = []
-        self._response_index = 0
-
-    def __call__(
+class _FakeAIMessage:
+    def __init__(
         self,
         *,
-        model: str,
-        messages: list[dict[str, object]],
-        max_tokens: int,
-        temperature: float,
-        response_format: dict[str, object] | None = None,
-        enable_json_schema_validation: bool | None = None,
-        tools: list[dict[str, object]] | None = None,
-        tool_choice: str | dict[str, object] | None = None,
-        parallel_tool_calls: bool | None = None,
-    ) -> dict[str, object]:
-        self.calls.append(
+        content: object = "",
+        tool_calls: list[dict[str, object]] | None = None,
+        invalid_tool_calls: list[object] | None = None,
+    ) -> None:
+        self.content = content
+        self.tool_calls = tool_calls or []
+        self.invalid_tool_calls = invalid_tool_calls or []
+
+
+class _FakeBoundLangChainModel:
+    def __init__(self, prompt_model: _FakeLangChainPromptModel) -> None:
+        self._prompt_model = prompt_model
+
+    def invoke(self, messages: list[object]) -> _FakeAIMessage:
+        self._prompt_model.calls.append({"messages": list(messages)})
+        if not self._prompt_model._responses:
+            raise AssertionError("No fake LLM responses remaining.")
+        self._prompt_model._response_index += 1
+        response = self._prompt_model._responses.pop(0)
+        if isinstance(response, str):
+            return _FakeAIMessage(content=response)
+        message = dict(response)
+        tool_calls = message.get("tool_calls")
+        normalized_tool_calls: list[dict[str, object]] = []
+        if isinstance(tool_calls, list):
+            for index, tool_call in enumerate(tool_calls, start=1):
+                assert isinstance(tool_call, dict)
+                normalized = dict(tool_call)
+                normalized.setdefault(
+                    "id",
+                    f"fake-call-{self._prompt_model._response_index}-{index}",
+                )
+                normalized.setdefault("type", "tool_call")
+                normalized_tool_calls.append(normalized)
+        invalid_tool_calls = message.get("invalid_tool_calls")
+        assert invalid_tool_calls is None or isinstance(invalid_tool_calls, list)
+        return _FakeAIMessage(
+            content=message.get("content", ""),
+            tool_calls=normalized_tool_calls,
+            invalid_tool_calls=invalid_tool_calls,
+        )
+
+
+class _FakeStructuredLangChainModel:
+    def __init__(
+        self,
+        prompt_model: _FakeLangChainPromptModel,
+        schema: dict[str, object],
+        method: str | None,
+    ) -> None:
+        self._prompt_model = prompt_model
+        self._schema = schema
+        self._method = method
+
+    def invoke(self, messages: list[object]) -> object:
+        self._prompt_model.structured_calls.append(
             {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "response_format": response_format,
-                "enable_json_schema_validation": enable_json_schema_validation,
-                "tools": tools,
-                "tool_choice": tool_choice,
-                "parallel_tool_calls": parallel_tool_calls,
+                "messages": list(messages),
+                "schema": self._schema,
+                "method": self._method,
             }
         )
-        if not self._responses:
-            raise AssertionError("No fake LLM responses remaining.")
-        self._response_index += 1
-        response = self._responses.pop(0)
-        if isinstance(response, str):
-            message = {"content": response}
-        else:
-            message = dict(response)
-            tool_calls = message.get("tool_calls")
-            if isinstance(tool_calls, list):
-                normalized_tool_calls: list[dict[str, object]] = []
-                for index, tool_call in enumerate(tool_calls, start=1):
-                    assert isinstance(tool_call, dict)
-                    normalized = dict(tool_call)
-                    normalized.setdefault(
-                        "id",
-                        f"fake-call-{self._response_index}-{index}",
-                    )
-                    normalized.setdefault("type", "function")
-                    normalized_tool_calls.append(normalized)
-                message["tool_calls"] = normalized_tool_calls
-        return {
-            "choices": [
-                {
-                    "message": message,
-                }
-            ]
-        }
+        if not self._prompt_model._structured_responses:
+            raise AssertionError("No fake structured LLM responses remaining.")
+        return self._prompt_model._structured_responses.pop(0)
+
+
+class _FakeLangChainPromptModel:
+    def __init__(
+        self,
+        responses: list[str | dict[str, object]],
+        *,
+        structured_responses: list[object] | None = None,
+    ) -> None:
+        self._responses = list(responses)
+        self._structured_responses = list(structured_responses or [])
+        self.calls: list[dict[str, object]] = []
+        self.structured_calls: list[dict[str, object]] = []
+        self._response_index = 0
+        self.base = self
+        self.agent = _FakeBoundLangChainModel(self)
+
+    def with_structured_output(
+        self,
+        schema: dict[str, object],
+        *,
+        method: str | None = None,
+    ) -> _FakeStructuredLangChainModel:
+        return _FakeStructuredLangChainModel(self, schema, method)
+
+    def add_structured_responses(self, responses: list[object]) -> None:
+        self._structured_responses.extend(responses)
 
 
 def _prompt_tool_call(
@@ -354,14 +390,11 @@ def _prompt_tool_call(
     arguments: dict[str, object],
 ) -> dict[str, object]:
     return {
-        "content": None,
+        "content": "",
         "tool_calls": [
             {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "arguments": json.dumps(arguments),
-                },
+                "name": name,
+                "args": arguments,
             }
         ],
     }
@@ -866,12 +899,12 @@ def test_journey_playwright_prompt_rejects_blank_instruction(monkeypatch):
 
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: _FakeCompletion(["finish()", "done"]),
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel(["finish()", "done"]),
     )
 
     with pytest.raises(ValueError, match="non-blank instruction"):
-        page.prompt("   ", model="openai/gpt-4.1-mini")
+        page.prompt("   ", model="openai:gpt-4.1-mini")
 
 
 def test_journey_playwright_prompt_rejects_saved_page(tmp_path: Path):
@@ -885,7 +918,7 @@ def test_journey_playwright_prompt_rejects_saved_page(tmp_path: Path):
     )
 
     with pytest.raises(RuntimeError, match="Call open_page\\(saved_page\\) first"):
-        saved_page.prompt("click sign in", model="openai/gpt-4.1-mini")
+        saved_page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
 
 def test_journey_playwright_prompt_requires_model_or_env(monkeypatch):
@@ -904,7 +937,7 @@ def test_journey_playwright_prompt_requires_model_or_env(monkeypatch):
         page.prompt("click sign in")
 
 
-def test_journey_playwright_prompt_reports_broken_litellm_install(monkeypatch):
+def test_journey_playwright_prompt_reports_broken_langchain_install(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -918,14 +951,14 @@ def test_journey_playwright_prompt_reports_broken_litellm_install(monkeypatch):
     original_import_module = journey_playwright_prompt.importlib.import_module
 
     def fail_import(name: str):
-        if name == "litellm":
-            raise ImportError("missing litellm")
+        if name == "langchain.chat_models":
+            raise ImportError("missing langchain")
         return original_import_module(name)
 
     monkeypatch.setattr(journey_playwright_prompt.importlib, "import_module", fail_import)
 
     with pytest.raises(RuntimeError, match="project environment") as exc_info:
-        page.prompt("click sign in", model="openai/gpt-4.1-mini")
+        page.prompt("click sign in", model="openai:gpt-4.1-mini")
     assert sys.executable in str(exc_info.value)
 
 
@@ -961,7 +994,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
     )
     context.pages.append(page)
 
-    fake_completion = _FakeCompletion(
+    fake_model = _FakeLangChainPromptModel(
         [
             _run_code('page.locator("#sign-in").click(timeout=timeout_ms)'),
             _run_code("switch_page(1)"),
@@ -970,18 +1003,18 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
     )
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: fake_completion,
+        "_load_langchain_model",
+        lambda model: fake_model,
     )
 
     result = page.prompt(
         'click on a "Sign in" button and get the title of the opened popup',
-        model="anthropic/claude-sonnet-4-5",
+        model="anthropic:claude-sonnet-4-5",
     )
     log_output = capsys.readouterr().err
 
     assert result.output == "The opened popup title is Welcome popup."
-    assert result.model == "anthropic/claude-sonnet-4-5"
+    assert result.model == "anthropic:claude-sonnet-4-5"
     assert result.active_page_index == 1
     assert result.pages == (
         journey_playwright.JourneyPlaywrightPromptPage(
@@ -1023,28 +1056,24 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
             detail="Prompt marked complete.",
         ),
     )
-    assert fake_completion.calls[0]["model"] == "anthropic/claude-sonnet-4-5"
-    assert fake_completion.calls[0]["tools"] == journey_playwright_prompt._PROMPT_AGENT_TOOLS
-    assert fake_completion.calls[0]["tool_choice"] == "auto"
-    assert fake_completion.calls[0]["parallel_tool_calls"] is False
-    assert len(fake_completion.calls) == 3
+    assert len(fake_model.calls) == 3
     assert all(
         "Return whether the original browser task is completed."
         not in call["messages"][-1]["content"][0]["text"]
-        for call in fake_completion.calls
+        for call in fake_model.calls
     )
-    assert fake_completion.calls[2]["response_format"] is None
+    assert not fake_model.structured_calls
     assert not hasattr(journey_playwright_prompt, "_COLLECT_ELEMENTS_SCRIPT")
-    first_prompt_text = fake_completion.calls[0]["messages"][1]["content"][0]["text"]
+    first_prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-rendered-html>" in first_prompt_text
     assert '<button id="sign-in" role="button">Sign in</button>' in first_prompt_text
     assert '"actions": [' not in first_prompt_text
     assert '"id": "e1"' not in first_prompt_text
     assert (
-        fake_completion.calls[1]["messages"][-1]["content"][0]["text"].find('"title": "Welcome popup"')
+        fake_model.calls[1]["messages"][-1]["content"][0]["text"].find('"title": "Welcome popup"')
         != -1
     )
-    final_prompt_text = fake_completion.calls[2]["messages"][-1]["content"][0]["text"]
+    final_prompt_text = fake_model.calls[2]["messages"][-1]["content"][0]["text"]
     assert "Executed steps JSON:" in final_prompt_text
     assert '"action": "python"' in final_prompt_text
     assert "return the final answer as plain text" in final_prompt_text
@@ -1065,7 +1094,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
     assert "[journey]" in log_output
     assert "component=playwright-prompt event=prompt_start" in log_output
     assert 'click on a \\"Sign in\\" button and get the title' in log_output
-    assert "model='anthropic/claude-sonnet-4-5'" in log_output
+    assert "model='anthropic:claude-sonnet-4-5'" in log_output
     assert "active=page 0 'Login page' at http://example.test/login" in log_output
     assert "step 1/15: inspecting page 0 'Login page'" in log_output
     assert "step 1/15: AI will click selector '#sign-in'" in log_output
@@ -1090,20 +1119,21 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
         visible_texts={"Welcome popup"},
     )
     context.pages.append(page)
-    fake_completion = _FakeCompletion(
-        [
-            '{"popup_title": "Welcome popup", "has_welcome_text": true}',
-        ]
+    fake_model = _FakeLangChainPromptModel(
+        ["The popup summary is ready."],
+        structured_responses=[
+            {"popup_title": "Welcome popup", "has_welcome_text": True},
+        ],
     )
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: fake_completion,
+        "_load_langchain_model",
+        lambda model: fake_model,
     )
 
     result = page.prompt(
         "summarize the popup",
-        model="openai/gpt-4.1-mini",
+        model="openai:gpt-4.1-mini",
         output={
             "popup_title": "The popup title.",
             "has_welcome_text": {
@@ -1117,33 +1147,26 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
         "popup_title": "Welcome popup",
         "has_welcome_text": True,
     }
-    assert len(fake_completion.calls) == 1
-    agent_call = fake_completion.calls[0]
-    assert agent_call["tools"] == journey_playwright_prompt._PROMPT_AGENT_TOOLS
-    assert agent_call["tool_choice"] == "auto"
-    assert agent_call["parallel_tool_calls"] is False
-    assert agent_call["enable_json_schema_validation"] is True
-    assert agent_call["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "journey_prompt_output",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "popup_title": {
-                        "type": "string",
-                        "description": "The popup title.",
-                    },
-                    "has_welcome_text": {
-                        "type": "boolean",
-                        "description": "Whether the popup says welcome.",
-                    },
-                },
-                "required": ["popup_title", "has_welcome_text"],
-                "additionalProperties": False,
+    assert len(fake_model.calls) == 1
+    assert len(fake_model.structured_calls) == 1
+    agent_call = fake_model.calls[0]
+    assert fake_model.structured_calls[0]["method"] == "json_schema"
+    assert fake_model.structured_calls[0]["schema"] == {
+        "title": "journey_prompt_output",
+        "description": "Structured output for JourneyPlaywrightPage.prompt(...).",
+        "type": "object",
+        "properties": {
+            "popup_title": {
+                "type": "string",
+                "description": "The popup title.",
+            },
+            "has_welcome_text": {
+                "type": "boolean",
+                "description": "Whether the popup says welcome.",
             },
         },
+        "required": ["popup_title", "has_welcome_text"],
+        "additionalProperties": False,
     }
     final_prompt_text = agent_call["messages"][1]["content"][0]["text"]
     assert "return the final answer using these output fields JSON" in final_prompt_text
@@ -1164,33 +1187,35 @@ def test_journey_playwright_prompt_final_output_includes_visible_error_text(monk
         },
     )
     context.pages.append(page)
-    fake_completion = _FakeCompletion(
-        [
-            '{"error": ""}',
-        ]
+    fake_model = _FakeLangChainPromptModel(
+        ["The visible error is ready."],
+        structured_responses=[
+            {"error": ""},
+        ],
     )
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: fake_completion,
+        "_load_langchain_model",
+        lambda model: fake_model,
     )
 
     result = page.prompt(
         "report the visible sign-in error",
-        model="openai/gpt-4.1-mini",
+        model="openai:gpt-4.1-mini",
         output={"error": "An error message if found."},
     )
 
     assert result.output == {
         "error": "Password is incorrect. Try again, or use another method.",
     }
-    assert len(fake_completion.calls) == 1
-    final_prompt_text = fake_completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert len(fake_model.calls) == 1
+    assert len(fake_model.structured_calls) == 1
+    final_prompt_text = fake_model.structured_calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-visible-text>" in final_prompt_text
     assert "Password is incorrect. Try again, or use another method." in final_prompt_text
     assert (
         "Do not return an empty string for such a field"
-        in fake_completion.calls[0]["messages"][0]["content"]
+        in fake_model.calls[0]["messages"][0]["content"]
     )
     assert ("prompt_wait_for_load_state", "Login", "networkidle", 2000) in events
     assert ("prompt_wait_for_timeout", "Login", 500) in events
@@ -1216,27 +1241,27 @@ def test_journey_playwright_prompt_finish_with_blocking_error_raises(
         visible_texts={reason},
     )
     context.pages.append(page)
-    fake_completion = _FakeCompletion(
+    fake_model = _FakeLangChainPromptModel(
         [
             _fail_session(reason),
         ]
     )
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: fake_completion,
+        "_load_langchain_model",
+        lambda model: fake_model,
     )
 
     with pytest.raises(RuntimeError, match="Your account is locked"):
         page.prompt(
             'Sign in as e2etest@heyalfie.com using password "1111"',
-            model="openai/gpt-4.1-mini",
+            model="openai:gpt-4.1-mini",
             memory="sign-in",
         )
     log_output = capsys.readouterr().err
 
-    assert len(fake_completion.calls) == 1
-    prompt_text = fake_completion.calls[0]["messages"][1]["content"][0]["text"]
+    assert len(fake_model.calls) == 1
+    prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-visible-text>" in prompt_text
     assert reason in prompt_text
     assert "event=prompt_failed" in log_output
@@ -1260,24 +1285,23 @@ def test_journey_playwright_prompt_fail_action_raises_without_final_output(
         visible_texts={reason},
     )
     context.pages.append(page)
-    fake_completion = _FakeCompletion([_fail_session(reason)])
+    fake_model = _FakeLangChainPromptModel([_fail_session(reason)])
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: fake_completion,
+        "_load_langchain_model",
+        lambda model: fake_model,
     )
 
     with pytest.raises(RuntimeError, match="Your account is locked"):
         page.prompt(
             "sign in",
-            model="openai/gpt-4.1-mini",
+            model="openai:gpt-4.1-mini",
             memory="sign-in",
         )
     log_output = capsys.readouterr().err
 
-    assert len(fake_completion.calls) == 1
-    assert fake_completion.calls[0]["response_format"] is None
-    assert fake_completion.calls[0]["tools"] == journey_playwright_prompt._PROMPT_AGENT_TOOLS
+    assert len(fake_model.calls) == 1
+    assert not fake_model.structured_calls
     assert "event=prompt_failed" in log_output
     assert not (tmp_path / "sign-in.memory.json").exists()
 
@@ -1298,18 +1322,18 @@ def test_journey_playwright_prompt_rejects_invalid_output_specs(monkeypatch):
 
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
+        "_load_langchain_model",
         fail_load_completion,
     )
 
     with pytest.raises(ValueError, match="at least one field"):
-        page.prompt("summarize", model="openai/gpt-4.1-mini", output={})
+        page.prompt("summarize", model="openai:gpt-4.1-mini", output={})
     with pytest.raises(ValueError, match="description must be non-empty"):
-        page.prompt("summarize", model="openai/gpt-4.1-mini", output={"title": ""})
+        page.prompt("summarize", model="openai:gpt-4.1-mini", output={"title": ""})
     with pytest.raises(TypeError, match="JSON-serializable"):
         page.prompt(
             "summarize",
-            model="openai/gpt-4.1-mini",
+            model="openai:gpt-4.1-mini",
             output={"title": {"type": object()}},
         )
 
@@ -1326,16 +1350,17 @@ def test_journey_playwright_prompt_rejects_malformed_structured_output(monkeypat
     context.pages.append(page)
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: _FakeCompletion(
-            ['{"popup_title": "Welcome", "extra": true}']
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel(
+            ["The popup summary is ready."],
+            structured_responses=[{"popup_title": "Welcome", "extra": True}],
         ),
     )
 
     with pytest.raises(RuntimeError, match="unexpected fields"):
         page.prompt(
             "summarize",
-            model="openai/gpt-4.1-mini",
+            model="openai:gpt-4.1-mini",
             output={"popup_title": "The popup title."},
         )
 
@@ -1364,7 +1389,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
     )
     context.pages.append(page)
 
-    fake_completion = _FakeCompletion(
+    fake_model = _FakeLangChainPromptModel(
         [
             _run_code('page.locator("#attach").click(timeout=timeout_ms)'),
             _run_code(
@@ -1375,11 +1400,11 @@ def test_journey_playwright_prompt_retries_rejected_python(
     )
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: fake_completion,
+        "_load_langchain_model",
+        lambda model: fake_model,
     )
 
-    result = page.prompt("say you need to fix a toilet", model="openai/gpt-4.1-mini")
+    result = page.prompt("say you need to fix a toilet", model="openai:gpt-4.1-mini")
     log_output = capsys.readouterr().err
 
     assert result.output == "Started the chat."
@@ -1400,10 +1425,10 @@ def test_journey_playwright_prompt_retries_rejected_python(
         detail="Executed Python snippet. Active page index is 0.",
     )
     assert page._fake_prompt_field_values == {"#composer": "I need to fix a toilet"}
-    assert '<div id="composer" role="textbox">Message</div>' in fake_completion.calls[0][
+    assert '<div id="composer" role="textbox">Message</div>' in fake_model.calls[0][
         "messages"
     ][1]["content"][0]["text"]
-    assert '"status": "rejected"' in fake_completion.calls[1]["messages"][-1]["content"][0]["text"]
+    assert '"status": "rejected"' in fake_model.calls[1]["messages"][-1]["content"][0]["text"]
     assert events == [
         ("prompt_rendered_html", "Chat"),
         ("prompt_screenshot", "Chat"),
@@ -1457,7 +1482,7 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
     )
     context.pages.append(page)
 
-    first_completion = _FakeCompletion(
+    first_model = _FakeLangChainPromptModel(
         [
             _run_code('page.locator("#attach").click(timeout=timeout_ms)'),
             _run_code('page.locator("#composer").fill("hello", timeout=timeout_ms)'),
@@ -1466,13 +1491,13 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
     )
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: first_completion,
+        "_load_langchain_model",
+        lambda model: first_model,
     )
 
     page.prompt(
         "say hello",
-        model="openai/gpt-4.1-mini",
+        model="openai:gpt-4.1-mini",
         memory="chat-start",
     )
 
@@ -1496,35 +1521,35 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
         'page.locator("#attach").click(timeout=timeout_ms)'
     )
 
-    second_completion = _FakeCompletion(["Done from memory."])
+    second_model = _FakeLangChainPromptModel(["Done from memory."])
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: second_completion,
+        "_load_langchain_model",
+        lambda model: second_model,
     )
     page.prompt(
         "say hello",
-        model="openai/gpt-4.1-mini",
+        model="openai:gpt-4.1-mini",
         memory="chat-start",
     )
-    second_prompt_text = second_completion.calls[0]["messages"][1]["content"][0]["text"]
+    second_prompt_text = second_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "Prompt memory JSON:" in second_prompt_text
     assert "#attach" in second_prompt_text
     assert "#composer" in second_prompt_text
     assert "hello" in second_prompt_text
 
-    third_completion = _FakeCompletion(["Done without memory."])
+    third_model = _FakeLangChainPromptModel(["Done without memory."])
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: third_completion,
+        "_load_langchain_model",
+        lambda model: third_model,
     )
     page.prompt(
         "say goodbye",
-        model="openai/gpt-4.1-mini",
+        model="openai:gpt-4.1-mini",
         memory="chat-start",
     )
-    third_prompt_text = third_completion.calls[0]["messages"][1]["content"][0]["text"]
+    third_prompt_text = third_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "Prompt memory JSON:" not in third_prompt_text
 
 
@@ -1540,8 +1565,8 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
     context.pages.append(page)
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: _FakeCompletion(["Done."]),
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel(["Done."]),
     )
 
     def fail_memory_access(*args: object, **kwargs: object) -> object:
@@ -1560,7 +1585,7 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
     )
 
     def run_prompt() -> journey_playwright.JourneyPlaywrightPromptResult:
-        return page.prompt("finish", model="openai/gpt-4.1-mini", memory="disabled")
+        return page.prompt("finish", model="openai:gpt-4.1-mini", memory="disabled")
 
     def memory_journey() -> None:
         journey_sdk.step(run_prompt)
@@ -1578,11 +1603,11 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
         events=events,
     )
     context.pages.append(page)
-    completion = _FakeCompletion(["Done."])
+    model = _FakeLangChainPromptModel(["Done."])
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: completion,
+        "_load_langchain_model",
+        lambda model_name: model,
     )
 
     load_calls: list[tuple[Path, str]] = []
@@ -1616,14 +1641,14 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
     )
 
     def run_prompt() -> journey_playwright.JourneyPlaywrightPromptResult:
-        return page.prompt("finish", model="openai/gpt-4.1-mini", memory="readonly")
+        return page.prompt("finish", model="openai:gpt-4.1-mini", memory="readonly")
 
     def memory_journey() -> None:
         journey_sdk.step(run_prompt)
 
     journey_sdk.execute(memory_journey, no_memory_update=True)
 
-    prompt_text = completion.calls[0]["messages"][1]["content"][0]["text"]
+    prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
     assert load_calls
     assert not write_calls
     assert "Prompt memory JSON:" in prompt_text
@@ -1649,14 +1674,14 @@ def test_journey_playwright_prompt_enforces_max_steps(
     context.pages.append(page)
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: _FakeCompletion(
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel(
             [_run_code('page.locator("#sign-in").click(timeout=timeout_ms)')]
         ),
     )
 
     with pytest.raises(RuntimeError, match="reached max_steps=1"):
-        page.prompt("click sign in", model="openai/gpt-4.1-mini", max_steps=1)
+        page.prompt("click sign in", model="openai:gpt-4.1-mini", max_steps=1)
     log_output = capsys.readouterr().err
 
     assert "step 1/1: AI will click selector '#sign-in'" in log_output
@@ -1674,14 +1699,14 @@ def test_journey_playwright_prompt_retries_invalid_tool_arguments(monkeypatch):
         events=events,
     )
     context.pages.append(page)
-    completion = _FakeCompletion([_run_code("   "), "Recovered."])
+    model = _FakeLangChainPromptModel([_run_code("   "), "Recovered."])
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: completion,
+        "_load_langchain_model",
+        lambda model_name: model,
     )
 
-    result = page.prompt("click sign in", model="openai/gpt-4.1-mini")
+    result = page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
     assert result.output == "Recovered."
     assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
@@ -1695,7 +1720,7 @@ def test_journey_playwright_prompt_retries_invalid_tool_arguments(monkeypatch):
             "journey_run_code expects a non-blank code string."
         ),
     )
-    second_prompt_text = completion.calls[1]["messages"][-1]["content"][0]["text"]
+    second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
     assert '"action": "tool"' in second_prompt_text
     assert '"status": "rejected"' in second_prompt_text
 
@@ -1710,19 +1735,19 @@ def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):
         events=events,
     )
     context.pages.append(page)
-    completion = _FakeCompletion(
+    model = _FakeLangChainPromptModel(
         [_run_code('page.locator("#sign-in"'), "Recovered."]
     )
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: completion,
+        "_load_langchain_model",
+        lambda model_name: model,
     )
 
-    result = page.prompt("click sign in", model="openai/gpt-4.1-mini")
+    result = page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
     assert result.output == "Recovered."
-    second_prompt_text = completion.calls[1]["messages"][-1]["content"][0]["text"]
+    second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
     assert '"target": "page.locator(\\"#sign-in\\""' in second_prompt_text
     assert '"status": "rejected"' in second_prompt_text
     assert "SyntaxError:" in second_prompt_text
@@ -1740,8 +1765,8 @@ def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
     context.pages.append(page)
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: _FakeCompletion(
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel(
             [
                 _run_code('{"action":"hover","target":"e1","value":null}'),
                 "Recovered.",
@@ -1749,7 +1774,7 @@ def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
         ),
     )
 
-    result = page.prompt("click sign in", model="openai/gpt-4.1-mini")
+    result = page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
     assert result.output == "Recovered."
 
@@ -1766,10 +1791,10 @@ def test_journey_playwright_prompt_rejects_blank_finish_then_recovers(monkeypatc
     context.pages.append(page)
     monkeypatch.setattr(
         journey_playwright_prompt,
-        "_load_litellm_completion",
-        lambda: _FakeCompletion([_run_code('finish("")'), "Done."]),
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel([_run_code('finish("")'), "Done."]),
     )
 
-    result = page.prompt("finish clearly", model="openai/gpt-4.1-mini")
+    result = page.prompt("finish clearly", model="openai:gpt-4.1-mini")
 
     assert result.output == "Done."

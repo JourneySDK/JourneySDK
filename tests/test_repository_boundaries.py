@@ -39,9 +39,10 @@ def test_public_tree_does_not_reference_private_modules_or_paths():
         assert "import journey_cloud" not in text, f"Found private import in {path}"
 
 
-def test_base_package_includes_playwright_and_litellm_runtime_dependencies() -> None:
+def test_base_package_includes_playwright_and_langchain_runtime_dependencies() -> None:
     pyproject = tomllib.loads((_public_root() / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = pyproject["project"]["dependencies"]
 
     assert any(dependency.startswith("playwright") for dependency in dependencies)
-    assert any(dependency.startswith("litellm") for dependency in dependencies)
+    assert any(dependency.startswith("langchain") for dependency in dependencies)
+    assert not any(dependency.startswith("litellm") for dependency in dependencies)

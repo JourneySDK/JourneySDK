@@ -336,7 +336,8 @@ class JourneyPlaywrightPage(PlaywrightPage):
 
         Args:
             instruction: Natural-language task for the prompt loop.
-            model: Optional LiteLLM model name.
+            model: Optional LangChain model identifier, such as
+                `openai:gpt-4.1-mini` or `anthropic:claude-sonnet-4-5`.
             max_steps: Maximum generated Python snippets before failing.
             action_timeout_seconds: Timeout passed to generated Playwright actions.
             memory: Optional named prompt memory stored as `[memory].memory.json`.

@@ -9,7 +9,9 @@ description = "Workflow-as-code journey testing compiler"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "litellm",
+    "langchain",
+    "langchain-anthropic",
+    "langchain-openai",
     "playwright",
 ]
 

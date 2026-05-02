@@ -14,7 +14,7 @@ PromptOutputSpec = Mapping[str, PromptOutputFieldSpec]
 class PromptOutputSchema:
     fields: tuple[str, ...]
     properties: dict[str, object]
-    response_format: dict[str, object]
+    json_schema: dict[str, object]
     prompt_text: str
 
 
@@ -43,25 +43,19 @@ def normalize_prompt_output_spec(
             field_name=name,
         )
 
-    schema = {
+    json_schema = {
+        "title": "journey_prompt_output",
+        "description": "Structured output for JourneyPlaywrightPage.prompt(...).",
         "type": "object",
         "properties": properties,
         "required": list(properties),
         "additionalProperties": False,
     }
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "journey_prompt_output",
-            "strict": True,
-            "schema": schema,
-        },
-    }
     prompt_text = json.dumps(properties, sort_keys=True, indent=2)
     return PromptOutputSchema(
         fields=tuple(properties),
         properties=properties,
-        response_format=response_format,
+        json_schema=json_schema,
         prompt_text=prompt_text,
     )
 
@@ -82,8 +76,17 @@ def parse_prompt_structured_output(
         raise RuntimeError(
             f"{owner} expected the final model response to be a JSON object."
         )
+    return validate_prompt_structured_output(parsed, schema, owner=owner)
+
+
+def validate_prompt_structured_output(
+    output: dict[str, object],
+    schema: PromptOutputSchema,
+    *,
+    owner: str,
+) -> dict[str, object]:
     expected = set(schema.fields)
-    actual = set(parsed)
+    actual = set(output)
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)
     if missing or extra:
@@ -96,7 +99,7 @@ def parse_prompt_structured_output(
             f"{owner} final structured output did not match output=...: "
             + "; ".join(details)
         )
-    return dict(parsed)
+    return dict(output)
 
 
 def _normalize_field_name(name: object, *, owner: str) -> str:

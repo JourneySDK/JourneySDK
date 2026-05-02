@@ -330,9 +330,10 @@ Expected stderr:
 
 Read `docs/playwright_prompt_journey/playwright_prompt_journey.py`.
 
-Journey SDK already includes Playwright and LiteLLM. Set your provider credentials with the normal provider
+Journey SDK already includes Playwright and LangChain. Set your provider credentials with the normal provider
 environment variables such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Pick a multimodal model explicitly with
-`model=...`, or set `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
+LangChain's `provider:model` syntax such as `model="anthropic:claude-sonnet-4-5"`, or set
+`JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
 
 The helper can stay small. `page.prompt(...)` returns a `JourneyPlaywrightPromptResult`. Without `output=...`,
 `result.output` is a plain string. With `output=...`, Journey uses the model provider's structured-output feature and
@@ -344,7 +345,7 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
     try:
         return page.prompt(
             'click on a "Sign in" button and get the title of the opened popup',
-            model="anthropic/claude-sonnet-4-5",
+            model="anthropic:claude-sonnet-4-5",
             memory="sign-in-popup",
             output={
                 "popup_title": "The title of the opened popup.",

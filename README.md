@@ -99,7 +99,7 @@ uv add journey-sdk
 uv run journey --help
 ```
 
-Playwright and LiteLLM are included in the default install. The first browser step automatically downloads Chromium
+Playwright and LangChain are included in the default install. The first browser step automatically downloads Chromium
 in the active environment, so there is no separate `playwright install` step for the standard Journey SDK flow.
 
 See [`docs/00-installation-and-cli.md`](docs/00-installation-and-cli.md) for the full CLI installation guide, local
@@ -346,7 +346,7 @@ def assert_dashboard(session: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
 
 The same live page can also run a bounded LLM action loop. `page.prompt(...)` returns a
 `JourneyPlaywrightPromptResult`; by default, `result.output` is a plain string. Pass `output=...` when you want
-provider-enforced structured output in `result.output`:
+LangChain structured output in `result.output`:
 
 ```python
 from journeysdk.tools.playwright import JourneyPlaywrightPromptResult, open_page
@@ -356,7 +356,7 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
     try:
         return page.prompt(
             'click on a "Sign in" button and get the title of the opened popup',
-            model="anthropic/claude-sonnet-4-5",
+            model="anthropic:claude-sonnet-4-5",
             memory="sign-in-popup",
             output={
                 "popup_title": "The title of the opened popup.",
@@ -367,7 +367,8 @@ def capture_popup_title() -> JourneyPlaywrightPromptResult:
 ```
 
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY`, and either pass `model=...` or set `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
+`ANTHROPIC_API_KEY`, and either pass a LangChain model identifier like `model="anthropic:claude-sonnet-4-5"` or set
+`JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
 The optional `memory="sign-in-popup"` argument stores compact lessons from successful runs in
 `sign-in-popup.memory.json` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.

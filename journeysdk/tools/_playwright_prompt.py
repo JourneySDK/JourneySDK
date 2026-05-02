@@ -10,7 +10,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
 from journeysdk.logger import get_logger
@@ -29,6 +29,7 @@ from journeysdk._prompt_output import (
     PromptOutputSpec,
     normalize_prompt_output_spec,
     parse_prompt_structured_output,
+    validate_prompt_structured_output,
 )
 from playwright.sync_api import Page as PlaywrightPage
 
@@ -72,59 +73,17 @@ screenshot contains a matching message.
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
+_PROMPT_STRUCTURED_OUTPUT_SYSTEM_MESSAGE = """Return structured output for a completed Journey Playwright browser task.
+
+Use the current visible page state as the source of truth. If a requested output field asks for an error, validation
+message, warning, status, or problem, copy the visible message exactly when present.
+
+Do not mention implementation details, hidden reasoning, or unavailable metadata.
+"""
+
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
 _VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
 _PROMPT_LOGGER = get_logger("playwright-prompt")
-_PROMPT_AGENT_TOOLS: list[dict[str, object]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": _PROMPT_RUN_CODE_TOOL_NAME,
-            "description": (
-                "Execute one Playwright sync Python snippet against the active "
-                "Journey browser page."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": (
-                            "Executable Python code using page, pages, timeout_ms, "
-                            "and switch_page(index)."
-                        ),
-                    }
-                },
-                "required": ["code"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": _PROMPT_FAIL_SESSION_TOOL_NAME,
-            "description": (
-                "Stop the prompt because a visible page state blocks the "
-                "requested browser task."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": (
-                            "The visible blocking message or concise reason the "
-                            "browser task cannot be completed."
-                        ),
-                    }
-                },
-                "required": ["reason"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
 
 
 @dataclass(frozen=True)
@@ -155,28 +114,9 @@ class JourneyPlaywrightPromptResult:
 
 
 @dataclass(frozen=True)
-class _PromptToolCall:
-    id: str
-    name: str
-    arguments: object
-    raw: dict[str, object]
-
-
-class _CompletionCallable(Protocol):
-    def __call__(
-        self,
-        *,
-        model: str,
-        messages: list[dict[str, object]],
-        max_tokens: int,
-        temperature: float,
-        response_format: dict[str, object] | None = None,
-        enable_json_schema_validation: bool | None = None,
-        tools: list[dict[str, object]] | None = None,
-        tool_choice: str | dict[str, object] | None = None,
-        parallel_tool_calls: bool | None = None,
-    ) -> object:
-        ...
+class _LangChainPromptModel:
+    base: object
+    agent: object
 
 
 class _PromptSession:
@@ -202,7 +142,7 @@ class _PromptSession:
         self._memory_page_signature: str | None = None
         self._memory_entry: dict[str, object] | None = None
         self._memory_loaded = False
-        self._completion = _load_litellm_completion()
+        self._prompt_model = _load_langchain_model(model)
         self._pages: list[PlaywrightPage] = [page]
         self._active_page_index = 0
         self._steps: list[JourneyPlaywrightPromptStep] = []
@@ -215,7 +155,7 @@ class _PromptSession:
             self._log_inspection(step_index=step_index, observation=observation)
             response = self._request_agent_response(messages=messages)
             try:
-                tool_calls = _extract_completion_tool_calls(response)
+                tool_calls = _extract_langchain_tool_calls(response)
             except RuntimeError as exc:
                 detail = _format_python_error(exc)
                 self._append_rejected_step(
@@ -238,7 +178,7 @@ class _PromptSession:
                     response=response,
                 )
 
-            messages.append(_assistant_message_from_response(response, tool_calls))
+            messages.append(response)
             if len(tool_calls) != 1:
                 detail = _format_python_error(
                     RuntimeError(
@@ -269,7 +209,8 @@ class _PromptSession:
                 continue
 
             tool_call = tool_calls[0]
-            if tool_call.name == _PROMPT_FAIL_SESSION_TOOL_NAME:
+            tool_name = _tool_call_name(tool_call)
+            if tool_name == _PROMPT_FAIL_SESSION_TOOL_NAME:
                 try:
                     reason = _tool_call_text_argument(
                         tool_call,
@@ -282,7 +223,7 @@ class _PromptSession:
                     self._append_rejected_step(
                         step_index=step_index,
                         action="tool",
-                        target=tool_call.name,
+                        target=tool_name,
                         detail=detail,
                     )
                     messages.append(
@@ -314,17 +255,17 @@ class _PromptSession:
                     reason=reason,
                 )
 
-            if tool_call.name != _PROMPT_RUN_CODE_TOOL_NAME:
+            if tool_name != _PROMPT_RUN_CODE_TOOL_NAME:
                 detail = _format_python_error(
                     RuntimeError(
                         "JourneyPlaywrightPage.prompt(...) received unknown "
-                        f"tool call {tool_call.name!r}."
+                        f"tool call {tool_name!r}."
                     )
                 )
                 self._append_rejected_step(
                     step_index=step_index,
                     action="tool",
-                    target=tool_call.name,
+                    target=tool_name,
                     detail=detail,
                 )
                 messages.append(
@@ -357,7 +298,7 @@ class _PromptSession:
                 self._append_rejected_step(
                     step_index=step_index,
                     action="tool",
-                    target=tool_call.name,
+                    target=tool_name,
                     detail=detail,
                 )
                 messages.append(
@@ -561,7 +502,7 @@ class _PromptSession:
         self,
         *,
         observation: dict[str, object],
-    ) -> list[dict[str, object]]:
+    ) -> list[object]:
         return [
             {
                 "role": "system",
@@ -654,24 +595,10 @@ class _PromptSession:
     def _request_agent_response(
         self,
         *,
-        messages: list[dict[str, object]],
+        messages: list[object],
     ) -> object:
         try:
-            kwargs: dict[str, object] = {
-                "tools": _PROMPT_AGENT_TOOLS,
-                "tool_choice": "auto",
-                "parallel_tool_calls": False,
-            }
-            if self._output_schema is not None:
-                kwargs["response_format"] = self._output_schema.response_format
-                kwargs["enable_json_schema_validation"] = True
-            response = self._completion(
-                model=self._model,
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.0,
-                **kwargs,
-            )
+            response = self._prompt_model.agent.invoke(messages)
         except Exception as exc:
             raise RuntimeError(
                 "JourneyPlaywrightPage.prompt(...) failed to call "
@@ -685,7 +612,7 @@ class _PromptSession:
         step_index: int,
         response: object,
     ) -> JourneyPlaywrightPromptResult:
-        response_text = _extract_completion_text(response).strip()
+        response_text = _extract_langchain_text(response).strip()
         finish_step = JourneyPlaywrightPromptStep(
             index=step_index,
             page_index=self._active_page_index,
@@ -726,16 +653,111 @@ class _PromptSession:
     ) -> str | dict[str, object]:
         if self._output_schema is None:
             return response_text
-        structured_output = parse_prompt_structured_output(
-            response_text,
-            self._output_schema,
-            owner="JourneyPlaywrightPage.prompt(...)",
+        structured_response = self._request_structured_output(
+            completion_text=response_text,
+            observation=observation,
+        )
+        structured_output = _normalize_structured_output(
+            structured_response,
+            schema=self._output_schema,
         )
         return _fill_visible_message_fields(
             structured_output,
             schema=self._output_schema,
             visible_text=cast(str, observation["visible_text"]),
         )
+
+    def _request_structured_output(
+        self,
+        *,
+        completion_text: str,
+        observation: dict[str, object],
+    ) -> object:
+        if self._output_schema is None:
+            raise RuntimeError(
+                "JourneyPlaywrightPage.prompt(...) structured output was not configured."
+            )
+        try:
+            structured_model = self._prompt_model.base.with_structured_output(
+                self._output_schema.json_schema,
+                method="json_schema",
+            )
+            return structured_model.invoke(
+                self._build_structured_output_messages(
+                    completion_text=completion_text,
+                    observation=observation,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "JourneyPlaywrightPage.prompt(...) failed to call structured "
+                f"output model {self._model!r}: {exc}"
+            ) from exc
+
+    def _build_structured_output_messages(
+        self,
+        *,
+        completion_text: str,
+        observation: dict[str, object],
+    ) -> list[dict[str, object]]:
+        completion_section: list[str] = []
+        if completion_text:
+            completion_section = [
+                "",
+                "Completion signal from the browser action loop:",
+                completion_text,
+            ]
+        prompt_text = "\n".join(
+            [
+                f"Instruction:\n{self._instruction}",
+                *completion_section,
+                "",
+                "Known pages JSON:",
+                json.dumps(
+                    observation["pages"],
+                    sort_keys=True,
+                    indent=2,
+                ),
+                "",
+                f"Active page index: {observation['active_page_index']}",
+                "",
+                "Executed steps JSON:",
+                json.dumps(observation["steps"], sort_keys=True, indent=2),
+                "",
+                "Active page visible text:",
+                "<journey-visible-text>",
+                cast(str, observation["visible_text"]),
+                "</journey-visible-text>",
+                "",
+                "Active page rendered HTML:",
+                "<journey-rendered-html>",
+                cast(str, observation["rendered_html"]),
+                "</journey-rendered-html>",
+                "",
+                "Return values for these output fields:",
+                self._output_schema.prompt_text,
+            ]
+        )
+        screenshot_data_url = cast(str, observation["screenshot_data_url"])
+        return [
+            {
+                "role": "system",
+                "content": _PROMPT_STRUCTURED_OUTPUT_SYSTEM_MESSAGE,
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt_text,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": screenshot_data_url},
+                    },
+                ],
+            },
+        ]
 
     def _append_rejected_step(
         self,
@@ -1155,132 +1177,131 @@ def _prompt_output_summary(value: str | dict[str, object]) -> str:
     return truncate_prompt_memory_text(json.dumps(value, sort_keys=True))
 
 
-def _object_field(value: object, name: str) -> object:
-    if isinstance(value, dict):
-        return value.get(name)
-    return getattr(value, name, None)
-
-
-def _completion_message(response: object) -> object:
-    choices = _object_field(response, "choices")
-    if not isinstance(choices, list) or not choices:
+def _extract_langchain_tool_calls(
+    response: object,
+) -> tuple[dict[str, object], ...]:
+    invalid_tool_calls = getattr(response, "invalid_tool_calls", None)
+    if invalid_tool_calls:
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected the model response to include choices."
+            "JourneyPlaywrightPage.prompt(...) expected valid LangChain tool calls."
         )
-    first_choice = choices[0]
-    message = _object_field(first_choice, "message")
-    if message is None:
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected the model response to include a message."
-        )
-    return message
-
-
-def _extract_completion_tool_calls(response: object) -> tuple[_PromptToolCall, ...]:
-    message = _completion_message(response)
-    raw_tool_calls = _object_field(message, "tool_calls")
+    raw_tool_calls = getattr(response, "tool_calls", None)
     if raw_tool_calls is None:
         return ()
     if not isinstance(raw_tool_calls, list):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected model tool_calls to be a list."
+            "JourneyPlaywrightPage.prompt(...) expected LangChain tool_calls to be a list."
         )
-    tool_calls: list[_PromptToolCall] = []
+    tool_calls: list[dict[str, object]] = []
     for index, raw_tool_call in enumerate(raw_tool_calls, start=1):
-        call_id = _object_field(raw_tool_call, "id")
+        if not isinstance(raw_tool_call, dict):
+            raise RuntimeError(
+                "JourneyPlaywrightPage.prompt(...) expected each LangChain "
+                "tool call to be a dictionary."
+            )
+        call_id = raw_tool_call.get("id")
         if not isinstance(call_id, str) or not call_id.strip():
             call_id = f"journey_tool_call_{index}"
-        function = _object_field(raw_tool_call, "function")
-        name = _object_field(function, "name") if function is not None else None
+        name = raw_tool_call.get("name")
         if not isinstance(name, str):
             name = ""
-        arguments = (
-            _object_field(function, "arguments") if function is not None else None
-        )
-        if isinstance(arguments, str):
-            raw_arguments = arguments
-        else:
-            try:
-                raw_arguments = json.dumps(arguments)
-            except TypeError:
-                raw_arguments = str(arguments)
         tool_calls.append(
-            _PromptToolCall(
-                id=call_id,
-                name=name,
-                arguments=arguments,
-                raw={
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "arguments": raw_arguments,
-                    },
-                },
-            )
+            {
+                "id": call_id,
+                "name": name,
+                "args": raw_tool_call.get("args"),
+            }
         )
     return tuple(tool_calls)
 
 
-def _assistant_message_from_response(
-    response: object,
-    tool_calls: tuple[_PromptToolCall, ...],
-) -> dict[str, object]:
-    message = _completion_message(response)
-    assistant_message: dict[str, object] = {
-        "role": "assistant",
-        "tool_calls": [tool_call.raw for tool_call in tool_calls],
-    }
-    content = _object_field(message, "content")
-    if content is not None:
-        assistant_message["content"] = content
-    return assistant_message
-
-
 def _tool_result_message(
     *,
-    tool_call: _PromptToolCall,
+    tool_call: dict[str, object],
     payload: dict[str, object],
-) -> dict[str, object]:
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call.id,
-        "content": json.dumps(payload, sort_keys=True),
-    }
+) -> object:
+    try:
+        messages_module = importlib.import_module("langchain_core.messages")
+    except ImportError as exc:
+        raise RuntimeError(
+            "JourneyPlaywrightPage.prompt(...) could not import `langchain_core`. "
+            f"The active Python interpreter is {sys.executable!r}; run Journey "
+            "through the project environment or reinstall/sync this interpreter "
+            "so it includes Journey SDK runtime dependencies."
+        ) from exc
+    tool_message = getattr(messages_module, "ToolMessage", None)
+    if tool_message is None:
+        raise RuntimeError(
+            "JourneyPlaywrightPage.prompt(...) could not find langchain_core.messages.ToolMessage."
+        )
+    return tool_message(
+        content=json.dumps(payload, sort_keys=True),
+        tool_call_id=_tool_call_id(tool_call),
+    )
 
 
-def _tool_calls_target(tool_calls: tuple[_PromptToolCall, ...]) -> str:
-    names = [tool_call.name or "<unnamed>" for tool_call in tool_calls]
+def _tool_calls_target(tool_calls: tuple[dict[str, object], ...]) -> str:
+    names = [_tool_call_name(tool_call) or "<unnamed>" for tool_call in tool_calls]
     return ", ".join(names)[:200]
 
 
 def _tool_call_text_argument(
-    tool_call: _PromptToolCall,
+    tool_call: dict[str, object],
     name: str,
     message: str,
 ) -> str:
-    arguments = _parse_tool_call_arguments(tool_call)
-    return _require_text_value(arguments.get(name), message)
-
-
-def _parse_tool_call_arguments(tool_call: _PromptToolCall) -> dict[str, object]:
-    raw_arguments = tool_call.arguments
-    if isinstance(raw_arguments, str):
-        try:
-            parsed = json.loads(raw_arguments)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                "JourneyPlaywrightPage.prompt(...) expected tool arguments "
-                "to be a JSON object."
-            ) from exc
-    else:
-        parsed = raw_arguments
-    if not isinstance(parsed, dict):
+    arguments = tool_call.get("args")
+    if not isinstance(arguments, dict):
         raise RuntimeError(
             "JourneyPlaywrightPage.prompt(...) expected tool arguments "
             "to be a JSON object."
         )
-    return parsed
+    return _require_text_value(arguments.get(name), message)
+
+
+def _tool_call_name(tool_call: dict[str, object]) -> str:
+    name = tool_call.get("name")
+    return name if isinstance(name, str) else ""
+
+
+def _tool_call_id(tool_call: dict[str, object]) -> str:
+    call_id = tool_call.get("id")
+    return call_id if isinstance(call_id, str) and call_id.strip() else "journey_tool_call"
+
+
+def _normalize_structured_output(
+    response: object,
+    *,
+    schema: PromptOutputSchema,
+) -> dict[str, object]:
+    if isinstance(response, dict):
+        if "parsed" in response and response.get("parsing_error") is None:
+            parsed = response["parsed"]
+            if isinstance(parsed, dict):
+                return validate_prompt_structured_output(
+                    parsed,
+                    schema,
+                    owner="JourneyPlaywrightPage.prompt(...)",
+                )
+        return validate_prompt_structured_output(
+            response,
+            schema,
+            owner="JourneyPlaywrightPage.prompt(...)",
+        )
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, dict):
+            return validate_prompt_structured_output(
+                dumped,
+                schema,
+                owner="JourneyPlaywrightPage.prompt(...)",
+            )
+    return parse_prompt_structured_output(
+        _extract_langchain_text(response),
+        schema,
+        owner="JourneyPlaywrightPage.prompt(...)",
+    )
 
 
 _VISIBLE_MESSAGE_FIELD_TERMS = (
@@ -1487,22 +1508,57 @@ def _node_description(node: ast.AST) -> str:
     return ast.unparse(node)
 
 
-def _load_litellm_completion() -> _CompletionCallable:
+def _load_langchain_model(model: str) -> _LangChainPromptModel:
     try:
-        module = importlib.import_module("litellm")
+        chat_models_module = importlib.import_module("langchain.chat_models")
+        tools_module = importlib.import_module("langchain_core.tools")
     except ImportError as exc:
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) could not import `litellm`. "
+            "JourneyPlaywrightPage.prompt(...) could not import `langchain`. "
             f"The active Python interpreter is {sys.executable!r}; run Journey "
             "through the project environment or reinstall/sync this interpreter "
             "so it includes Journey SDK runtime dependencies."
         ) from exc
-    completion = getattr(module, "completion", None)
-    if not callable(completion):
+    init_chat_model = getattr(chat_models_module, "init_chat_model", None)
+    tool = getattr(tools_module, "tool", None)
+    if not callable(init_chat_model):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) could not find litellm.completion."
+            "JourneyPlaywrightPage.prompt(...) could not find "
+            "langchain.chat_models.init_chat_model."
         )
-    return cast(_CompletionCallable, completion)
+    if not callable(tool):
+        raise RuntimeError(
+            "JourneyPlaywrightPage.prompt(...) could not find langchain_core.tools.tool."
+        )
+
+    @tool(_PROMPT_RUN_CODE_TOOL_NAME)
+    def journey_run_code(code: str) -> str:
+        """Execute one Playwright sync Python snippet against the active Journey browser page."""
+
+        return "Journey executes this tool result itself."
+
+    @tool(_PROMPT_FAIL_SESSION_TOOL_NAME)
+    def journey_fail_session(reason: str) -> str:
+        """Stop the prompt because a visible page state blocks the requested browser task."""
+
+        return "Journey stops the browser prompt itself."
+
+    try:
+        base_model = init_chat_model(
+            model,
+            temperature=0.0,
+            max_tokens=1000,
+        )
+        agent_model = base_model.bind_tools(
+            [journey_run_code, journey_fail_session],
+            parallel_tool_calls=False,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "JourneyPlaywrightPage.prompt(...) failed to initialize LangChain "
+            f"model {model!r}: {exc}"
+        ) from exc
+    return _LangChainPromptModel(base=base_model, agent=agent_model)
 
 
 def _resolve_model(model: str | None) -> str:
@@ -1587,21 +1643,10 @@ def _visible_text(page: PlaywrightPage) -> str:
     return text
 
 
-def _extract_completion_text(response: object) -> str:
-    choices = getattr(response, "choices", None)
-    if choices is None and isinstance(response, dict):
-        choices = response.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected the model response to include choices."
-        )
-    first_choice = choices[0]
-    message = getattr(first_choice, "message", None)
-    if message is None and isinstance(first_choice, dict):
-        message = first_choice.get("message")
-    content = getattr(message, "content", None)
-    if content is None and isinstance(message, dict):
-        content = message.get("content")
+def _extract_langchain_text(response: object) -> str:
+    content = getattr(response, "content", None)
+    if content is None and isinstance(response, dict):
+        content = response.get("content")
     if isinstance(content, str):
         return content
     if isinstance(content, list):

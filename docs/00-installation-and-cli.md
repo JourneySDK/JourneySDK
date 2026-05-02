@@ -59,7 +59,7 @@ uv run journey --help
 
 ## Browser Setup
 
-Playwright and LiteLLM are included in the default package install. The first Journey browser step automatically
+Playwright and LangChain are included in the default package install. The first Journey browser step automatically
 downloads Chromium in the active environment. That first launch needs network access and can take a moment.
 
 ## Local Development Installs
