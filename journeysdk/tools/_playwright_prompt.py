@@ -34,84 +34,97 @@ from playwright.sync_api import Page as PlaywrightPage
 
 JOURNEY_PLAYWRIGHT_PROMPT_MODEL_ENV = "JOURNEY_PLAYWRIGHT_PROMPT_MODEL"
 
-_PROMPT_SYSTEM_MESSAGE = """You control a Playwright sync browser page by returning Python snippets.
+_PROMPT_RUN_CODE_TOOL_NAME = "journey_run_code"
+_PROMPT_FAIL_SESSION_TOOL_NAME = "journey_fail_session"
 
-Return only executable Python code. Do not return JSON, markdown fences, comments, or explanations.
+_PROMPT_SYSTEM_MESSAGE = """You control a Playwright sync browser page with tools.
+
+Use tools when the browser needs more work. When the requested browser task is complete, do not call a tool; return the
+final answer directly.
+
+Use journey_run_code to execute one Python snippet against the active page.
+Use journey_fail_session when a visible page state prevents the requested browser task from completing.
 
 Available names:
 - page: the active Playwright sync Page
 - pages: a tuple of known Playwright sync Page objects
 - timeout_ms: the configured action timeout in milliseconds
 - switch_page(index): switch the active page to a known page index and return that Page
-- finish(): finish the browser action loop after the requested browser task is complete
-- fail(reason): stop because a visible page state prevents the requested browser task from completing
 
 Rules:
 - Inspect the rendered HTML and screenshot, then choose the fewest Playwright commands needed.
 - Prefer robust Playwright locators such as get_by_role, get_by_text, get_by_label, and locator.
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
 - Use switch_page(index) before acting on a popup or tab listed in known pages.
-- Call finish() only when the instruction is complete in the browser.
+- Return the final answer directly only when the instruction is complete in the browser.
 - If the page shows a blocking app error or status, such as a locked account, invalid password, authorization failure,
-  or unavailable action, call fail(reason) with the visible message instead of finish().
+  or unavailable action, call journey_fail_session with the visible message instead of returning a final answer.
 - Do not treat a failed sign-in, failed checkout, failed submission, or similar rejected user task as complete just
   because the page displays the final error state.
-- If the previous step was rejected, correct the Python and try again.
+- If the previous step was rejected, correct the tool call or Python and try again.
 - If prompt memory is provided, use it as a hint from prior successful runs,
   but trust the current rendered HTML and screenshot over stale memory.
-"""
-
-_PROMPT_COMPLETION_SYSTEM_MESSAGE = """You decide whether a Journey browser prompt completed the requested browser task.
-
-Use the rendered HTML, visible text, screenshot, known pages, and executed steps to judge only the original instruction.
-Return completed=false when the current page shows a blocking app error or status, such as a locked account, invalid
-password, authorization failure, missing prerequisite, unavailable action, or any other state that prevents the
-requested browser task from being completed. A failed sign-in, failed checkout, failed submission, or rejected user task
-is not complete just because the page displays the final error state.
-Return completed=true only when the requested browser task is actually complete in the browser.
-When completed=false, set reason to the visible blocking message if present, otherwise a concise explanation.
-When completed=true, reason may be empty or a short confirmation.
-"""
-
-_FINAL_OUTPUT_SYSTEM_MESSAGE = """You produce the final answer for a completed Journey browser prompt.
-
-Use the rendered HTML, screenshot, known pages, and executed steps to answer the original instruction.
-Base the final output on the current visible page state, not on the fact that finish() was called.
+- Use the rendered HTML, visible text, screenshot, known pages, and executed steps to answer the original instruction.
+- Base the final output on the current visible page state.
 If a requested output field asks for an error, validation message, warning, status, or problem, copy the visible
 message exactly when present. Do not return an empty string for such a field when the current visible page text or
 screenshot contains a matching message.
-Do not mention implementation details, hidden reasoning, or unavailable metadata.
+- Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
 _VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
 _PROMPT_LOGGER = get_logger("playwright-prompt")
-_PROMPT_COMPLETION_VERDICT_RESPONSE_FORMAT: dict[str, object] = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "journey_prompt_completion_verdict",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "completed": {
-                    "type": "boolean",
-                    "description": (
-                        "Whether the requested browser task is actually complete."
-                    ),
+_PROMPT_AGENT_TOOLS: list[dict[str, object]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": _PROMPT_RUN_CODE_TOOL_NAME,
+            "description": (
+                "Execute one Playwright sync Python snippet against the active "
+                "Journey browser page."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": (
+                            "Executable Python code using page, pages, timeout_ms, "
+                            "and switch_page(index)."
+                        ),
+                    }
                 },
-                "reason": {
-                    "type": "string",
-                    "description": (
-                        "Visible blocking message or concise completion explanation."
-                    ),
-                },
+                "required": ["code"],
+                "additionalProperties": False,
             },
-            "required": ["completed", "reason"],
-            "additionalProperties": False,
         },
     },
-}
+    {
+        "type": "function",
+        "function": {
+            "name": _PROMPT_FAIL_SESSION_TOOL_NAME,
+            "description": (
+                "Stop the prompt because a visible page state blocks the "
+                "requested browser task."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "The visible blocking message or concise reason the "
+                            "browser task cannot be completed."
+                        ),
+                    }
+                },
+                "required": ["reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+]
 
 
 @dataclass(frozen=True)
@@ -142,9 +155,11 @@ class JourneyPlaywrightPromptResult:
 
 
 @dataclass(frozen=True)
-class _PromptCompletionVerdict:
-    completed: bool
-    reason: str
+class _PromptToolCall:
+    id: str
+    name: str
+    arguments: object
+    raw: dict[str, object]
 
 
 class _CompletionCallable(Protocol):
@@ -157,18 +172,11 @@ class _CompletionCallable(Protocol):
         temperature: float,
         response_format: dict[str, object] | None = None,
         enable_json_schema_validation: bool | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: str | dict[str, object] | None = None,
+        parallel_tool_calls: bool | None = None,
     ) -> object:
         ...
-
-
-class _PromptFinished(Exception):
-    pass
-
-
-class _PromptFailed(Exception):
-    def __init__(self, reason: str) -> None:
-        super().__init__(reason)
-        self.reason = reason
 
 
 class _PromptSession:
@@ -201,11 +209,172 @@ class _PromptSession:
 
     def run(self) -> JourneyPlaywrightPromptResult:
         self._log_start()
+        observation = self._build_observation()
+        messages = self._build_agent_messages(observation=observation)
         for step_index in range(1, self._max_steps + 1):
-            observation = self._build_observation()
             self._log_inspection(step_index=step_index, observation=observation)
-            code = self._request_code(observation=observation)
-            target = _first_code_line(code)
+            response = self._request_agent_response(messages=messages)
+            try:
+                tool_calls = _extract_completion_tool_calls(response)
+            except RuntimeError as exc:
+                detail = _format_python_error(exc)
+                self._append_rejected_step(
+                    step_index=step_index,
+                    action="tool",
+                    target="",
+                    detail=detail,
+                )
+                observation = self._build_observation()
+                messages.append(
+                    self._build_observation_message(
+                        observation=observation,
+                        include_memory=False,
+                    )
+                )
+                continue
+            if not tool_calls:
+                return self._finish_from_response(
+                    step_index=step_index,
+                    response=response,
+                )
+
+            messages.append(_assistant_message_from_response(response, tool_calls))
+            if len(tool_calls) != 1:
+                detail = _format_python_error(
+                    RuntimeError(
+                        "JourneyPlaywrightPage.prompt(...) expected the model "
+                        f"to call exactly one tool, but received {len(tool_calls)}."
+                    )
+                )
+                self._append_rejected_step(
+                    step_index=step_index,
+                    action="tool",
+                    target=_tool_calls_target(tool_calls),
+                    detail=detail,
+                )
+                for tool_call in tool_calls:
+                    messages.append(
+                        _tool_result_message(
+                            tool_call=tool_call,
+                            payload={"status": "rejected", "detail": detail},
+                        )
+                    )
+                observation = self._build_observation()
+                messages.append(
+                    self._build_observation_message(
+                        observation=observation,
+                        include_memory=False,
+                    )
+                )
+                continue
+
+            tool_call = tool_calls[0]
+            if tool_call.name == _PROMPT_FAIL_SESSION_TOOL_NAME:
+                try:
+                    reason = _tool_call_text_argument(
+                        tool_call,
+                        "reason",
+                        "JourneyPlaywrightPage.prompt(...) "
+                        "journey_fail_session expects a non-blank reason string.",
+                    )
+                except Exception as exc:
+                    detail = _format_python_error(exc)
+                    self._append_rejected_step(
+                        step_index=step_index,
+                        action="tool",
+                        target=tool_call.name,
+                        detail=detail,
+                    )
+                    messages.append(
+                        _tool_result_message(
+                            tool_call=tool_call,
+                            payload={"status": "rejected", "detail": detail},
+                        )
+                    )
+                    observation = self._build_observation()
+                    messages.append(
+                        self._build_observation_message(
+                            observation=observation,
+                            include_memory=False,
+                        )
+                    )
+                    continue
+
+                fail_step = JourneyPlaywrightPromptStep(
+                    index=step_index,
+                    page_index=self._active_page_index,
+                    action="fail",
+                    target=reason,
+                    status="failed",
+                    detail=reason,
+                )
+                self._steps.append(fail_step)
+                self._raise_prompt_failed(
+                    step_index=step_index,
+                    reason=reason,
+                )
+
+            if tool_call.name != _PROMPT_RUN_CODE_TOOL_NAME:
+                detail = _format_python_error(
+                    RuntimeError(
+                        "JourneyPlaywrightPage.prompt(...) received unknown "
+                        f"tool call {tool_call.name!r}."
+                    )
+                )
+                self._append_rejected_step(
+                    step_index=step_index,
+                    action="tool",
+                    target=tool_call.name,
+                    detail=detail,
+                )
+                messages.append(
+                    _tool_result_message(
+                        tool_call=tool_call,
+                        payload={"status": "rejected", "detail": detail},
+                    )
+                )
+                observation = self._build_observation()
+                messages.append(
+                    self._build_observation_message(
+                        observation=observation,
+                        include_memory=False,
+                    )
+                )
+                continue
+
+            try:
+                code = _strip_code_fences(
+                    _tool_call_text_argument(
+                        tool_call,
+                        "code",
+                        "JourneyPlaywrightPage.prompt(...) "
+                        "journey_run_code expects a non-blank code string.",
+                    )
+                )
+                target = _first_code_line(code)
+            except Exception as exc:
+                detail = _format_python_error(exc)
+                self._append_rejected_step(
+                    step_index=step_index,
+                    action="tool",
+                    target=tool_call.name,
+                    detail=detail,
+                )
+                messages.append(
+                    _tool_result_message(
+                        tool_call=tool_call,
+                        payload={"status": "rejected", "detail": detail},
+                    )
+                )
+                observation = self._build_observation()
+                messages.append(
+                    self._build_observation_message(
+                        observation=observation,
+                        include_memory=False,
+                    )
+                )
+                continue
+
             previous_page_count = len(self._pages)
             previous_active_page_index = self._active_page_index
             self._log_action(step_index=step_index, code=code)
@@ -215,90 +384,29 @@ class _PromptSession:
                     code=code,
                     target=target,
                 )
-            except _PromptFinished:
-                self._log_new_pages(previous_page_count=previous_page_count)
-                self._log_active_page_change(
-                    previous_active_page_index=previous_active_page_index,
-                )
-                finish_step = JourneyPlaywrightPromptStep(
-                    index=step_index,
-                    page_index=self._active_page_index,
-                    action="finish",
-                    target="",
-                    status="ok",
-                    detail="Prompt marked complete.",
-                )
-                self._steps.append(finish_step)
-                self._settle_active_page_for_final_output()
-                final_observation = self._build_observation()
-                verdict = self._request_completion_verdict(
-                    observation=final_observation,
-                )
-                if not verdict.completed:
-                    self._raise_prompt_failed(
-                        step_index=step_index,
-                        reason=verdict.reason,
-                    )
-                final_output = self._request_final_output(
-                    observation=final_observation,
-                )
-                _emit_prompt_log(
-                    f"step {step_index}/{self._max_steps}: finished with output: "
-                    f"{_prompt_output_summary(final_output)}",
-                    event="prompt_finish",
-                    step=step_index,
-                    max_steps=self._max_steps,
-                    output=_prompt_output_summary(final_output),
-                )
-                self._write_memory(final_output=final_output)
-                return JourneyPlaywrightPromptResult(
-                    output=final_output,
-                    model=self._model,
-                    active_page_index=self._active_page_index,
-                    pages=tuple(self._prompt_pages()),
-                    steps=tuple(self._steps),
-                )
-            except _PromptFailed as exc:
-                self._log_new_pages(previous_page_count=previous_page_count)
-                self._log_active_page_change(
-                    previous_active_page_index=previous_active_page_index,
-                )
-                fail_step = JourneyPlaywrightPromptStep(
-                    index=step_index,
-                    page_index=self._active_page_index,
-                    action="fail",
-                    target=exc.reason,
-                    status="failed",
-                    detail=exc.reason,
-                )
-                self._steps.append(fail_step)
-                self._raise_prompt_failed(
-                    step_index=step_index,
-                    reason=exc.reason,
-                )
             except Exception as exc:
                 self._log_new_pages(previous_page_count=previous_page_count)
                 self._log_active_page_change(
                     previous_active_page_index=previous_active_page_index,
                 )
-                step = JourneyPlaywrightPromptStep(
-                    index=step_index,
-                    page_index=self._active_page_index,
+                step = self._append_rejected_step(
+                    step_index=step_index,
                     action="python",
                     target=target,
-                    status="rejected",
                     detail=_format_python_error(exc),
                 )
-                self._steps.append(step)
-                _emit_prompt_log(
-                    f"step {step_index}/{self._max_steps}: rejected on "
-                    f"{_page_summary(self._prompt_pages()[self._active_page_index])}: "
-                    f"{step.detail}",
-                    event="prompt_rejected",
-                    step=step_index,
-                    max_steps=self._max_steps,
-                    page=self._active_page_index,
-                    detail=step.detail,
+                messages.append(
+                    _tool_result_message(
+                        tool_call=tool_call,
+                        payload={"status": "rejected", "detail": step.detail},
+                    )
+                )
+                observation = self._build_observation()
+                messages.append(
+                    self._build_observation_message(
+                        observation=observation,
+                        include_memory=False,
+                    )
                 )
                 continue
             self._log_new_pages(previous_page_count=previous_page_count)
@@ -314,10 +422,27 @@ class _PromptSession:
                 page=self._active_page_index,
             )
             self._steps.append(step)
+            messages.append(
+                _tool_result_message(
+                    tool_call=tool_call,
+                    payload={
+                        "status": "ok",
+                        "detail": step.detail,
+                        "active_page_index": self._active_page_index,
+                    },
+                )
+            )
+            observation = self._build_observation()
+            messages.append(
+                self._build_observation_message(
+                    observation=observation,
+                    include_memory=False,
+                )
+            )
 
         message = (
             "JourneyPlaywrightPage.prompt(...) reached "
-            f"max_steps={self._max_steps} without a finish action."
+            f"max_steps={self._max_steps} without a final response."
         )
         if self._steps:
             last_step = self._steps[-1]
@@ -432,8 +557,31 @@ class _PromptSession:
             "screenshot_data_url": screenshot_data_url,
         }
 
-    def _request_code(self, *, observation: dict[str, object]) -> str:
-        memory_entry = self._memory_for_observation(observation)
+    def _build_agent_messages(
+        self,
+        *,
+        observation: dict[str, object],
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "role": "system",
+                "content": _PROMPT_SYSTEM_MESSAGE,
+            },
+            self._build_observation_message(
+                observation=observation,
+                include_memory=True,
+            ),
+        ]
+
+    def _build_observation_message(
+        self,
+        *,
+        observation: dict[str, object],
+        include_memory: bool,
+    ) -> dict[str, object]:
+        memory_entry = (
+            self._memory_for_observation(observation) if include_memory else None
+        )
         memory_section: list[str] = []
         if memory_entry is not None:
             memory_section = [
@@ -441,73 +589,22 @@ class _PromptSession:
                 "Prompt memory JSON:",
                 json.dumps(memory_entry, sort_keys=True, indent=2),
             ]
+        output_section: list[str]
+        if self._output_schema is None:
+            output_section = [
+                "",
+                "When the browser task is complete, return the final answer as plain text.",
+            ]
+        else:
+            output_section = [
+                "",
+                "When the browser task is complete, return the final answer using these output fields JSON:",
+                self._output_schema.prompt_text,
+            ]
         prompt_text = "\n".join(
             [
                 f"Instruction:\n{self._instruction}",
                 *memory_section,
-                "",
-                "Known pages JSON:",
-                json.dumps(
-                    observation["pages"],
-                    sort_keys=True,
-                    indent=2,
-                ),
-                "",
-                f"Active page index: {observation['active_page_index']}",
-                "",
-                "Previous steps JSON:",
-                json.dumps(observation["steps"], sort_keys=True, indent=2),
-                "",
-                "Active page rendered HTML:",
-                "<journey-rendered-html>",
-                cast(str, observation["rendered_html"]),
-                "</journey-rendered-html>",
-                "",
-                "Return only the next Python snippet to execute.",
-            ]
-        )
-        screenshot_data_url = cast(str, observation["screenshot_data_url"])
-        try:
-            response = self._completion(
-                model=self._model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": _PROMPT_SYSTEM_MESSAGE,
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt_text,
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": screenshot_data_url},
-                            },
-                        ],
-                    },
-                ],
-                max_tokens=800,
-                temperature=0.0,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "JourneyPlaywrightPage.prompt(...) failed to call "
-                f"model {self._model!r}: {exc}"
-            ) from exc
-        response_text = _extract_completion_text(response)
-        return _strip_code_fences(response_text)
-
-    def _request_completion_verdict(
-        self,
-        *,
-        observation: dict[str, object],
-    ) -> _PromptCompletionVerdict:
-        prompt_text = "\n".join(
-            [
-                f"Instruction:\n{self._instruction}",
                 "",
                 "Known pages JSON:",
                 json.dumps(
@@ -530,122 +627,47 @@ class _PromptSession:
                 "<journey-rendered-html>",
                 cast(str, observation["rendered_html"]),
                 "</journey-rendered-html>",
+                *output_section,
                 "",
-                "Return whether the original browser task is completed.",
+                (
+                    "Call journey_run_code to continue browser work, call "
+                    "journey_fail_session for a blocking visible page state, "
+                    "or return the final answer directly when complete."
+                ),
             ]
         )
         screenshot_data_url = cast(str, observation["screenshot_data_url"])
-        try:
-            response = self._completion(
-                model=self._model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": _PROMPT_COMPLETION_SYSTEM_MESSAGE,
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt_text,
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": screenshot_data_url},
-                            },
-                        ],
-                    },
-                ],
-                max_tokens=400,
-                temperature=0.0,
-                response_format=_PROMPT_COMPLETION_VERDICT_RESPONSE_FORMAT,
-                enable_json_schema_validation=True,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "JourneyPlaywrightPage.prompt(...) failed to call "
-                f"model {self._model!r} for completion verdict: {exc}"
-            ) from exc
-        return _parse_completion_verdict(_extract_completion_text(response).strip())
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": prompt_text,
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": screenshot_data_url},
+                },
+            ],
+        }
 
-    def _request_final_output(
+    def _request_agent_response(
         self,
         *,
-        observation: dict[str, object],
-    ) -> str | dict[str, object]:
-        prompt_parts = [
-            f"Instruction:\n{self._instruction}",
-            "",
-            "Known pages JSON:",
-            json.dumps(
-                observation["pages"],
-                sort_keys=True,
-                indent=2,
-            ),
-            "",
-            f"Active page index: {observation['active_page_index']}",
-            "",
-            "Executed steps JSON:",
-            json.dumps(observation["steps"], sort_keys=True, indent=2),
-            "",
-            "Active page visible text:",
-            "<journey-visible-text>",
-            cast(str, observation["visible_text"]),
-            "</journey-visible-text>",
-            "",
-            "Active page rendered HTML:",
-            "<journey-rendered-html>",
-            cast(str, observation["rendered_html"]),
-            "</journey-rendered-html>",
-        ]
-        if self._output_schema is None:
-            prompt_parts.extend(
-                [
-                    "",
-                    "Return the final answer as plain text.",
-                ]
-            )
-            response_format = None
-            enable_json_schema_validation = None
-        else:
-            prompt_parts.extend(
-                [
-                    "",
-                    "Return the final answer using these output fields JSON:",
-                    self._output_schema.prompt_text,
-                ]
-            )
-            response_format = self._output_schema.response_format
-            enable_json_schema_validation = True
-
-        screenshot_data_url = cast(str, observation["screenshot_data_url"])
+        messages: list[dict[str, object]],
+    ) -> object:
         try:
-            kwargs: dict[str, object] = {}
-            if response_format is not None:
-                kwargs["response_format"] = response_format
-                kwargs["enable_json_schema_validation"] = enable_json_schema_validation
+            kwargs: dict[str, object] = {
+                "tools": _PROMPT_AGENT_TOOLS,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+            }
+            if self._output_schema is not None:
+                kwargs["response_format"] = self._output_schema.response_format
+                kwargs["enable_json_schema_validation"] = True
             response = self._completion(
                 model=self._model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": _FINAL_OUTPUT_SYSTEM_MESSAGE,
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "\n".join(prompt_parts),
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": screenshot_data_url},
-                            },
-                        ],
-                    },
-                ],
+                messages=messages,
                 max_tokens=1000,
                 temperature=0.0,
                 **kwargs,
@@ -653,10 +675,55 @@ class _PromptSession:
         except Exception as exc:
             raise RuntimeError(
                 "JourneyPlaywrightPage.prompt(...) failed to call "
-                f"model {self._model!r} for final output: {exc}"
+                f"model {self._model!r}: {exc}"
             ) from exc
+        return response
 
+    def _finish_from_response(
+        self,
+        *,
+        step_index: int,
+        response: object,
+    ) -> JourneyPlaywrightPromptResult:
         response_text = _extract_completion_text(response).strip()
+        finish_step = JourneyPlaywrightPromptStep(
+            index=step_index,
+            page_index=self._active_page_index,
+            action="finish",
+            target="",
+            status="ok",
+            detail="Prompt marked complete.",
+        )
+        self._steps.append(finish_step)
+        self._settle_active_page_for_final_output()
+        final_observation = self._build_observation()
+        final_output = self._parse_final_output(
+            response_text,
+            observation=final_observation,
+        )
+        _emit_prompt_log(
+            f"step {step_index}/{self._max_steps}: finished with output: "
+            f"{_prompt_output_summary(final_output)}",
+            event="prompt_finish",
+            step=step_index,
+            max_steps=self._max_steps,
+            output=_prompt_output_summary(final_output),
+        )
+        self._write_memory(final_output=final_output)
+        return JourneyPlaywrightPromptResult(
+            output=final_output,
+            model=self._model,
+            active_page_index=self._active_page_index,
+            pages=tuple(self._prompt_pages()),
+            steps=tuple(self._steps),
+        )
+
+    def _parse_final_output(
+        self,
+        response_text: str,
+        *,
+        observation: dict[str, object],
+    ) -> str | dict[str, object]:
         if self._output_schema is None:
             return response_text
         structured_output = parse_prompt_structured_output(
@@ -669,6 +736,35 @@ class _PromptSession:
             schema=self._output_schema,
             visible_text=cast(str, observation["visible_text"]),
         )
+
+    def _append_rejected_step(
+        self,
+        *,
+        step_index: int,
+        action: str,
+        target: str,
+        detail: str,
+    ) -> JourneyPlaywrightPromptStep:
+        step = JourneyPlaywrightPromptStep(
+            index=step_index,
+            page_index=self._active_page_index,
+            action=action,
+            target=target,
+            status="rejected",
+            detail=detail,
+        )
+        self._steps.append(step)
+        _emit_prompt_log(
+            f"step {step_index}/{self._max_steps}: rejected on "
+            f"{_page_summary(self._prompt_pages()[self._active_page_index])}: "
+            f"{step.detail}",
+            event="prompt_rejected",
+            step=step_index,
+            max_steps=self._max_steps,
+            page=self._active_page_index,
+            detail=step.detail,
+        )
+        return step
 
     def _raise_prompt_failed(self, *, step_index: int, reason: str) -> None:
         normalized_reason = reason.strip() or (
@@ -782,30 +878,7 @@ class _PromptSession:
             namespace["pages"] = tuple(self._pages)
             return target_page
 
-        def finish(*args: object, **kwargs: object) -> None:
-            if args or kwargs:
-                raise ValueError(
-                    "JourneyPlaywrightPage.prompt(...) finish() does not accept "
-                    "arguments; Journey requests the final output separately."
-                )
-            raise _PromptFinished()
-
-        def fail(*args: object, **kwargs: object) -> None:
-            if len(args) != 1 or kwargs:
-                raise ValueError(
-                    "JourneyPlaywrightPage.prompt(...) fail(reason) accepts "
-                    "exactly one reason argument."
-                )
-            normalized_reason = _require_text_value(
-                args[0],
-                "JourneyPlaywrightPage.prompt(...) fail(reason) expects a "
-                "non-blank reason string.",
-            )
-            raise _PromptFailed(normalized_reason)
-
         namespace["switch_page"] = switch_page
-        namespace["finish"] = finish
-        namespace["fail"] = fail
         compiled = compile(normalized_code, "<journey-playwright-prompt>", "exec")
         try:
             exec(compiled, namespace, namespace)
@@ -1082,48 +1155,132 @@ def _prompt_output_summary(value: str | dict[str, object]) -> str:
     return truncate_prompt_memory_text(json.dumps(value, sort_keys=True))
 
 
-def _parse_completion_verdict(text: str) -> _PromptCompletionVerdict:
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
+def _object_field(value: object, name: str) -> object:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _completion_message(response: object) -> object:
+    choices = _object_field(response, "choices")
+    if not isinstance(choices, list) or not choices:
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected the completion verdict "
-            "model response to be JSON."
-        ) from exc
+            "JourneyPlaywrightPage.prompt(...) expected the model response to include choices."
+        )
+    first_choice = choices[0]
+    message = _object_field(first_choice, "message")
+    if message is None:
+        raise RuntimeError(
+            "JourneyPlaywrightPage.prompt(...) expected the model response to include a message."
+        )
+    return message
+
+
+def _extract_completion_tool_calls(response: object) -> tuple[_PromptToolCall, ...]:
+    message = _completion_message(response)
+    raw_tool_calls = _object_field(message, "tool_calls")
+    if raw_tool_calls is None:
+        return ()
+    if not isinstance(raw_tool_calls, list):
+        raise RuntimeError(
+            "JourneyPlaywrightPage.prompt(...) expected model tool_calls to be a list."
+        )
+    tool_calls: list[_PromptToolCall] = []
+    for index, raw_tool_call in enumerate(raw_tool_calls, start=1):
+        call_id = _object_field(raw_tool_call, "id")
+        if not isinstance(call_id, str) or not call_id.strip():
+            call_id = f"journey_tool_call_{index}"
+        function = _object_field(raw_tool_call, "function")
+        name = _object_field(function, "name") if function is not None else None
+        if not isinstance(name, str):
+            name = ""
+        arguments = (
+            _object_field(function, "arguments") if function is not None else None
+        )
+        if isinstance(arguments, str):
+            raw_arguments = arguments
+        else:
+            try:
+                raw_arguments = json.dumps(arguments)
+            except TypeError:
+                raw_arguments = str(arguments)
+        tool_calls.append(
+            _PromptToolCall(
+                id=call_id,
+                name=name,
+                arguments=arguments,
+                raw={
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": raw_arguments,
+                    },
+                },
+            )
+        )
+    return tuple(tool_calls)
+
+
+def _assistant_message_from_response(
+    response: object,
+    tool_calls: tuple[_PromptToolCall, ...],
+) -> dict[str, object]:
+    message = _completion_message(response)
+    assistant_message: dict[str, object] = {
+        "role": "assistant",
+        "tool_calls": [tool_call.raw for tool_call in tool_calls],
+    }
+    content = _object_field(message, "content")
+    if content is not None:
+        assistant_message["content"] = content
+    return assistant_message
+
+
+def _tool_result_message(
+    *,
+    tool_call: _PromptToolCall,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "content": json.dumps(payload, sort_keys=True),
+    }
+
+
+def _tool_calls_target(tool_calls: tuple[_PromptToolCall, ...]) -> str:
+    names = [tool_call.name or "<unnamed>" for tool_call in tool_calls]
+    return ", ".join(names)[:200]
+
+
+def _tool_call_text_argument(
+    tool_call: _PromptToolCall,
+    name: str,
+    message: str,
+) -> str:
+    arguments = _parse_tool_call_arguments(tool_call)
+    return _require_text_value(arguments.get(name), message)
+
+
+def _parse_tool_call_arguments(tool_call: _PromptToolCall) -> dict[str, object]:
+    raw_arguments = tool_call.arguments
+    if isinstance(raw_arguments, str):
+        try:
+            parsed = json.loads(raw_arguments)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "JourneyPlaywrightPage.prompt(...) expected tool arguments "
+                "to be a JSON object."
+            ) from exc
+    else:
+        parsed = raw_arguments
     if not isinstance(parsed, dict):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected the completion verdict "
-            "model response to be a JSON object."
+            "JourneyPlaywrightPage.prompt(...) expected tool arguments "
+            "to be a JSON object."
         )
-    expected = {"completed", "reason"}
-    actual = set(parsed)
-    if actual != expected:
-        details: list[str] = []
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
-        if missing:
-            details.append(f"missing fields {missing!r}")
-        if extra:
-            details.append(f"unexpected fields {extra!r}")
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) completion verdict did not match "
-            "the expected schema: "
-            + "; ".join(details)
-        )
-    completed = parsed["completed"]
-    reason = parsed["reason"]
-    if not isinstance(completed, bool) or not isinstance(reason, str):
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected the completion verdict "
-            "to include boolean completed and string reason fields."
-        )
-    normalized_reason = reason.strip()
-    if not completed and not normalized_reason:
-        normalized_reason = "The requested browser task could not be completed."
-    return _PromptCompletionVerdict(
-        completed=completed,
-        reason=normalized_reason,
-    )
+    return parsed
 
 
 _VISIBLE_MESSAGE_FIELD_TERMS = (
