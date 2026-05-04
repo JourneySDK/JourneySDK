@@ -52,11 +52,11 @@ if branch(start_from=session):
     ...
 ```
 
-Journey stores and restores replayable step values whenever execution truly
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey stores and restores replayable step values whenever execution truly" ...
 rewinds to a step boundary, such as a step-started later branch. The protocol is
 documented in the README's Journey Rehydration Protocol section.
 
-Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey compiles the branch structure internally before execution. A normal run executes every generated case; a" ...
 targeted run uses the compiled labels to choose one case.
 
 ### Run Only the Branch That Reaches One Step
@@ -66,24 +66,24 @@ uv run journey --file docs/branching_journey/branching_journey.py --step assert_
 ```
 
 ```console
-Plan
-Journey docs/branching_journey/branching_journey.py:branching_journey
-journey_id=branching_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['load_signup_request', 'classify_signup_request', 'assert_fast_track_path']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['load_signup_request', 'classify_signup_request', 'assert_manual_review_path']
-Summary: 1 journey planned, 2 cases planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/branching_journey/branching_journey.py:branching_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=branching_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={'bg_1': 'branch_1'} labels=['load_signup_request', 'classify_signup_request', 'assert_fast_track_path']" ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_2 branch_env={'bg_1': 'branch_2'} labels=['load_signup_request', 'classify_signup_request', 'assert_manual_review_path']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 2 cases planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step load_signup_request attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step load_signup_request attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step classify_signup_request attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step classify_signup_request attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  branch bg_1=branch_2"
-[journey] time=... level=INFO component=executor event=execution_log message="  step assert_manual_review_path attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step assert_manual_review_path attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_manual_review_path replay_anchor=classify_signup_request"
-Summary: 1 journey executed, 1 case executed, 0 failed
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_2 start branches={bg_1=branch_2}"
+[journey] time=... level=INFO component=executor event=step_start message="  step load_signup_request attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step load_signup_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_start message="  step classify_signup_request attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step classify_signup_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=branch_select message="  branch bg_1=branch_2"
+[journey] time=... level=INFO component=executor event=step_start message="  step assert_manual_review_path attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step assert_manual_review_path attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=case_complete message="- case_2 ok steps=3 duration=... stopped_at=assert_manual_review_path replay_anchor=classify_signup_request"
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
 That output is the reason `--step` is so useful during development: Journey chooses the single case that reaches the
@@ -97,16 +97,16 @@ uv run journey --file docs/branching_journey/branching_journey.py --develop-step
 ```
 
 ```console
-Plan
-Journey docs/branching_journey/branching_journey.py:branching_journey
-journey_id=branching_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['load_signup_request', 'classify_signup_request', 'assert_fast_track_path']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['load_signup_request', 'classify_signup_request', 'assert_manual_review_path']
-Summary: 1 journey planned, 2 cases planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/branching_journey/branching_journey.py:branching_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=branching_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={'bg_1': 'branch_1'} labels=['load_signup_request', 'classify_signup_request', 'assert_fast_track_path']" ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_2 branch_env={'bg_1': 'branch_2'} labels=['load_signup_request', 'classify_signup_request', 'assert_manual_review_path']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 2 cases planned, 0 failed" ...
 
-Execution
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
 Development mode stopped after step assert_manual_review_path attempt=1 ok.
-Summary: 0 journeys executed, 0 cases executed, 0 failed
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 0 journeys executed, 0 cases executed, 0 failed" ...
 ```
 
 Use `--develop-step` when you are actively editing one branch and want Journey to pause after the step boundary you
@@ -142,7 +142,7 @@ This example is intentionally small. It exists to show one idea clearly: in a fu
 restart from a saved step anchor instead of rerunning earlier shared setup.
 
 If a value created by the anchor step implements `__store__` / `__restore__`,
-Journey restores that external state before the later branch continues from the
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey restores that external state before the later branch continues from the" ...
 anchor's post-exit boundary.
 
 ### Target the Second Branch
@@ -152,21 +152,21 @@ uv run journey --file docs/rehydration_journey/rehydration_journey.py --step ass
 ```
 
 ```console
-Plan
-Journey docs/rehydration_journey/rehydration_journey.py:rehydration_journey
-journey_id=rehydration_journey function_ref=...
-- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare_context', 'shared_after_anchor', 'assert_branch_a']
-- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare_context', 'shared_after_anchor', 'assert_branch_b']
-Summary: 1 journey planned, 2 cases planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/rehydration_journey/rehydration_journey.py:rehydration_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=rehydration_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare_context', 'shared_after_anchor', 'assert_branch_a']" ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare_context', 'shared_after_anchor', 'assert_branch_b']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 2 cases planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 start branches={bg_1=branch_2}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step prepare_context attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step shared_after_anchor attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  branch bg_1=branch_2"
-[journey] time=... level=INFO component=executor event=execution_log message="  step assert_branch_b attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_2 ok steps=3 duration=... stopped_at=assert_branch_b replay_anchor=prepare_context"
-Summary: 1 journey executed, 1 case executed, 0 failed
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_2 start branches={bg_1=branch_2}"
+[journey] time=... level=INFO component=executor event=step_success message="  step prepare_context attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_success message="  step shared_after_anchor attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=branch_select message="  branch bg_1=branch_2"
+[journey] time=... level=INFO component=executor event=step_success message="  step assert_branch_b attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=case_complete message="- case_2 ok steps=3 duration=... stopped_at=assert_branch_b replay_anchor=prepare_context"
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
 The `replay_anchor=prepare_context` part tells you which step is the branch replay anchor. For a targeted `--step` run

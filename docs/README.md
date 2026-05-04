@@ -76,30 +76,20 @@ If you only want the shape of a Journey run, start here:
 uv run journey --file docs/first_journey/first_journey.py
 ```
 
-Expected stdout:
+Expected structured stdout includes:
 
 ```console
-Plan
-Journey docs/first_journey/first_journey.py:first_journey
-journey_id=first_journey function_ref=...
-- case_1 branch_env={} labels=['create_customer_profile', 'send_welcome_message', 'assert_welcome_message_sent']
-Summary: 1 journey planned, 1 case planned, 0 failed
-
-Execution
-Summary: 1 journey executed, 1 case executed, 0 failed
-```
-
-Expected stderr includes live logs like:
-
-```console
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/first_journey/first_journey.py:first_journey" ...
 [journey] time=... level=INFO component=executor event=step_success message="  step create_customer_profile attempt=1 ok duration=..." ...
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
 That output shows the core Journey model:
 
 - one top-level function becomes one or more executable cases
 - each case is still plain Python steps in order
-- the CLI shows the compiled cases on stdout and streams each step boundary as structured stderr logs
+- the CLI emits compiled cases, summaries, and step boundaries as structured stdout logs
 - stateful runs can replay from step boundaries instead of rerunning everything from scratch
 
 Continue with [01 Getting Started](01-getting-started.md) if Journey is new to you.

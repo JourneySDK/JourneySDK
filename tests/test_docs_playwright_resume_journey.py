@@ -100,8 +100,8 @@ def test_playwright_resume_example_runs_and_resumes_authenticated_session(
 
         assert state_file.exists()
         assert live_stderr.prompt_seen.is_set()
-        assert "Signed in and returned JourneyPlaywrightPage" in first_capture.err
-        assert INTERRUPT_PROMPT_PREFIX in first_capture.err
+        assert "Signed in and returned JourneyPlaywrightPage" in first_capture.out
+        assert INTERRUPT_PROMPT_PREFIX in first_capture.out
 
         report = journey.execute(
             playwright_resume_module.playwright_resume_journey,
@@ -122,4 +122,4 @@ def test_playwright_resume_example_runs_and_resumes_authenticated_session(
         "status": "Protected action complete",
     }
     assert report.case_reports[0].records[2].result is True
-    assert "The protected action completed." in second_capture.err
+    assert "The protected action completed." in second_capture.out

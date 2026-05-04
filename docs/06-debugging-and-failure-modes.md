@@ -40,32 +40,32 @@ uv run journey --file docs/fail_fast_journeys/fail_fast_journeys.py
 ```
 
 ```console
-Plan
-Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
-journey_id=broken_demo_journey function_ref=...
-- case_1 branch_env={} labels=['raise_expected_failure']
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=broken_demo_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['raise_expected_failure']" ...
 
-Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey
-journey_id=good_demo_journey function_ref=...
-- case_1 branch_env={} labels=['finish_successfully']
-Summary: 2 journeys planned, 2 cases planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=good_demo_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['finish_successfully']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 2 journeys planned, 2 cases planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure"
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=step_start message="  step raise_expected_failure attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_failure message="  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure"
 
-Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey
-journey_id=good_demo_journey function_ref=...
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step finish_successfully attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step finish_successfully attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=1 duration=..."
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=good_demo_journey function_ref=..." ...
+[journey] time=... level=INFO component=executor event=case_start message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=step_start message="  step finish_successfully attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step finish_successfully attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=1 duration=..."
 ERROR [execute] .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey (CallableExecutionError)
-What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure
-Try this: Inspect the step implementation or rerun after fixing the underlying failure.
+[journey] time=... level=ERROR component=cli event=command_error_message message="What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure" ...
+[journey] time=... level=ERROR component=cli event=command_error_hint message="Try this: Inspect the step implementation or rerun after fixing the underlying failure." ...
 
-Summary: 1 journey executed, 1 case executed, 1 failed
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 1 failed" ...
 ```
 
 Default mode is good when you want the broadest picture from one command. Even though one journey failed, Journey still ran the later successful one.
@@ -77,25 +77,25 @@ uv run journey --file docs/fail_fast_journeys/fail_fast_journeys.py --fail-fast
 ```
 
 ```console
-Plan
-Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
-journey_id=broken_demo_journey function_ref=...
-- case_1 branch_env={} labels=['raise_expected_failure']
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=broken_demo_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['raise_expected_failure']" ...
 
-Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey
-journey_id=good_demo_journey function_ref=...
-- case_1 branch_env={} labels=['finish_successfully']
-Summary: 2 journeys planned, 2 cases planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=good_demo_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['finish_successfully']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 2 journeys planned, 2 cases planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure"
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=step_start message="  step raise_expected_failure attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_failure message="  step raise_expected_failure attempt=1 failed duration=... error=RuntimeError: expected tutorial failure"
 ERROR [execute] .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey (CallableExecutionError)
-What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure
-Try this: Inspect the step implementation or rerun after fixing the underlying failure.
+[journey] time=... level=ERROR component=cli event=command_error_message message="What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure" ...
+[journey] time=... level=ERROR component=cli event=command_error_hint message="Try this: Inspect the step implementation or rerun after fixing the underlying failure." ...
 
-Summary: 0 journeys executed, 0 cases executed, 1 failed
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 0 journeys executed, 0 cases executed, 1 failed" ...
 ```
 
 This is the faster feedback loop when you only care about the first failure.
@@ -104,7 +104,7 @@ This is the faster feedback loop when you only care about the first failure.
 
 Each failed run gives you three layers of information:
 
-- The structured stderr log line shows the exact step label, attempt number, component, event, timestamp, and error class.
+- The structured stdout log line shows the exact step label, attempt number, component, event, timestamp, and error class.
 - The `ERROR [execute]` block summarizes the failure in plain English.
 - The final summary tells you whether the CLI continued into later journeys or stopped early.
 

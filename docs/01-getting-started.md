@@ -3,7 +3,7 @@
 This chapter is for the first ten minutes with Journey.
 
 The goal is simple: understand what a journey looks like in Python, how to run it, and how to narrow a file down to
-one journey when you need script-friendly JSON output.
+one journey when you need script-friendly JSONL output.
 
 ## The Mental Model
 
@@ -46,30 +46,19 @@ That is the whole authored flow. The helper functions in the same file do the re
 uv run journey --file docs/first_journey/first_journey.py
 ```
 
-Expected stdout:
+Expected structured stdout includes:
 
 ```console
-Plan
-Journey docs/first_journey/first_journey.py:first_journey
-journey_id=first_journey function_ref=...
-- case_1 branch_env={} labels=['create_customer_profile', 'send_welcome_message', 'assert_welcome_message_sent']
-Summary: 1 journey planned, 1 case planned, 0 failed
-
-Execution
-Summary: 1 journey executed, 1 case executed, 0 failed
-```
-
-Expected stderr includes structured live diagnostics:
-
-```console
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/first_journey/first_journey.py:first_journey" ...
 [journey] time=... level=INFO component=executor event=step_start message="  step create_customer_profile attempt=1 start" ...
 [journey] time=... level=INFO component=executor event=step_success message="  step create_customer_profile attempt=1 ok duration=..." ...
-[journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=3 duration=..." ...
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
-The important part is not the formatting. The important part is that Journey keeps stdout useful for summaries and
-JSON, while stderr shows every step boundary, every attempt, and what happened when. Use `--log-level off` to suppress
-diagnostics or `--log-level debug` for more tool detail.
+The important part is not the formatting. The important part is that Journey routes plan summaries, execution results,
+and every step boundary through one logger-owned stdout stream. Use `--output jsonl` for one parseable JSON object per
+line, `--log-level off` to suppress all Journey-owned output, or `--log-level debug` for more tool detail.
 
 ## One File Can Define More Than One Journey
 
@@ -94,57 +83,24 @@ def invoice_reminder_journey() -> None:
 This is the first time Journey's CLI selection flags matter:
 
 - `--journey` narrows discovery to one decorated function
-- `--json` switches the CLI into machine-readable output
+- `--output jsonl` switches the CLI into machine-readable JSON Lines output
 
-### Execute One Journey as JSON
+### Execute One Journey as JSONL
 
 ```bash
-uv run journey --file docs/selection_journeys/selection_journeys.py --journey invoice_reminder_journey --json
+uv run journey --file docs/selection_journeys/selection_journeys.py --journey invoice_reminder_journey --output jsonl
 ```
 
-```json
-{
-  "journeys": [
-    {
-      "file": ".../docs/selection_journeys/selection_journeys.py",
-      "journey_name": "invoice_reminder_journey",
-      "report": {
-        "journey_id": "invoice_reminder_journey",
-        "function_ref": "...",
-        "case_reports": [
-          {
-            "case_id": "case_1",
-            "completed": true,
-            "stopped_at_label": null,
-            "replay_anchor": null,
-            "records": [
-              {
-                "label": "load_invoice_reminder",
-                "ok": true,
-                "result": {
-                  "reminder_id": "invoice-001",
-                  "channel": "email"
-                }
-              },
-              {
-                "label": "assert_invoice_reminder",
-                "ok": true,
-                "result": true
-              }
-            ]
-          }
-        ]
-      }
-    }
-  ],
-  "errors": []
-}
+```jsonl
+{"time":"...","level":"INFO","component":"cli","event":"plan_start","message":"Plan"}
+{"time":"...","level":"INFO","component":"executor","event":"step_success","message":"  step load_invoice_reminder attempt=1 ok duration=...","step":"load_invoice_reminder"}
+{"time":"...","level":"INFO","component":"cli","event":"execute_result","message":"execution result","payload":{"journeys":[{"file":".../docs/selection_journeys/selection_journeys.py","journey_name":"invoice_reminder_journey","report":{"journey_id":"invoice_reminder_journey","function_ref":"...","case_reports":[{"case_id":"case_1","completed":true,"stopped_at_label":null,"replay_anchor":null,"records":[{"label":"load_invoice_reminder","ok":true},{"label":"assert_invoice_reminder","ok":true}]}]}}],"errors":[]}}
 ```
 
 ## What To Notice
 
 - Step outputs stay explicit. The second step receives the first step's return value directly.
 - `--journey` is the easiest way to work in a file that holds several flows.
-- `--json` is for tooling and CI. The default text output is better for humans during local development.
+- `--output jsonl` is for tooling and CI. The default text output is better for humans during local development.
 
 Continue with [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md) when you want one authored flow to cover multiple paths.

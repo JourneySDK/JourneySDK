@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import StringIO
 import re
 
@@ -15,7 +16,7 @@ def _reset_logging() -> None:
     configure_logging("info")
 
 
-def test_logger_writes_common_format_to_current_stderr(capsys: pytest.CaptureFixture[str]):
+def test_logger_writes_common_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
     get_logger("executor").info(
         "step_start",
         "starting step",
@@ -25,7 +26,9 @@ def test_logger_writes_common_format_to_current_stderr(capsys: pytest.CaptureFix
         attempt=1,
     )
 
-    output = capsys.readouterr().err.strip()
+    captured = capsys.readouterr()
+    output = captured.out.strip()
+    assert captured.err == ""
     assert re.match(
         r'^\[journey\] time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z '
         r'level=INFO component=executor event=step_start message="starting step" '
@@ -40,11 +43,15 @@ def test_logger_respects_level_filtering_and_off(capsys: pytest.CaptureFixture[s
 
     logger.info("discovery_start", "discovering journeys")
     logger.warning("discovery_warning", "using fallback")
-    assert "discovery_warning" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "discovery_warning" in captured.out
+    assert captured.err == ""
 
     configure_logging("off")
     logger.error("failure", "this should be suppressed")
-    assert capsys.readouterr().err == ""
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 def test_logger_accepts_configured_stream_and_flushes() -> None:
@@ -77,7 +84,7 @@ def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
         route="/v1/test",
     )
 
-    output = capsys.readouterr().err
+    output = capsys.readouterr().out
     assert "secret-api-key" not in output
     assert "Bearer token" not in output
     assert "secret-password" not in output
@@ -85,6 +92,28 @@ def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
     assert 'authorization="[redacted]"' in output
     assert 'password="[redacted]"' in output
     assert "route=/v1/test" in output
+
+
+def test_logger_writes_jsonl_records_to_stdout(capsys: pytest.CaptureFixture[str]):
+    configure_logging("info", output_format="jsonl")
+
+    get_logger("cli").info(
+        "execute_result",
+        "execution result",
+        payload={"journeys": [{"journey_name": "flow"}], "errors": []},
+        api_token="secret-token",
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    record = json.loads(captured.out)
+    assert record["level"] == "INFO"
+    assert record["component"] == "cli"
+    assert record["event"] == "execute_result"
+    assert record["message"] == "execution result"
+    assert record["payload"]["journeys"][0]["journey_name"] == "flow"
+    assert record["api_token"] == "[redacted]"
+    assert "secret-token" not in captured.out
 
 
 def test_logger_rejects_invalid_level() -> None:

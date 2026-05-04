@@ -40,8 +40,8 @@ class LiveStderr:
 
 
 def install_live_stderr(monkeypatch: Any) -> LiveStderr:
-    live_stderr = LiveStderr(sys.stderr)
-    monkeypatch.setattr(sys, "stderr", live_stderr)
+    live_stderr = LiveStderr(sys.stdout)
+    monkeypatch.setattr(sys, "stdout", live_stderr)
     return live_stderr
 
 

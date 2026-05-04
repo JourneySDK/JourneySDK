@@ -179,8 +179,8 @@ def test_resume_example_resumes_from_saved_state(
 
     assert state_file.exists()
     assert live_stderr.prompt_seen.is_set()
-    assert "Loaded support ticket ticket-001" in first_capture.err
-    assert INTERRUPT_PROMPT_PREFIX in first_capture.err
+    assert "Loaded support ticket ticket-001" in first_capture.out
+    assert INTERRUPT_PROMPT_PREFIX in first_capture.out
 
     report = journey.execute(resume_docs.resume_journey, state=state_file)
     second_capture = capsys.readouterr()
@@ -199,7 +199,7 @@ def test_resume_example_resumes_from_saved_state(
         "status": "waiting_for_resume",
     }
     assert report.case_reports[0].records[2].result is True
-    assert "The journey finished." in second_capture.err
+    assert "The journey finished." in second_capture.out
 
 
 def test_cloud_webhook_example_compiles_and_executes(

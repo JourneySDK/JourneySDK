@@ -1,4 +1,4 @@
-"""Tutorial examples for journey selection and JSON output."""
+"""Tutorial examples for journey selection and JSONL output."""
 
 from .selection_journeys import (
     invoice_reminder_journey,

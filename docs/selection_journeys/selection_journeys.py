@@ -1,4 +1,4 @@
-"""Tutorial journeys for discovery, --journey, and --json."""
+"""Tutorial journeys for discovery, --journey, and --output jsonl."""
 
 from __future__ import annotations
 

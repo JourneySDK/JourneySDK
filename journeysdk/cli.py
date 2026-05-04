@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import signal
 import sys
 import tempfile
@@ -50,6 +49,18 @@ _GRACEFUL_INTERRUPT_PHASES = {
     "pre-exit",
     "exit",
 }
+
+
+class _JourneyArgumentParser(argparse.ArgumentParser):
+    def _print_message(self, message: str, file: object | None = None) -> None:
+        del file
+        stripped = message.rstrip()
+        if not stripped:
+            return
+        if ": error:" in stripped:
+            _CLI_LOGGER.error("parser_error", stripped)
+            return
+        _CLI_LOGGER.info("parser_output", stripped)
 
 
 class _CliStepInterruptController:
@@ -465,11 +476,30 @@ def _emit_errors(errors: list[_CommandError]) -> None:
         location = error.file or "<selection>"
         if error.journey_name is not None:
             location = f"{location}:{error.journey_name}"
-        print(f"ERROR [{error.phase}] {location} ({error.error_type})")
-        print(f"What happened: {error.message}")
+        _CLI_LOGGER.error(
+            "command_error",
+            f"ERROR [{error.phase}] {location} ({error.error_type})",
+            phase=error.phase,
+            location=location,
+            error_type=error.error_type,
+            error_message=error.message,
+            hint=error.hint,
+        )
+        _CLI_LOGGER.error(
+            "command_error_message",
+            f"What happened: {error.message}",
+            phase=error.phase,
+            location=location,
+            error_type=error.error_type,
+        )
         if error.hint is not None:
-            print(f"Try this: {error.hint}")
-        print()
+            _CLI_LOGGER.error(
+                "command_error_hint",
+                f"Try this: {error.hint}",
+                phase=error.phase,
+                location=location,
+                error_type=error.error_type,
+            )
 
 
 def _discover_targets(
@@ -662,8 +692,9 @@ def _step_stop_status(paused: _PausedExecution, *, verb: str) -> str:
 
 
 def _read_pause_choice(prompt: str) -> str:
+    _CLI_LOGGER.info("pause_prompt", prompt)
     if not sys.stdin.isatty():
-        return input(prompt).strip().lower()
+        return input("").strip().lower()
 
     try:
         import termios
@@ -672,9 +703,8 @@ def _read_pause_choice(prompt: str) -> str:
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
     except (ImportError, OSError, AttributeError):
-        return input(prompt).strip().lower()
+        return input("").strip().lower()
 
-    print(prompt, end="", flush=True)
     try:
         try:
             tty.setcbreak(fd)
@@ -682,16 +712,12 @@ def _read_pause_choice(prompt: str) -> str:
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     except KeyboardInterrupt:
-        print(flush=True)
         raise
 
     if choice == "\x03":
-        print(flush=True)
         raise KeyboardInterrupt()
     if choice == "":
-        print(flush=True)
         raise EOFError()
-    print(flush=True)
     return choice.strip().lower()
 
 
@@ -700,7 +726,10 @@ def _prompt_for_pause_action(paused: _PausedExecution) -> str:
         choice = _read_pause_choice(_paused_prompt(paused))
         if choice in {"c", "r"}:
             return choice
-        print("Press 'c' to continue or 'r' to retry.", flush=True)
+        _CLI_LOGGER.info(
+            "pause_invalid_choice",
+            "Press 'c' to continue or 'r' to retry.",
+        )
 
 
 def _paused_failure_error(
@@ -1182,33 +1211,55 @@ def _emit_plan_output(
     compiled: list[_CompiledJourney],
     errors: list[_CommandError],
 ) -> None:
-    print("Plan")
+    _CLI_LOGGER.info("plan_start", "Plan")
 
-    for index, item in enumerate(compiled):
-        if index > 0:
-            print()
+    for item in compiled:
         display = _display_path(root, item.file_path)
-        print(f"Journey {display}:{item.journey_name}")
-        print(
-            f"journey_id={item.plan.journey_id} function_ref={item.plan.function_ref}"
+        _CLI_LOGGER.info(
+            "plan_journey",
+            f"Journey {display}:{item.journey_name}",
+            file=str(item.file_path),
+            display_file=display,
+            journey=item.journey_name,
+            journey_id=item.plan.journey_id,
+            function_ref=item.plan.function_ref,
+            cases=len(item.plan.case_plans),
+        )
+        _CLI_LOGGER.info(
+            "plan_metadata",
+            f"journey_id={item.plan.journey_id} function_ref={item.plan.function_ref}",
+            file=str(item.file_path),
+            display_file=display,
+            journey=item.journey_name,
+            journey_id=item.plan.journey_id,
+            function_ref=item.plan.function_ref,
         )
         for case in item.plan.case_plans:
-            print(
+            labels = _labels_for_case(case)
+            _CLI_LOGGER.info(
+                "plan_case",
                 f"- {case.case_id} branch_env={case.branch_env} "
-                f"labels={_labels_for_case(case)}"
+                f"labels={labels}",
+                file=str(item.file_path),
+                display_file=display,
+                journey=item.journey_name,
+                case=case.case_id,
+                branch_env=case.branch_env,
+                labels=labels,
             )
-
-    if compiled and errors:
-        print()
 
     _emit_errors(errors)
 
     total_cases = sum(len(item.plan.case_plans) for item in compiled)
-    print(
+    _CLI_LOGGER.info(
+        "plan_summary",
         "Summary: "
         f"{_count(len(compiled), 'journey')} planned, "
         f"{_count(total_cases, 'case')} planned, "
-        f"{len(errors)} failed"
+        f"{len(errors)} failed",
+        journeys=len(compiled),
+        cases=total_cases,
+        failures=len(errors),
     )
 
 
@@ -1217,66 +1268,77 @@ def _emit_execute_output(
     executed: list[_ExecutedJourney],
     errors: list[_CommandError],
     *,
-    as_json: bool,
+    result_errors: list[_CommandError] | None = None,
     failure_count: int | None = None,
 ) -> None:
-    if as_json:
-        payload = {
-            "journeys": [
-                {
-                    "file": str(item.file_path),
-                    "journey_name": item.journey_name,
-                    "report": asdict(item.report),
-                }
-                for item in executed
-            ],
-            "errors": [asdict(error) for error in errors],
-        }
-        print(json.dumps(payload, default=str, indent=2))
-        return
-
     _emit_errors(errors)
 
     total_cases = sum(len(item.report.case_reports) for item in executed)
     failed = len(errors) if failure_count is None else failure_count
-    print(
+    payload_errors = errors if result_errors is None else result_errors
+    payload = {
+        "journeys": [
+            {
+                "file": str(item.file_path),
+                "journey_name": item.journey_name,
+                "report": asdict(item.report),
+            }
+            for item in executed
+        ],
+        "errors": [asdict(error) for error in payload_errors],
+    }
+    _CLI_LOGGER.info(
+        "execute_summary",
         "Summary: "
         f"{_count(len(executed), 'journey')} executed, "
         f"{_count(total_cases, 'case')} executed, "
-        f"{failed} failed"
+        f"{failed} failed",
+        journeys=len(executed),
+        cases=total_cases,
+        failures=failed,
+    )
+    _CLI_LOGGER.info(
+        "execute_result",
+        "execution result",
+        root=str(root),
+        journeys=len(executed),
+        errors=len(payload_errors),
+        payload=payload,
     )
 
 
-def _emit_interrupt_output(*, state: str | None, as_json: bool) -> None:
+def _emit_execution_section() -> None:
+    _CLI_LOGGER.info("execution_section", "Execution")
+
+
+def _emit_interrupt_output(*, state: str | None) -> None:
     _CLI_LOGGER.warning(
         "execution_interrupted",
         "journey execution was interrupted",
         state=state,
     )
-    if as_json:
-        print(
-            json.dumps(
-                {
-                    "interrupted": True,
-                    "state": state,
-                    "message": "Journey execution was interrupted before it finished.",
-                    "hint": (
-                        f"Run the same command again with --state {state} to resume."
-                        if state is not None
-                        else "Run the same command again to start over."
-                    ),
-                },
-                indent=2,
-            )
-        )
-        return
-
-    print("Interrupted.")
-    print("What happened: Journey execution was interrupted before it finished.")
+    hint = (
+        f"Run the same command again with --state {state} to resume."
+        if state is not None
+        else "Run the same command again to start over."
+    )
+    _CLI_LOGGER.warning(
+        "interrupt_summary",
+        "Interrupted.",
+        state=state,
+        interrupted=True,
+        hint=hint,
+    )
+    _CLI_LOGGER.warning(
+        "interrupt_message",
+        "What happened: Journey execution was interrupted before it finished.",
+        state=state,
+        interrupted=True,
+        hint=hint,
+    )
     if state is None:
-        print("Try this: Run the same command again to start over.")
         return
-    print(f"Try this: Run the same command again with --state {state} to resume.")
+    _CLI_LOGGER.warning("interrupt_hint", f"Try this: {hint}", state=state)
 
 
 def _cmd_execute(args: argparse.Namespace) -> int:
@@ -1284,23 +1346,15 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         root, targets, errors = _discover_targets(args)
     except JourneySelectionError as exc:
         error = _error_from_exception(exc, phase="plan")
-        if not args.json:
-            _emit_plan_output(Path.cwd().resolve(), [], [error])
-            print()
-            print("Execution")
-            _emit_execute_output(
-                Path.cwd().resolve(),
-                [],
-                [],
-                as_json=False,
-                failure_count=1,
-            )
-            return 1
+        root = Path.cwd().resolve()
+        _emit_plan_output(root, [], [error])
+        _emit_execution_section()
         _emit_execute_output(
-            Path.cwd().resolve(),
+            root,
             [],
-            [error],
-            as_json=args.json,
+            [],
+            result_errors=[error],
+            failure_count=1,
         )
         return 1
 
@@ -1309,19 +1363,15 @@ def _cmd_execute(args: argparse.Namespace) -> int:
 
     if state_errors := _state_selection_errors(args, targets):
         errors.extend(state_errors)
-        if not args.json:
-            _emit_plan_output(root, [], errors)
-            print()
-            print("Execution")
-            _emit_execute_output(
-                root,
-                [],
-                [],
-                as_json=False,
-                failure_count=len(errors),
-            )
-            return 1
-        _emit_execute_output(root, [], errors, as_json=True)
+        _emit_plan_output(root, [], errors)
+        _emit_execution_section()
+        _emit_execute_output(
+            root,
+            [],
+            [],
+            result_errors=errors,
+            failure_count=len(errors),
+        )
         return 1
 
     compiled, compile_errors = _compile_targets(
@@ -1330,10 +1380,8 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     )
     errors.extend(compile_errors)
 
-    if not args.json:
-        _emit_plan_output(root, compiled, errors)
-        print()
-        print("Execution")
+    _emit_plan_output(root, compiled, errors)
+    _emit_execution_section()
 
     try:
         with _graceful_cli_interrupts(args.state is not None):
@@ -1375,25 +1423,22 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     )
                 executed.extend(run_results)
     except KeyboardInterrupt:
-        _emit_interrupt_output(state=args.state, as_json=args.json)
+        _emit_interrupt_output(state=args.state)
         return 130
 
     all_errors = [*errors, *run_errors]
-    if args.json:
-        _emit_execute_output(root, executed, all_errors, as_json=True)
-    else:
-        _emit_execute_output(
-            root,
-            executed,
-            run_errors,
-            as_json=False,
-            failure_count=len(all_errors),
-        )
+    _emit_execute_output(
+        root,
+        executed,
+        run_errors,
+        result_errors=all_errors,
+        failure_count=len(all_errors),
+    )
     return 0 if not all_errors else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _JourneyArgumentParser(
         prog="journey",
         description="execute decorated journey workflows",
     )
@@ -1427,7 +1472,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable prompt-memory writes while still allowing reads for this run",
     )
-    parser.add_argument("--json", action="store_true", help="Emit execution JSON")
+    parser.add_argument(
+        "--output",
+        choices=("jsonl",),
+        default=None,
+        help="Set Journey output format; omit for default structured logs",
+    )
     parser.add_argument(
         "--log-level",
         choices=("debug", "info", "warning", "error", "off"),
@@ -1443,14 +1493,34 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _extract_option_value(argv: list[str], option: str) -> str | None:
+    prefix = f"{option}="
+    for index, value in enumerate(argv):
+        if value.startswith(prefix):
+            return value[len(prefix) :]
+        if value == option and index + 1 < len(argv):
+            return argv[index + 1]
+    return None
+
+
+def _preconfigure_logging(argv: list[str]) -> None:
+    level = _extract_option_value(argv, "--log-level") or "info"
+    output = _extract_option_value(argv, "--output")
+    output_format = "jsonl" if output == "jsonl" else "text"
+    try:
+        configure_logging(level, output_format=output_format)  # type: ignore[arg-type]
+    except ValueError:
+        configure_logging("info", output_format=output_format)
+
+
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = sys.argv[1:] if argv is None else argv
+    _preconfigure_logging(raw_argv)
     parser = build_parser()
     args = parser.parse_args(argv)
-    configure_logging(args.log_level)
+    configure_logging(args.log_level, output_format=args.output or "text")
     if args.interactive and getattr(args, "develop_step", None) is None:
         parser.error("--interactive requires --develop-step")
-    if getattr(args, "develop_step", None) is not None and args.json:
-        parser.error("--develop-step cannot be used with --json")
     return _cmd_execute(args)
 
 

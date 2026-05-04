@@ -9,6 +9,14 @@ from types import SimpleNamespace
 import pytest
 
 from journeysdk.cli import _read_pause_choice, build_parser, main
+from journeysdk.logger import configure_logging
+
+
+@pytest.fixture(autouse=True)
+def _reset_logging() -> None:
+    configure_logging("info")
+    yield
+    configure_logging("info")
 
 
 def _write(path: Path, content: str) -> None:
@@ -33,6 +41,19 @@ def _event_lines(path: Path) -> list[str]:
     if not path.exists():
         return []
     return path.read_text(encoding="utf-8").splitlines()
+
+
+def _jsonl_events(output: str) -> list[dict[str, object]]:
+    return [json.loads(line) for line in output.splitlines() if line.strip()]
+
+
+def _execute_result_payload(output: str) -> dict[str, object]:
+    events = _jsonl_events(output)
+    result_events = [event for event in events if event["event"] == "execute_result"]
+    assert len(result_events) == 1
+    payload = result_events[0]["payload"]
+    assert isinstance(payload, dict)
+    return payload
 
 
 def _write_develop_lifecycle_flow(
@@ -112,7 +133,8 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "target",
             "--state",
             "run.state",
-            "--json",
+            "--output",
+            "jsonl",
             "--log-level",
             "debug",
             "--fail-fast",
@@ -124,7 +146,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.journey == "alpha"
     assert execute_args.step == "target"
     assert execute_args.state == "run.state"
-    assert execute_args.json is True
+    assert execute_args.output == "jsonl"
     assert execute_args.log_level == "debug"
     assert execute_args.fail_fast is True
     assert execute_args.no_memory is True
@@ -157,6 +179,8 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
         parser.parse_args(["--case-id", "case_1"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--step", "target", "--develop-step", "target"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--json"])
 
 
 def test_execute_develop_step_rejects_json_mode(
@@ -167,7 +191,8 @@ def test_execute_develop_step_rejects_json_mode(
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "--develop-step cannot be used with --json" in captured.err
+    assert "unrecognized arguments: --json" in captured.out
+    assert captured.err == ""
 
 
 def test_execute_forwards_no_memory_update_flag(
@@ -221,7 +246,44 @@ def test_execute_interactive_requires_develop_step(
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "--interactive requires --develop-step" in captured.err
+    assert "--interactive requires --develop-step" in captured.out
+    assert captured.err == ""
+
+
+def test_execute_output_jsonl_emits_parseable_log_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+
+        def finish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(finish)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    exit_code = main(["--file", "flow.py", "--output", "jsonl"])
+
+    captured = capsys.readouterr()
+    events = _jsonl_events(captured.out)
+    assert exit_code == 0
+    assert captured.err == ""
+    assert any(event["event"] == "plan_start" for event in events)
+    assert any(event["event"] == "step_success" for event in events)
+    result_events = [event for event in events if event["event"] == "execute_result"]
+    assert len(result_events) == 1
+    payload = result_events[0]["payload"]
+    assert isinstance(payload, dict)
+    assert payload["journeys"][0]["journey_name"] == "flow"
+    assert payload["errors"] == []
 
 
 def test_pause_choice_reads_one_key_from_tty(
@@ -263,7 +325,8 @@ def test_pause_choice_reads_one_key_from_tty(
     assert _read_pause_choice("Press c to continue or r to retry: ") == "r"
 
     output = capsys.readouterr().out
-    assert output == "Press c to continue or r to retry: \n"
+    assert "component=cli event=pause_prompt" in output
+    assert "Press c to continue or r to retry: " in output
     assert ("read", 1) in calls
     assert ("set", 123, 7) in calls
 
@@ -302,9 +365,9 @@ def test_execute_discovers_decorated_journeys_recursively_and_via_aliases(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--json"])
+    exit_code = main(["--output", "jsonl"])
 
-    payload = json.loads(capsys.readouterr().out)
+    payload = _execute_result_payload(capsys.readouterr().out)
     assert exit_code == 0
     assert sorted(item["journey_name"] for item in payload["journeys"]) == ["alpha", "beta"]
     assert all("plan" not in item for item in payload["journeys"])
@@ -348,7 +411,7 @@ def test_execute_prints_all_selected_plans_before_any_journey_runs(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     _assert_ordered(
         output,
@@ -386,11 +449,11 @@ def test_execute_log_level_off_suppresses_diagnostics(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in captured.out
+    assert captured.out == ""
     assert captured.err == ""
 
 
-def test_execute_json_keeps_stdout_parseable_and_logs_to_stderr(
+def test_execute_output_jsonl_keeps_stdout_parseable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -410,14 +473,14 @@ def test_execute_json_keeps_stdout_parseable_and_logs_to_stderr(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--json"])
+    exit_code = main(["--file", "flow.py", "--output", "jsonl"])
 
     captured = capsys.readouterr()
-    payload = json.loads(captured.out)
+    payload = _execute_result_payload(captured.out)
     assert exit_code == 0
     assert payload["errors"] == []
-    assert "[journey]" in captured.err
-    assert "component=executor event=step_success" in captured.err
+    assert captured.err == ""
+    assert any(event["event"] == "step_success" for event in _jsonl_events(captured.out))
 
 
 def test_execute_file_and_journey_filters_limit_selection(
@@ -451,9 +514,11 @@ def test_execute_file_and_journey_filters_limit_selection(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "pkg/first.py", "--journey", "alpha", "--json"])
+    exit_code = main(
+        ["--file", "pkg/first.py", "--journey", "alpha", "--output", "jsonl"]
+    )
 
-    payload = json.loads(capsys.readouterr().out)
+    payload = _execute_result_payload(capsys.readouterr().out)
     assert exit_code == 0
     assert [item["journey_name"] for item in payload["journeys"]] == ["alpha"]
     assert payload["journeys"][0]["file"].endswith("pkg/first.py")
@@ -556,9 +621,9 @@ def test_execute_step_runs_only_the_unique_matching_journey(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--step", "target", "--json"])
+    exit_code = main(["--step", "target", "--output", "jsonl"])
 
-    payload = json.loads(capsys.readouterr().out)
+    payload = _execute_result_payload(capsys.readouterr().out)
     assert exit_code == 0
     assert [item["journey_name"] for item in payload["journeys"]] == ["alpha"]
     assert payload["journeys"][0]["report"]["case_reports"][0]["stopped_at_label"] == "target"
@@ -592,7 +657,7 @@ def test_execute_step_errors_when_label_is_ambiguous_across_journeys(
     assert "case_1" in output
 
 
-def test_execute_json_errors_include_hint_for_missing_step(
+def test_execute_output_jsonl_errors_include_hint_for_missing_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -611,9 +676,9 @@ def test_execute_json_errors_include_hint_for_missing_step(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "alpha.py", "--step", "missing", "--json"])
+    exit_code = main(["--file", "alpha.py", "--step", "missing", "--output", "jsonl"])
 
-    payload = json.loads(capsys.readouterr().out)
+    payload = _execute_result_payload(capsys.readouterr().out)
     assert exit_code == 1
     assert payload["errors"][0]["error_type"] == "StepNotFoundError"
     assert payload["errors"][0]["message"] == (
@@ -655,7 +720,7 @@ def test_execute_streams_live_case_progress_for_all_branches(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "Plan" in output
     assert "- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare', 'finish_fast']" in output
@@ -722,7 +787,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "- case_1 branch_env={'bg_1': 'branch_1'} labels=['prepare', 'finish_fast']" in output
     assert "- case_2 branch_env={'bg_1': 'branch_2'} labels=['prepare', 'finish_manual']" in output
@@ -788,7 +853,7 @@ def test_execute_develop_step_steps_forward_with_continue(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     _assert_ordered(
         output,
@@ -835,7 +900,7 @@ def test_execute_develop_step_exits_after_target_without_prompt(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "  step prepare attempt=1 ok duration=" in log_output
     assert "  step publish attempt=1 ok duration=" in log_output
@@ -890,7 +955,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     )
     first_capture = capsys.readouterr()
     first_output = first_capture.out
-    first_logs = first_capture.err
+    first_logs = first_capture.out
 
     assert first_exit == 0
     assert "Development mode stopped after step publish attempt=1 ok." in first_logs
@@ -899,7 +964,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     second_exit = main(
         ["--file", "flow.py", "--develop-step", "publish", "--state", str(state_file)]
     )
-    second_logs = capsys.readouterr().err
+    second_logs = capsys.readouterr().out
 
     assert second_exit == 0
     assert "Development mode stopped after step publish attempt=2 ok." in second_logs
@@ -908,7 +973,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     third_exit = main(
         ["--file", "flow.py", "--develop-step", "cleanup", "--state", str(state_file)]
     )
-    third_logs = capsys.readouterr().err
+    third_logs = capsys.readouterr().out
 
     assert third_exit == 0
     assert "Development mode stopped after step cleanup attempt=1 ok." in third_logs
@@ -954,7 +1019,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     )
     first_capture = capsys.readouterr()
     first_output = first_capture.out
-    first_logs = first_capture.err
+    first_logs = first_capture.out
 
     assert first_exit == 1
     assert "Development mode stopped after step poll attempt=1 failed (pending)." in first_logs
@@ -964,7 +1029,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     second_exit = main(
         ["--file", "flow.py", "--develop-step", "poll", "--state", str(state_file)]
     )
-    second_logs = capsys.readouterr().err
+    second_logs = capsys.readouterr().out
 
     assert second_exit == 0
     assert "Development mode stopped after step poll attempt=2 ok." in second_logs
@@ -1232,7 +1297,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
     )
     second_capture = capsys.readouterr()
     second_output = second_capture.out
-    second_logs = second_capture.err
+    second_logs = second_capture.out
 
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_logs
@@ -1292,7 +1357,7 @@ def test_execute_develop_step_retry_same_step_after_failed_pause(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "  step poll attempt=1 failed duration=" in log_output
     assert "Development mode paused after step poll attempt=1 failed (pending)." in output
@@ -1363,7 +1428,7 @@ def test_execute_develop_step_retry_reloads_changed_step(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "Reloaded and recompiled flow.py:flow after retry." in log_output
     assert events_file.read_text(encoding="utf-8").splitlines() == ["old", "new"]
@@ -1454,7 +1519,7 @@ def test_execute_develop_step_continue_reloads_later_step_without_rerunning_prio
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "Reloaded and recompiled flow.py:flow after continue." in log_output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
@@ -1539,7 +1604,7 @@ def test_execute_develop_step_restarts_when_already_run_step_changes(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "Already-run journey code changed before the paused step; restarting case_1" in log_output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
@@ -1640,7 +1705,7 @@ def test_execute_develop_step_accepts_future_plan_changes_after_continue(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "restarting case_1" not in log_output
     assert "Development mode paused after step extra attempt=1 ok." in output
@@ -1767,7 +1832,7 @@ def test_execute_develop_step_state_resume_reloads_future_change(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert second_exit == 0
     assert "Reloaded and recompiled flow.py:flow after continue." in log_output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
@@ -1845,7 +1910,7 @@ def test_execute_streams_retry_events_in_text_mode(
 
     captured = capsys.readouterr()
     output = captured.out
-    log_output = captured.err
+    log_output = captured.out
     assert exit_code == 0
     assert "  step poll attempt=1 start" in log_output
     assert "  step poll attempt=1 retry duration=" in log_output
@@ -2076,10 +2141,11 @@ def test_execute_state_interrupts_and_resumes_via_cli(
             "flow.py",
             "--state",
             str(state_file),
-            "--json",
+            "--output",
+            "jsonl",
         ]
     )
-    payload = json.loads(capsys.readouterr().out)
+    payload = _execute_result_payload(capsys.readouterr().out)
 
     assert second_exit == 0
     assert [item["journey_name"] for item in payload["journeys"]] == ["flow"]
@@ -2157,8 +2223,8 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
 
     assert first_exit == 130
     assert "Interrupted." in first_capture.out
-    assert "step publish attempt=1 ok duration=" in first_capture.err
-    assert "step publish attempt=1 interrupted" not in first_capture.err
+    assert "step publish attempt=1 ok duration=" in first_capture.out
+    assert "step publish attempt=1 interrupted" not in first_capture.out
     assert _event_lines(events_file) == [
         "publish",
         "after_signal",
@@ -2171,8 +2237,8 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
     second_capture = capsys.readouterr()
 
     assert second_exit == 0
-    assert "step publish attempt=2 start" not in second_capture.err
-    assert "step finish attempt=1 ok duration=" in second_capture.err
+    assert "step publish attempt=2 start" not in second_capture.out
+    assert "step finish attempt=1 ok duration=" in second_capture.out
     events = _event_lines(events_file)
     assert events[:5] == [
         "publish",
@@ -2244,7 +2310,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
     first_capture = capsys.readouterr()
 
     assert first_exit == 130
-    assert "step publish attempt=1 interrupted duration=" in first_capture.err
+    assert "step publish attempt=1 interrupted duration=" in first_capture.out
     first_events = _event_lines(events_file)
     runtime_seed = first_events[0].rsplit("_", 1)[1]
     assert first_events == [
@@ -2256,7 +2322,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
     second_capture = capsys.readouterr()
 
     assert second_exit == 0
-    assert "step publish attempt=2 ok duration=" in second_capture.err
+    assert "step publish attempt=2 ok duration=" in second_capture.out
     assert _event_lines(events_file) == [
         f"publish_{runtime_seed}",
         "after_first_signal",
@@ -2298,14 +2364,14 @@ def test_execute_state_resume_streams_case_resume_in_text_mode(
 
     first_exit = main(["--file", "flow.py", "--state", str(state_file)])
     first_capture = capsys.readouterr()
-    first_logs = first_capture.err
+    first_logs = first_capture.out
 
     assert first_exit == 130
     assert "  step maybe_interrupt attempt=1 interrupted duration=" in first_logs
 
     second_exit = main(["--file", "flow.py", "--state", str(state_file)])
     second_capture = capsys.readouterr()
-    second_logs = second_capture.err
+    second_logs = second_capture.out
 
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_logs
@@ -2372,7 +2438,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
 
     first_exit = main(["--file", "flow.py", "--state", str(state_file)])
     first_capture = capsys.readouterr()
-    first_logs = first_capture.err
+    first_logs = first_capture.out
 
     assert first_exit == 130
     assert "  step poll attempt=1 interrupted duration=" in first_logs
@@ -2380,7 +2446,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
 
     second_exit = main(["--file", "flow.py", "--state", str(state_file)])
     second_capture = capsys.readouterr()
-    second_logs = second_capture.err
+    second_logs = second_capture.out
 
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_logs

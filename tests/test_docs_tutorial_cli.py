@@ -26,6 +26,20 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _jsonl_events(output: str) -> list[dict[str, object]]:
+    return [json.loads(line) for line in output.splitlines() if line.strip()]
+
+
+def _execute_result_payload(output: str) -> dict[str, object]:
+    result_events = [
+        event for event in _jsonl_events(output) if event["event"] == "execute_result"
+    ]
+    assert len(result_events) == 1
+    payload = result_events[0]["payload"]
+    assert isinstance(payload, dict)
+    return payload
+
+
 def test_first_journey_readme_commands(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -35,7 +49,7 @@ def test_first_journey_readme_commands(
     execute_exit = main(["--file", "docs/first_journey/first_journey.py"])
     execute_capture = capsys.readouterr()
     execute_output = execute_capture.out
-    execute_logs = execute_capture.err
+    execute_logs = execute_capture.out
     assert execute_exit == 0
     assert "Plan" in execute_output
     assert "Summary: 1 journey planned, 1 case planned, 0 failed" in execute_output
@@ -45,7 +59,7 @@ def test_first_journey_readme_commands(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
 
-def test_selection_readme_commands_use_journey_and_json(
+def test_selection_readme_commands_use_journey_and_jsonl(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
@@ -57,10 +71,11 @@ def test_selection_readme_commands_use_journey_and_json(
             "docs/selection_journeys/selection_journeys.py",
             "--journey",
             "welcome_email_journey",
-            "--json",
+            "--output",
+            "jsonl",
         ]
     )
-    payload = json.loads(capsys.readouterr().out)
+    payload = _execute_result_payload(capsys.readouterr().out)
 
     assert exit_code == 0
     assert [item["journey_name"] for item in payload["journeys"]] == ["welcome_email_journey"]
@@ -72,10 +87,11 @@ def test_selection_readme_commands_use_journey_and_json(
             "docs/selection_journeys/selection_journeys.py",
             "--journey",
             "invoice_reminder_journey",
-            "--json",
+            "--output",
+            "jsonl",
         ]
     )
-    payload = json.loads(capsys.readouterr().out)
+    payload = _execute_result_payload(capsys.readouterr().out)
 
     assert exit_code == 0
     assert [item["journey_name"] for item in payload["journeys"]] == ["invoice_reminder_journey"]
@@ -99,7 +115,7 @@ def test_branching_readme_target_command_reports_replay_anchor(
     )
     capture = capsys.readouterr()
     output = capture.out
-    logs = capture.err
+    logs = capture.out
 
     assert exit_code == 0
     assert "stopped_at=assert_manual_review_path replay_anchor=classify_signup_request" in logs
@@ -122,7 +138,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
     )
     capture = capsys.readouterr()
     output = capture.out
-    logs = capture.err
+    logs = capture.out
 
     assert exit_code == 0
     assert "Development mode stopped after step assert_manual_review_path attempt=1 ok." in logs
@@ -143,7 +159,7 @@ def test_retry_readme_commands_show_retry_behavior(
             "retry_current_step_journey",
         ]
     )
-    output = capsys.readouterr().err
+    output = capsys.readouterr().out
     assert exit_code == 0
     assert "step wait_for_same_step attempt=1 retry" in output
     assert "step wait_for_same_step attempt=2 ok duration=" in output
@@ -156,7 +172,7 @@ def test_retry_readme_commands_show_retry_behavior(
             "retry_from_step_result_journey",
         ]
     )
-    output = capsys.readouterr().err
+    output = capsys.readouterr().out
     assert exit_code == 0
     assert output.count("step issue_report_request attempt=1 start") == 1
     assert output.count("step issue_report_request attempt=2 start") == 1
@@ -169,7 +185,7 @@ def test_retry_readme_commands_show_retry_behavior(
             "retry_from_step_anchor_journey",
         ]
     )
-    output = capsys.readouterr().err
+    output = capsys.readouterr().out
     assert exit_code == 0
     assert output.count("step refresh_status_cache attempt=1 start") == 1
     assert output.count("step refresh_status_cache attempt=2 start") == 1
@@ -208,7 +224,7 @@ def test_resume_readme_commands_interrupt_then_resume(
 
     first_capture = capsys.readouterr()
     first_output = first_capture.out
-    first_error = first_capture.err
+    first_error = first_capture.out
 
     assert first_exit == 130
     assert live_stderr.prompt_seen.is_set()
@@ -229,7 +245,7 @@ def test_resume_readme_commands_interrupt_then_resume(
     )
     second_capture = capsys.readouterr()
     second_output = second_capture.out
-    second_error = second_capture.err
+    second_error = second_capture.out
 
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_error
@@ -257,7 +273,7 @@ def test_cloud_webhook_readme_commands(
         )
         execute_capture = capsys.readouterr()
         execute_output = execute_capture.out
-        execute_logs = execute_capture.err
+        execute_logs = execute_capture.out
 
     assert execute_exit == 0
     assert "Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in execute_output
@@ -312,7 +328,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
 
         first_capture = capsys.readouterr()
         first_output = first_capture.out
-        first_error = first_capture.err
+        first_error = first_capture.out
 
         assert first_exit == 130
         assert live_stderr.prompt_seen.is_set()
@@ -332,7 +348,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         )
         second_capture = capsys.readouterr()
         second_output = second_capture.out
-        second_error = second_capture.err
+        second_error = second_capture.out
     finally:
         playwright_resume_example.reset_demo_state(state_path=state_file)
 

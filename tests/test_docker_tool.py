@@ -333,7 +333,7 @@ def test_run_docker_executes_compose_config_and_up(
             ],
         ),
     ]
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
     assert "component=docker event=compose_start" in log_output
     assert "component=docker event=compose_success" in log_output
 
@@ -362,7 +362,7 @@ def test_docker_run_cli_logs_subprocess_lifecycle(
     finally:
         configure_logging("info")
 
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
     assert "component=docker event=subprocess_start" in log_output
     assert "component=docker event=subprocess_success" in log_output
 

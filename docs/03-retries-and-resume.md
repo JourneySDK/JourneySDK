@@ -86,7 +86,7 @@ def retry_with_external_state() -> None:
     step(wait_until_ready, context, retry=1, retry_delay=0, retry_from=anchor)
 ```
 
-Journey stores step results before the replay boundary and reuses them on
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey stores step results before the replay boundary and reuses them on" ...
 retries and resume, so the same external-state logic works for step-anchor
 rewinds and `--state` restores.
 
@@ -97,22 +97,22 @@ uv run journey --file docs/retry_journey/retry_journey.py --journey retry_curren
 ```
 
 ```console
-Plan
-Journey docs/retry_journey/retry_journey.py:retry_current_step_journey
-journey_id=retry_current_step_journey function_ref=...
-- case_1 branch_env={} labels=['prepare_same_step_demo', 'wait_for_same_step']
-Summary: 1 journey planned, 1 case planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/retry_journey/retry_journey.py:retry_current_step_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=retry_current_step_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['prepare_same_step_demo', 'wait_for_same_step']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 1 case planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step prepare_same_step_demo attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step prepare_same_step_demo attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: still waiting for the same-step retry demo"
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=2 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_same_step attempt=2 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=2 duration=..."
-Summary: 1 journey executed, 1 case executed, 0 failed
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=step_start message="  step prepare_same_step_demo attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step prepare_same_step_demo attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_start message="  step wait_for_same_step attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_retry message="  step wait_for_same_step attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: still waiting for the same-step retry demo"
+[journey] time=... level=INFO component=executor event=step_start message="  step wait_for_same_step attempt=2 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step wait_for_same_step attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=2 duration=..."
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
 ### Retry from an Earlier Step Result
@@ -122,25 +122,25 @@ uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_s
 ```
 
 ```console
-Plan
-Journey docs/retry_journey/retry_journey.py:retry_from_step_result_journey
-journey_id=retry_from_step_result_journey function_ref=...
-- case_1 branch_env={} labels=['issue_report_request', 'wait_for_report', 'assert_report_ready']
-Summary: 1 journey planned, 1 case planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/retry_journey/retry_journey.py:retry_from_step_result_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=retry_from_step_result_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['issue_report_request', 'wait_for_report', 'assert_report_ready']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 1 case planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=1 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: report not ready yet"
-[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=2 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step issue_report_request attempt=2 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=2 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_report attempt=2 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step assert_report_ready attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=3 duration=..."
-Summary: 1 journey executed, 1 case executed, 0 failed
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=step_start message="  step issue_report_request attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step issue_report_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_start message="  step wait_for_report attempt=1 start"
+[journey] time=... level=INFO component=executor event=step_retry message="  step wait_for_report attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: report not ready yet"
+[journey] time=... level=INFO component=executor event=step_start message="  step issue_report_request attempt=2 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step issue_report_request attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_start message="  step wait_for_report attempt=2 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step wait_for_report attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_success message="  step assert_report_ready attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=3 duration=..."
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
 ### Retry from an Earlier Setup Step
@@ -150,23 +150,23 @@ uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_s
 ```
 
 ```console
-Plan
-Journey docs/retry_journey/retry_journey.py:retry_from_step_anchor_journey
-journey_id=retry_from_step_anchor_journey function_ref=...
-- case_1 branch_env={} labels=['load_status_request', 'refresh_status_cache', 'wait_for_anchor_retry', 'assert_anchor_retry_ready']
-Summary: 1 journey planned, 1 case planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/retry_journey/retry_journey.py:retry_from_step_anchor_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=retry_from_step_anchor_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['load_status_request', 'refresh_status_cache', 'wait_for_anchor_retry', 'assert_anchor_retry_ready']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 1 case planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step load_status_request attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_anchor_retry attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: step-anchor retry demo is still waiting"
-[journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=2 start"
-[journey] time=... level=INFO component=executor event=execution_log message="  step refresh_status_cache attempt=2 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_anchor_retry attempt=2 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step assert_anchor_retry_ready attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=4 duration=..."
-Summary: 1 journey executed, 1 case executed, 0 failed
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=step_success message="  step load_status_request attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_success message="  step refresh_status_cache attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_retry message="  step wait_for_anchor_retry attempt=1 retry duration=... delay=0.000s remaining=0 error=RuntimeError: step-anchor retry demo is still waiting"
+[journey] time=... level=INFO component=executor event=step_start message="  step refresh_status_cache attempt=2 start"
+[journey] time=... level=INFO component=executor event=step_success message="  step refresh_status_cache attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_success message="  step wait_for_anchor_retry attempt=2 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_success message="  step assert_anchor_retry_ready attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=4 duration=..."
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
 ## Resume an Interrupted Run with `--state`
@@ -223,27 +223,27 @@ uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey
 Press `Ctrl-C` once when the tutorial note tells you to. The command stops after the active step completes; press it a
 second time only if you want to force an immediate dirty-step interruption.
 
-Expected stdout:
+Expected structured stdout:
 
 ```console
-Plan
-Journey docs/resume_journey/resume_journey.py:resume_journey
-journey_id=resume_journey function_ref=...
-- case_1 branch_env={} labels=['load_support_ticket', 'wait_for_resume_signal', 'assert_resumed_ticket']
-Summary: 1 journey planned, 1 case planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/resume_journey/resume_journey.py:resume_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=resume_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['load_support_ticket', 'wait_for_resume_signal', 'assert_resumed_ticket']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 1 case planned, 0 failed" ...
 
-Execution
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 start branches={}"
-[journey] time=... level=INFO component=executor event=execution_log message="  step load_support_ticket attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 start"
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_start message="- case_1 start branches={}"
+[journey] time=... level=INFO component=executor event=step_success message="  step load_support_ticket attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=step_start message="  step wait_for_resume_signal attempt=1 start"
 [journey] time=... level=WARNING component=cli event=graceful_interrupt_requested message="interrupt requested; waiting for the active step to reach post-exit" ...
-[journey] time=... level=INFO component=executor event=execution_log message="  step wait_for_resume_signal attempt=1 ok duration=..."
-Interrupted.
-What happened: Journey execution was interrupted before it finished.
-Try this: Run the same command again with --state
+[journey] time=... level=INFO component=executor event=step_success message="  step wait_for_resume_signal attempt=1 ok duration=..."
+[journey] time=... level=WARNING component=cli event=interrupt_summary message=Interrupted. ...
+[journey] time=... level=WARNING component=cli event=interrupt_message message="What happened: Journey execution was interrupted before it finished." ...
+[journey] time=... level=WARNING component=cli event=interrupt_hint message="Try this: Run the same command again with --state ..." ...
 ```
 
-Expected stderr:
+Additional structured stdout:
 
 ```console
 [journey] time=... level=INFO component=tutorial event=tutorial_note message="Loaded support ticket ticket-001 and saved it as the result of load_support_ticket(). ..."
@@ -257,23 +257,23 @@ Expected stderr:
 uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
 ```
 
-Expected stdout:
+Expected structured stdout:
 
 ```console
-Plan
-Journey docs/resume_journey/resume_journey.py:resume_journey
-journey_id=resume_journey function_ref=...
-- case_1 branch_env={} labels=['load_support_ticket', 'wait_for_resume_signal', 'assert_resumed_ticket']
-Summary: 1 journey planned, 1 case planned, 0 failed
+[journey] time=... level=INFO component=cli event=plan_start message=Plan
+[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/resume_journey/resume_journey.py:resume_journey" ...
+[journey] time=... level=INFO component=cli event=plan_metadata message="journey_id=resume_journey function_ref=..." ...
+[journey] time=... level=INFO component=cli event=plan_case message="- case_1 branch_env={} labels=['load_support_ticket', 'wait_for_resume_signal', 'assert_resumed_ticket']" ...
+[journey] time=... level=INFO component=cli event=plan_summary message="Summary: 1 journey planned, 1 case planned, 0 failed" ...
 
-Execution
-- case_1 resume branches={}
-[journey] time=... level=INFO component=executor event=execution_log message="  step assert_resumed_ticket attempt=1 ok duration=..."
-[journey] time=... level=INFO component=executor event=execution_log message="- case_1 ok steps=3 duration=..."
-Summary: 1 journey executed, 1 case executed, 0 failed
+[journey] time=... level=INFO component=cli event=execution_section message=Execution
+[journey] time=... level=INFO component=executor event=case_resume message="- case_1 resume branches={}" ...
+[journey] time=... level=INFO component=executor event=step_success message="  step assert_resumed_ticket attempt=1 ok duration=..."
+[journey] time=... level=INFO component=executor event=case_complete message="- case_1 ok steps=3 duration=..."
+[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
 ```
 
-Expected stderr:
+Additional structured stdout:
 
 ```console
 [journey] time=... level=INFO component=tutorial event=tutorial_note message="wait_for_resume_signal() is starting with saved ticket ticket-001. ..."

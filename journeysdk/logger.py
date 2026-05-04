@@ -7,9 +7,10 @@ import json
 import re
 import sys
 from threading import Lock
-from typing import Literal, TextIO
+from typing import Any, Literal, TextIO
 
 JourneyLogLevel = Literal["debug", "info", "warning", "error", "off"]
+JourneyOutputFormat = Literal["text", "jsonl"]
 
 _LEVEL_VALUES: dict[JourneyLogLevel, int] = {
     "debug": 10,
@@ -25,6 +26,7 @@ _LEVEL_NAMES: dict[JourneyLogLevel, str] = {
     "error": "ERROR",
     "off": "OFF",
 }
+_OUTPUT_FORMATS: set[JourneyOutputFormat] = {"text", "jsonl"}
 _SAFE_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:/@+-]+$")
 _SENSITIVE_FIELD_FRAGMENTS = (
     "api_key",
@@ -37,6 +39,7 @@ _SENSITIVE_FIELD_FRAGMENTS = (
 
 _configured_level: JourneyLogLevel = "info"
 _configured_stream: TextIO | None = None
+_configured_output_format: JourneyOutputFormat = "text"
 _config_lock = Lock()
 
 
@@ -74,13 +77,27 @@ class JourneyLogger:
         _require_level(level)
         if not _should_emit(level):
             return
-        line = _format_log_line(
-            level=level,
-            component=self._component,
-            event=_normalize_event(event),
-            message=str(message),
-            fields=fields,
-        )
+        timestamp = _format_timestamp()
+        normalized_event = _normalize_event(event)
+        output_format = _active_output_format()
+        if output_format == "jsonl":
+            line = _format_json_line(
+                timestamp=timestamp,
+                level=level,
+                component=self._component,
+                event=normalized_event,
+                message=str(message),
+                fields=fields,
+            )
+        else:
+            line = _format_log_line(
+                timestamp=timestamp,
+                level=level,
+                component=self._component,
+                event=normalized_event,
+                message=str(message),
+                fields=fields,
+            )
         stream = _active_stream()
         print(line, file=stream, flush=True)
 
@@ -88,14 +105,17 @@ class JourneyLogger:
 def configure_logging(
     level: JourneyLogLevel = "info",
     stream: TextIO | None = None,
+    output_format: JourneyOutputFormat = "text",
 ) -> None:
-    """Configure process-wide Journey SDK diagnostic logging."""
+    """Configure process-wide Journey SDK output."""
 
     _require_level(level)
-    global _configured_level, _configured_stream
+    _require_output_format(output_format)
+    global _configured_level, _configured_stream, _configured_output_format
     with _config_lock:
         _configured_level = level
         _configured_stream = stream
+        _configured_output_format = output_format
 
 
 def get_logger(component: str) -> JourneyLogger:
@@ -106,6 +126,7 @@ def get_logger(component: str) -> JourneyLogger:
 
 def _format_log_line(
     *,
+    timestamp: str,
     level: JourneyLogLevel,
     component: str,
     event: str,
@@ -114,7 +135,7 @@ def _format_log_line(
 ) -> str:
     parts = [
         "[journey]",
-        f"time={_format_timestamp()}",
+        f"time={timestamp}",
         f"level={_LEVEL_NAMES[level]}",
         f"component={_format_value(component)}",
         f"event={_format_value(event)}",
@@ -123,6 +144,27 @@ def _format_log_line(
     for key in sorted(fields):
         parts.append(f"{key}={_format_field_value(key, fields[key])}")
     return " ".join(parts)
+
+
+def _format_json_line(
+    *,
+    timestamp: str,
+    level: JourneyLogLevel,
+    component: str,
+    event: str,
+    message: str,
+    fields: dict[str, object],
+) -> str:
+    record: dict[str, Any] = {
+        "time": timestamp,
+        "level": _LEVEL_NAMES[level],
+        "component": component,
+        "event": event,
+        "message": message,
+    }
+    for key in sorted(fields):
+        record[key] = _json_field_value(key, fields[key])
+    return json.dumps(record, ensure_ascii=True, default=str, separators=(",", ":"))
 
 
 def _format_timestamp() -> str:
@@ -137,6 +179,25 @@ def _format_field_value(key: str, value: object) -> str:
     if _is_sensitive_field(key):
         return _format_value("[redacted]")
     return _format_value(value)
+
+
+def _json_field_value(key: str, value: object) -> object:
+    if _is_sensitive_field(key):
+        return "[redacted]"
+    return _json_safe_value(value)
+
+
+def _json_safe_value(value: object) -> object:
+    if value is None or isinstance(value, str | bool | int | float):
+        return value
+    if isinstance(value, dict):
+        return {
+            str(key): _json_field_value(str(key), nested)
+            for key, nested in value.items()
+        }
+    if isinstance(value, list | tuple):
+        return [_json_safe_value(item) for item in value]
+    return str(value)
 
 
 def _format_value(value: object) -> str:
@@ -177,21 +238,34 @@ def _require_level(level: str) -> None:
         raise ValueError(f"Journey log level must be one of: {choices}.")
 
 
+def _require_output_format(output_format: str) -> None:
+    if output_format not in _OUTPUT_FORMATS:
+        choices = ", ".join(sorted(_OUTPUT_FORMATS))
+        raise ValueError(f"Journey output format must be one of: {choices}.")
+
+
 def _should_emit(level: JourneyLogLevel) -> bool:
     with _config_lock:
         configured = _configured_level
     return _LEVEL_VALUES[level] >= _LEVEL_VALUES[configured]
 
 
+def _active_output_format() -> JourneyOutputFormat:
+    with _config_lock:
+        output_format = _configured_output_format
+    return output_format
+
+
 def _active_stream() -> TextIO:
     with _config_lock:
         stream = _configured_stream
-    return stream if stream is not None else sys.stderr
+    return stream if stream is not None else sys.stdout
 
 
 __all__ = [
     "JourneyLogLevel",
     "JourneyLogger",
+    "JourneyOutputFormat",
     "configure_logging",
     "get_logger",
 ]

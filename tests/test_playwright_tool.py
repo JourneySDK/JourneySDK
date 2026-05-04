@@ -714,7 +714,7 @@ def test_open_page_opens_url_string_and_cleans_returned_page(
         "browser_close",
         "playwright_exit",
     ]
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
     assert "component=playwright event=open_page_start" in log_output
     assert "component=playwright event=open_page_success" in log_output
 
@@ -1092,7 +1092,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         'click on a "Sign in" button and get the title of the opened popup',
         model="anthropic:claude-sonnet-4-5",
     )
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
 
     assert result.output == "The opened popup title is Welcome popup."
     assert result.model == "anthropic:claude-sonnet-4-5"
@@ -1376,7 +1376,7 @@ def test_journey_playwright_prompt_finish_with_blocking_error_raises(
             model="openai:gpt-4.1-mini",
             memory="sign-in",
         )
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
 
     assert len(fake_model.calls) == 1
     prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
@@ -1416,7 +1416,7 @@ def test_journey_playwright_prompt_fail_action_raises_without_final_output(
             model="openai:gpt-4.1-mini",
             memory="sign-in",
         )
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
 
     assert len(fake_model.calls) == 1
     assert not fake_model.structured_calls
@@ -1523,7 +1523,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
     )
 
     result = page.prompt("say you need to fix a toilet", model="openai:gpt-4.1-mini")
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
 
     assert result.output == "Started the chat."
     assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
@@ -1800,7 +1800,7 @@ def test_journey_playwright_prompt_enforces_max_steps(
 
     with pytest.raises(RuntimeError, match="reached max_steps=1"):
         page.prompt("click sign in", model="openai:gpt-4.1-mini", max_steps=1)
-    log_output = capsys.readouterr().err
+    log_output = capsys.readouterr().out
 
     assert "step 1/1: AI will click selector '#sign-in'" in log_output
     assert "step 1/1: succeeded on page 0 'Login'" in log_output

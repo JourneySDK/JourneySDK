@@ -391,15 +391,16 @@ command can reuse that saved progress; delete the file when you want to start fr
 2. Run `journey`, which compiles the authored journey into linear cases and executes them.
 3. Use `--step` when you only want the case that reaches one target step label.
 
-The default human-readable CLI output prints the compiled plan and final summaries on stdout. Live diagnostics stream
-to stderr as structured Journey log lines, for example:
+Journey-owned CLI output is emitted on stdout as structured Journey log lines. The default format is logfmt-style text,
+for example:
 
 ```console
 [journey] time=2026-04-25T10:30:12.345Z level=INFO component=executor event=step_success message="  step create_customer_profile attempt=1 ok duration=0.012s" attempt=1 case=case_1 duration=0.012s file=docs/first_journey/first_journey.py journey=first_journey node_index=0 step=create_customer_profile
 ```
 
-Use `--log-level debug|info|warning|error|off` to tune those diagnostics. The default is `info`; `--log-level off`
-keeps stdout output but suppresses Journey diagnostics.
+Use `--output jsonl` when tooling should consume newline-delimited JSON log records instead. Use
+`--log-level debug|info|warning|error|off` to tune output. The default is `info`; `--log-level off` suppresses all
+Journey-owned output.
 
 CLI commands discover functions annotated with `@journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
@@ -433,8 +434,9 @@ Execute all compiled cases:
 uv run journey
 ```
 
-The default output shows the compiled cases first. Live execution logs are append-only stderr lines that include
-component, event, timestamp, case, step, retry, and duration fields.
+The default output shows the compiled cases first. All Journey-owned output is append-only stdout log lines that include
+component, event, timestamp, case, step, retry, and duration fields. Add `--output jsonl` for one parseable JSON object
+per line.
 
 Execute with persisted state so Ctrl-C can be resumed later:
 
