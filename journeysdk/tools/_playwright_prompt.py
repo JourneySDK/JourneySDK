@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import ast
 import base64
+from collections.abc import Callable
 from dataclasses import dataclass
-import importlib
 import json
 import os
-import sys
 from pathlib import Path
-from typing import cast
+from queue import Empty, Queue
+from threading import Event, Thread, get_ident
+from typing import TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+from langchain_core.tools import tool
 from journeysdk.logger import get_logger
 from journeysdk._prompt_memory import (
     MAX_PROMPT_MEMORY_ITEMS,
@@ -84,6 +88,7 @@ Do not mention implementation details, hidden reasoning, or unavailable metadata
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
 _VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
 _PROMPT_LOGGER = get_logger("playwright-prompt")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -113,10 +118,24 @@ class JourneyPlaywrightPromptResult:
     steps: tuple[JourneyPlaywrightPromptStep, ...]
 
 
-@dataclass(frozen=True)
-class _LangChainPromptModel:
-    base: object
-    agent: object
+@dataclass
+class _PromptThreadCall:
+    callback: Callable[[], object]
+    done: Event
+    result: object | None = None
+    error: BaseException | None = None
+
+
+class _PromptControlError(RuntimeError):
+    """Internal prompt control-flow error that should reach the caller as-is."""
+
+
+class _PromptFailedError(_PromptControlError):
+    """The browser prompt reached a visible terminal failure."""
+
+
+class _PromptMaxStepsError(_PromptControlError):
+    """The browser prompt exhausted the configured step budget."""
 
 
 class _PromptSession:
@@ -146,257 +165,30 @@ class _PromptSession:
         self._pages: list[PlaywrightPage] = [page]
         self._active_page_index = 0
         self._steps: list[JourneyPlaywrightPromptStep] = []
+        self._prompt_thread_id = get_ident()
+        self._prompt_thread_calls: Queue[_PromptThreadCall] = Queue()
 
     def run(self) -> JourneyPlaywrightPromptResult:
         self._log_start()
         observation = self._build_observation()
-        messages = self._build_agent_messages(observation=observation)
-        for step_index in range(1, self._max_steps + 1):
-            self._log_inspection(step_index=step_index, observation=observation)
-            response = self._request_agent_response(messages=messages)
-            try:
-                tool_calls = _extract_langchain_tool_calls(response)
-            except RuntimeError as exc:
-                detail = _format_python_error(exc)
-                self._append_rejected_step(
-                    step_index=step_index,
-                    action="tool",
-                    target="",
-                    detail=detail,
-                )
-                observation = self._build_observation()
-                messages.append(
-                    self._build_observation_message(
-                        observation=observation,
-                        include_memory=False,
-                    )
-                )
-                continue
-            if not tool_calls:
-                return self._finish_from_response(
-                    step_index=step_index,
-                    response=response,
-                )
-
-            messages.append(response)
-            if len(tool_calls) != 1:
-                detail = _format_python_error(
-                    RuntimeError(
-                        "JourneyPlaywrightPage.prompt(...) expected the model "
-                        f"to call exactly one tool, but received {len(tool_calls)}."
-                    )
-                )
-                self._append_rejected_step(
-                    step_index=step_index,
-                    action="tool",
-                    target=_tool_calls_target(tool_calls),
-                    detail=detail,
-                )
-                for tool_call in tool_calls:
-                    messages.append(
-                        _tool_result_message(
-                            tool_call=tool_call,
-                            payload={"status": "rejected", "detail": detail},
-                        )
-                    )
-                observation = self._build_observation()
-                messages.append(
-                    self._build_observation_message(
-                        observation=observation,
-                        include_memory=False,
-                    )
-                )
-                continue
-
-            tool_call = tool_calls[0]
-            tool_name = _tool_call_name(tool_call)
-            if tool_name == _PROMPT_FAIL_SESSION_TOOL_NAME:
-                try:
-                    reason = _tool_call_text_argument(
-                        tool_call,
-                        "reason",
-                        "JourneyPlaywrightPage.prompt(...) "
-                        "journey_fail_session expects a non-blank reason string.",
-                    )
-                except Exception as exc:
-                    detail = _format_python_error(exc)
-                    self._append_rejected_step(
-                        step_index=step_index,
-                        action="tool",
-                        target=tool_name,
-                        detail=detail,
-                    )
-                    messages.append(
-                        _tool_result_message(
-                            tool_call=tool_call,
-                            payload={"status": "rejected", "detail": detail},
-                        )
-                    )
-                    observation = self._build_observation()
-                    messages.append(
-                        self._build_observation_message(
-                            observation=observation,
-                            include_memory=False,
-                        )
-                    )
-                    continue
-
-                fail_step = JourneyPlaywrightPromptStep(
-                    index=step_index,
-                    page_index=self._active_page_index,
-                    action="fail",
-                    target=reason,
-                    status="failed",
-                    detail=reason,
-                )
-                self._steps.append(fail_step)
-                self._raise_prompt_failed(
-                    step_index=step_index,
-                    reason=reason,
-                )
-
-            if tool_name != _PROMPT_RUN_CODE_TOOL_NAME:
-                detail = _format_python_error(
-                    RuntimeError(
-                        "JourneyPlaywrightPage.prompt(...) received unknown "
-                        f"tool call {tool_name!r}."
-                    )
-                )
-                self._append_rejected_step(
-                    step_index=step_index,
-                    action="tool",
-                    target=tool_name,
-                    detail=detail,
-                )
-                messages.append(
-                    _tool_result_message(
-                        tool_call=tool_call,
-                        payload={"status": "rejected", "detail": detail},
-                    )
-                )
-                observation = self._build_observation()
-                messages.append(
-                    self._build_observation_message(
-                        observation=observation,
-                        include_memory=False,
-                    )
-                )
-                continue
-
-            try:
-                code = _strip_code_fences(
-                    _tool_call_text_argument(
-                        tool_call,
-                        "code",
-                        "JourneyPlaywrightPage.prompt(...) "
-                        "journey_run_code expects a non-blank code string.",
-                    )
-                )
-                target = _first_code_line(code)
-            except Exception as exc:
-                detail = _format_python_error(exc)
-                self._append_rejected_step(
-                    step_index=step_index,
-                    action="tool",
-                    target=tool_name,
-                    detail=detail,
-                )
-                messages.append(
-                    _tool_result_message(
-                        tool_call=tool_call,
-                        payload={"status": "rejected", "detail": detail},
-                    )
-                )
-                observation = self._build_observation()
-                messages.append(
-                    self._build_observation_message(
-                        observation=observation,
-                        include_memory=False,
-                    )
-                )
-                continue
-
-            previous_page_count = len(self._pages)
-            previous_active_page_index = self._active_page_index
-            self._log_action(step_index=step_index, code=code)
-            try:
-                step = self._execute_python_step(
-                    step_index=step_index,
-                    code=code,
-                    target=target,
-                )
-            except Exception as exc:
-                self._log_new_pages(previous_page_count=previous_page_count)
-                self._log_active_page_change(
-                    previous_active_page_index=previous_active_page_index,
-                )
-                step = self._append_rejected_step(
-                    step_index=step_index,
-                    action="python",
-                    target=target,
-                    detail=_format_python_error(exc),
-                )
-                messages.append(
-                    _tool_result_message(
-                        tool_call=tool_call,
-                        payload={"status": "rejected", "detail": step.detail},
-                    )
-                )
-                observation = self._build_observation()
-                messages.append(
-                    self._build_observation_message(
-                        observation=observation,
-                        include_memory=False,
-                    )
-                )
-                continue
-            self._log_new_pages(previous_page_count=previous_page_count)
-            self._log_active_page_change(
-                previous_active_page_index=previous_active_page_index,
-            )
-            _emit_prompt_log(
-                f"step {step_index}/{self._max_steps}: succeeded on "
-                f"{_page_summary(self._prompt_pages()[self._active_page_index])}",
-                event="prompt_step_success",
-                step=step_index,
-                max_steps=self._max_steps,
-                page=self._active_page_index,
-            )
-            self._steps.append(step)
-            messages.append(
-                _tool_result_message(
-                    tool_call=tool_call,
-                    payload={
-                        "status": "ok",
-                        "detail": step.detail,
-                        "active_page_index": self._active_page_index,
-                    },
-                )
-            )
-            observation = self._build_observation()
-            messages.append(
+        agent = _create_langchain_agent(
+            self._prompt_model,
+            tools=self._build_agent_tools(),
+            system_prompt=_PROMPT_SYSTEM_MESSAGE,
+        )
+        result = self._request_agent_result(
+            agent=agent,
+            messages=[
                 self._build_observation_message(
                     observation=observation,
-                    include_memory=False,
+                    include_memory=True,
                 )
-            )
-
-        message = (
-            "JourneyPlaywrightPage.prompt(...) reached "
-            f"max_steps={self._max_steps} without a final response."
+            ],
         )
-        if self._steps:
-            last_step = self._steps[-1]
-            message += (
-                f" Last step was {last_step.status}: "
-                f"{last_step.action} {last_step.target!r} ({last_step.detail})."
-            )
-        _emit_prompt_log(
-            f"prompt stopped: {message}",
-            event="prompt_stopped",
-            max_steps=self._max_steps,
+        return self._finish_from_response(
+            step_index=len(self._steps) + 1,
+            response=_final_agent_message(result),
         )
-        raise RuntimeError(message)
 
     def _log_start(self) -> None:
         self._discover_pages()
@@ -415,25 +207,6 @@ class _PromptSession:
             max_steps=self._max_steps,
             timeout=f"{timeout_seconds:g}s",
             active=_page_summary(active_page),
-        )
-
-    def _log_inspection(
-        self,
-        *,
-        step_index: int,
-        observation: dict[str, object],
-    ) -> None:
-        active_page_index = cast(int, observation["active_page_index"])
-        pages = cast(list[dict[str, object]], observation["pages"])
-        active_page = pages[active_page_index]
-        _emit_prompt_log(
-            f"step {step_index}/{self._max_steps}: inspecting "
-            f"{_page_dict_summary(active_page)}",
-            event="prompt_inspect",
-            step=step_index,
-            max_steps=self._max_steps,
-            page=active_page_index,
-            page_summary=_page_dict_summary(active_page),
         )
 
     def _log_action(self, *, step_index: int, code: str) -> None:
@@ -498,21 +271,122 @@ class _PromptSession:
             "screenshot_data_url": screenshot_data_url,
         }
 
-    def _build_agent_messages(
+    def _build_agent_tools(self) -> list[object]:
+        @tool(_PROMPT_RUN_CODE_TOOL_NAME)
+        def journey_run_code(code: str) -> list[dict[str, object]]:
+            """Execute one Playwright sync Python snippet against the active Journey browser page."""
+
+            return self._run_on_prompt_thread(lambda: self._run_code_tool(code))
+
+        @tool(_PROMPT_FAIL_SESSION_TOOL_NAME)
+        def journey_fail_session(reason: str) -> list[dict[str, object]]:
+            """Stop the prompt because a visible page state blocks the requested browser task."""
+
+            return self._run_on_prompt_thread(lambda: self._fail_session_tool(reason))
+
+        return [journey_run_code, journey_fail_session]
+
+    def _run_code_tool(self, code: str) -> list[dict[str, object]]:
+        step_index = len(self._steps) + 1
+        try:
+            normalized_code = _strip_code_fences(
+                _require_text_value(
+                    code,
+                    "JourneyPlaywrightPage.prompt(...) "
+                    "journey_run_code expects a non-blank code string.",
+                )
+            )
+            target = _first_code_line(normalized_code)
+        except Exception as exc:
+            self._append_rejected_step(
+                step_index=step_index,
+                action="tool",
+                target=_PROMPT_RUN_CODE_TOOL_NAME,
+                detail=_format_python_error(exc),
+            )
+            return self._tool_observation_or_stop(step_index=step_index)
+
+        previous_page_count = len(self._pages)
+        previous_active_page_index = self._active_page_index
+        self._log_action(step_index=step_index, code=normalized_code)
+        try:
+            step = self._execute_python_step(
+                step_index=step_index,
+                code=normalized_code,
+                target=target,
+            )
+        except Exception as exc:
+            self._log_new_pages(previous_page_count=previous_page_count)
+            self._log_active_page_change(
+                previous_active_page_index=previous_active_page_index,
+            )
+            self._append_rejected_step(
+                step_index=step_index,
+                action="python",
+                target=target,
+                detail=_format_python_error(exc),
+            )
+            return self._tool_observation_or_stop(step_index=step_index)
+
+        self._log_new_pages(previous_page_count=previous_page_count)
+        self._log_active_page_change(
+            previous_active_page_index=previous_active_page_index,
+        )
+        _emit_prompt_log(
+            f"step {step_index}/{self._max_steps}: succeeded on "
+            f"{_page_summary(self._prompt_pages()[self._active_page_index])}",
+            event="prompt_step_success",
+            step=step_index,
+            max_steps=self._max_steps,
+            page=self._active_page_index,
+        )
+        self._steps.append(step)
+        return self._tool_observation_or_stop(step_index=step_index)
+
+    def _fail_session_tool(self, reason: str) -> list[dict[str, object]]:
+        step_index = len(self._steps) + 1
+        try:
+            normalized_reason = _require_text_value(
+                reason,
+                "JourneyPlaywrightPage.prompt(...) "
+                "journey_fail_session expects a non-blank reason string.",
+            )
+        except Exception as exc:
+            self._append_rejected_step(
+                step_index=step_index,
+                action="tool",
+                target=_PROMPT_FAIL_SESSION_TOOL_NAME,
+                detail=_format_python_error(exc),
+            )
+            return self._tool_observation_or_stop(step_index=step_index)
+
+        self._steps.append(
+            JourneyPlaywrightPromptStep(
+                index=step_index,
+                page_index=self._active_page_index,
+                action="fail",
+                target=normalized_reason,
+                status="failed",
+                detail=normalized_reason,
+            )
+        )
+        self._raise_prompt_failed(
+            step_index=step_index,
+            reason=normalized_reason,
+        )
+
+    def _tool_observation_or_stop(
         self,
         *,
-        observation: dict[str, object],
-    ) -> list[object]:
-        return [
-            {
-                "role": "system",
-                "content": _PROMPT_SYSTEM_MESSAGE,
-            },
-            self._build_observation_message(
-                observation=observation,
-                include_memory=True,
-            ),
-        ]
+        step_index: int,
+    ) -> list[dict[str, object]]:
+        observation = self._build_observation()
+        if step_index >= self._max_steps:
+            self._raise_max_steps()
+        return self._build_observation_content(
+            observation=observation,
+            include_memory=False,
+        )
 
     def _build_observation_message(
         self,
@@ -520,6 +394,20 @@ class _PromptSession:
         observation: dict[str, object],
         include_memory: bool,
     ) -> dict[str, object]:
+        return {
+            "role": "user",
+            "content": self._build_observation_content(
+                observation=observation,
+                include_memory=include_memory,
+            ),
+        }
+
+    def _build_observation_content(
+        self,
+        *,
+        observation: dict[str, object],
+        include_memory: bool,
+    ) -> list[dict[str, object]]:
         memory_entry = (
             self._memory_for_observation(observation) if include_memory else None
         )
@@ -578,33 +466,110 @@ class _PromptSession:
             ]
         )
         screenshot_data_url = cast(str, observation["screenshot_data_url"])
-        return {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": prompt_text,
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": screenshot_data_url},
-                },
-            ],
-        }
+        return [
+            {
+                "type": "text",
+                "text": prompt_text,
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": screenshot_data_url},
+            },
+        ]
 
-    def _request_agent_response(
+    def _request_agent_result(
         self,
         *,
+        agent: object,
         messages: list[object],
     ) -> object:
         try:
-            response = self._prompt_model.agent.invoke(messages)
+            response = self._invoke_agent_on_worker(
+                lambda: agent.invoke(
+                    {"messages": messages},
+                    config={"recursion_limit": max(6, self._max_steps * 3 + 3)},
+                )
+            )
+        except _PromptControlError:
+            raise
         except Exception as exc:
+            if _is_langchain_recursion_limit_error(exc):
+                self._raise_max_steps()
             raise RuntimeError(
                 "JourneyPlaywrightPage.prompt(...) failed to call "
                 f"model {self._model!r}: {exc}"
             ) from exc
         return response
+
+    def _invoke_agent_on_worker(self, callback: Callable[[], _T]) -> _T:
+        if get_ident() != self._prompt_thread_id:
+            return callback()
+
+        result: object | None = None
+        error: BaseException | None = None
+        done = Event()
+
+        def worker() -> None:
+            nonlocal result, error
+            try:
+                result = callback()
+            except BaseException as exc:
+                error = exc
+            finally:
+                done.set()
+
+        thread = Thread(
+            target=worker,
+            name="journey-playwright-prompt-agent",
+            daemon=True,
+        )
+        thread.start()
+        while not done.is_set():
+            self._run_next_prompt_thread_call(timeout=0.05)
+        thread.join()
+        if error is not None:
+            raise error
+        return cast(_T, result)
+
+    def _run_on_prompt_thread(self, callback: Callable[[], _T]) -> _T:
+        if get_ident() == self._prompt_thread_id:
+            return callback()
+        call = _PromptThreadCall(callback=callback, done=Event())
+        self._prompt_thread_calls.put(call)
+        call.done.wait()
+        if call.error is not None:
+            raise call.error
+        return cast(_T, call.result)
+
+    def _run_next_prompt_thread_call(self, *, timeout: float) -> None:
+        try:
+            call = self._prompt_thread_calls.get(timeout=timeout)
+        except Empty:
+            return
+        try:
+            call.result = call.callback()
+        except BaseException as exc:
+            call.error = exc
+        finally:
+            call.done.set()
+
+    def _raise_max_steps(self) -> None:
+        message = (
+            "JourneyPlaywrightPage.prompt(...) reached "
+            f"max_steps={self._max_steps} without a final response."
+        )
+        if self._steps:
+            last_step = self._steps[-1]
+            message += (
+                f" Last step was {last_step.status}: "
+                f"{last_step.action} {last_step.target!r} ({last_step.detail})."
+            )
+        _emit_prompt_log(
+            f"prompt stopped: {message}",
+            event="prompt_stopped",
+            max_steps=self._max_steps,
+        )
+        raise _PromptMaxStepsError(message)
 
     def _finish_from_response(
         self,
@@ -678,7 +643,7 @@ class _PromptSession:
                 "JourneyPlaywrightPage.prompt(...) structured output was not configured."
             )
         try:
-            structured_model = self._prompt_model.base.with_structured_output(
+            structured_model = self._prompt_model.with_structured_output(
                 self._output_schema.json_schema,
                 method="json_schema",
             )
@@ -805,7 +770,7 @@ class _PromptSession:
             page=self._active_page_index,
             reason=normalized_reason,
         )
-        raise RuntimeError(message)
+        raise _PromptFailedError(message)
 
     def _memory_for_observation(
         self,
@@ -1177,96 +1142,19 @@ def _prompt_output_summary(value: str | dict[str, object]) -> str:
     return truncate_prompt_memory_text(json.dumps(value, sort_keys=True))
 
 
-def _extract_langchain_tool_calls(
-    response: object,
-) -> tuple[dict[str, object], ...]:
-    invalid_tool_calls = getattr(response, "invalid_tool_calls", None)
-    if invalid_tool_calls:
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected valid LangChain tool calls."
-        )
-    raw_tool_calls = getattr(response, "tool_calls", None)
-    if raw_tool_calls is None:
-        return ()
-    if not isinstance(raw_tool_calls, list):
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected LangChain tool_calls to be a list."
-        )
-    tool_calls: list[dict[str, object]] = []
-    for index, raw_tool_call in enumerate(raw_tool_calls, start=1):
-        if not isinstance(raw_tool_call, dict):
-            raise RuntimeError(
-                "JourneyPlaywrightPage.prompt(...) expected each LangChain "
-                "tool call to be a dictionary."
-            )
-        call_id = raw_tool_call.get("id")
-        if not isinstance(call_id, str) or not call_id.strip():
-            call_id = f"journey_tool_call_{index}"
-        name = raw_tool_call.get("name")
-        if not isinstance(name, str):
-            name = ""
-        tool_calls.append(
-            {
-                "id": call_id,
-                "name": name,
-                "args": raw_tool_call.get("args"),
-            }
-        )
-    return tuple(tool_calls)
+def _final_agent_message(result: object) -> object:
+    if isinstance(result, dict):
+        messages = result.get("messages")
+        if isinstance(messages, list) and messages:
+            return messages[-1]
+    return result
 
 
-def _tool_result_message(
-    *,
-    tool_call: dict[str, object],
-    payload: dict[str, object],
-) -> object:
-    try:
-        messages_module = importlib.import_module("langchain_core.messages")
-    except ImportError as exc:
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) could not import `langchain_core`. "
-            f"The active Python interpreter is {sys.executable!r}; run Journey "
-            "through the project environment or reinstall/sync this interpreter "
-            "so it includes Journey SDK runtime dependencies."
-        ) from exc
-    tool_message = getattr(messages_module, "ToolMessage", None)
-    if tool_message is None:
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) could not find langchain_core.messages.ToolMessage."
-        )
-    return tool_message(
-        content=json.dumps(payload, sort_keys=True),
-        tool_call_id=_tool_call_id(tool_call),
-    )
-
-
-def _tool_calls_target(tool_calls: tuple[dict[str, object], ...]) -> str:
-    names = [_tool_call_name(tool_call) or "<unnamed>" for tool_call in tool_calls]
-    return ", ".join(names)[:200]
-
-
-def _tool_call_text_argument(
-    tool_call: dict[str, object],
-    name: str,
-    message: str,
-) -> str:
-    arguments = tool_call.get("args")
-    if not isinstance(arguments, dict):
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected tool arguments "
-            "to be a JSON object."
-        )
-    return _require_text_value(arguments.get(name), message)
-
-
-def _tool_call_name(tool_call: dict[str, object]) -> str:
-    name = tool_call.get("name")
-    return name if isinstance(name, str) else ""
-
-
-def _tool_call_id(tool_call: dict[str, object]) -> str:
-    call_id = tool_call.get("id")
-    return call_id if isinstance(call_id, str) and call_id.strip() else "journey_tool_call"
+def _is_langchain_recursion_limit_error(exc: Exception) -> bool:
+    if type(exc).__name__ == "GraphRecursionError":
+        return True
+    message = str(exc).lower()
+    return "recursion limit" in message and "langgraph" in message
 
 
 def _normalize_structured_output(
@@ -1370,14 +1258,6 @@ def _extract_visible_message(visible_text: str) -> str:
 
 def _page_summary(page: JourneyPlaywrightPromptPage) -> str:
     return _format_page_summary(index=page.index, title=page.title, url=page.url)
-
-
-def _page_dict_summary(page: dict[str, object]) -> str:
-    return _format_page_summary(
-        index=page.get("index"),
-        title=page.get("title"),
-        url=page.get("url"),
-    )
 
 
 def _format_page_summary(*, index: object, title: object, url: object) -> str:
@@ -1508,57 +1388,31 @@ def _node_description(node: ast.AST) -> str:
     return ast.unparse(node)
 
 
-def _load_langchain_model(model: str) -> _LangChainPromptModel:
+def _load_langchain_model(model: str) -> object:
     try:
-        chat_models_module = importlib.import_module("langchain.chat_models")
-        tools_module = importlib.import_module("langchain_core.tools")
-    except ImportError as exc:
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) could not import `langchain`. "
-            f"The active Python interpreter is {sys.executable!r}; run Journey "
-            "through the project environment or reinstall/sync this interpreter "
-            "so it includes Journey SDK runtime dependencies."
-        ) from exc
-    init_chat_model = getattr(chat_models_module, "init_chat_model", None)
-    tool = getattr(tools_module, "tool", None)
-    if not callable(init_chat_model):
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) could not find "
-            "langchain.chat_models.init_chat_model."
-        )
-    if not callable(tool):
-        raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) could not find langchain_core.tools.tool."
-        )
-
-    @tool(_PROMPT_RUN_CODE_TOOL_NAME)
-    def journey_run_code(code: str) -> str:
-        """Execute one Playwright sync Python snippet against the active Journey browser page."""
-
-        return "Journey executes this tool result itself."
-
-    @tool(_PROMPT_FAIL_SESSION_TOOL_NAME)
-    def journey_fail_session(reason: str) -> str:
-        """Stop the prompt because a visible page state blocks the requested browser task."""
-
-        return "Journey stops the browser prompt itself."
-
-    try:
-        base_model = init_chat_model(
+        return init_chat_model(
             model,
             temperature=0.0,
             max_tokens=1000,
-        )
-        agent_model = base_model.bind_tools(
-            [journey_run_code, journey_fail_session],
-            parallel_tool_calls=False,
         )
     except Exception as exc:
         raise RuntimeError(
             "JourneyPlaywrightPage.prompt(...) failed to initialize LangChain "
             f"model {model!r}: {exc}"
         ) from exc
-    return _LangChainPromptModel(base=base_model, agent=agent_model)
+
+
+def _create_langchain_agent(
+    model: object,
+    *,
+    tools: list[object],
+    system_prompt: str,
+) -> object:
+    return create_agent(
+        model,
+        tools=tools,
+        system_prompt=system_prompt,
+    )
 
 
 def _resolve_model(model: str | None) -> str:

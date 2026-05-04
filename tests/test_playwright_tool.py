@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from types import MethodType
 
 import journeysdk as journey_sdk
@@ -300,40 +301,6 @@ class _FakeAIMessage:
         self.invalid_tool_calls = invalid_tool_calls or []
 
 
-class _FakeBoundLangChainModel:
-    def __init__(self, prompt_model: _FakeLangChainPromptModel) -> None:
-        self._prompt_model = prompt_model
-
-    def invoke(self, messages: list[object]) -> _FakeAIMessage:
-        self._prompt_model.calls.append({"messages": list(messages)})
-        if not self._prompt_model._responses:
-            raise AssertionError("No fake LLM responses remaining.")
-        self._prompt_model._response_index += 1
-        response = self._prompt_model._responses.pop(0)
-        if isinstance(response, str):
-            return _FakeAIMessage(content=response)
-        message = dict(response)
-        tool_calls = message.get("tool_calls")
-        normalized_tool_calls: list[dict[str, object]] = []
-        if isinstance(tool_calls, list):
-            for index, tool_call in enumerate(tool_calls, start=1):
-                assert isinstance(tool_call, dict)
-                normalized = dict(tool_call)
-                normalized.setdefault(
-                    "id",
-                    f"fake-call-{self._prompt_model._response_index}-{index}",
-                )
-                normalized.setdefault("type", "tool_call")
-                normalized_tool_calls.append(normalized)
-        invalid_tool_calls = message.get("invalid_tool_calls")
-        assert invalid_tool_calls is None or isinstance(invalid_tool_calls, list)
-        return _FakeAIMessage(
-            content=message.get("content", ""),
-            tool_calls=normalized_tool_calls,
-            invalid_tool_calls=invalid_tool_calls,
-        )
-
-
 class _FakeStructuredLangChainModel:
     def __init__(
         self,
@@ -370,8 +337,6 @@ class _FakeLangChainPromptModel:
         self.calls: list[dict[str, object]] = []
         self.structured_calls: list[dict[str, object]] = []
         self._response_index = 0
-        self.base = self
-        self.agent = _FakeBoundLangChainModel(self)
 
     def with_structured_output(
         self,
@@ -383,6 +348,95 @@ class _FakeLangChainPromptModel:
 
     def add_structured_responses(self, responses: list[object]) -> None:
         self._structured_responses.extend(responses)
+
+
+class _FakeLangChainAgent:
+    def __init__(
+        self,
+        prompt_model: _FakeLangChainPromptModel,
+        *,
+        tools: list[object],
+        system_prompt: str,
+    ) -> None:
+        self._prompt_model = prompt_model
+        self._tools = {getattr(tool, "name"): tool for tool in tools}
+        self._system_prompt = system_prompt
+
+    def invoke(
+        self,
+        payload: dict[str, object],
+        *,
+        config: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del config
+        raw_messages = payload.get("messages")
+        assert isinstance(raw_messages, list)
+        messages: list[object] = [
+            {"role": "system", "content": self._system_prompt},
+            *raw_messages,
+        ]
+        while True:
+            ai_message = self._next_ai_message(messages)
+            messages.append(ai_message)
+            if not ai_message.tool_calls:
+                return {"messages": messages}
+            for tool_call in ai_message.tool_calls:
+                tool_name = tool_call["name"]
+                tool = self._tools.get(tool_name)
+                if tool is None:
+                    raise AssertionError(f"Unknown fake tool call {tool_name!r}.")
+                tool_message = tool.invoke(tool_call)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": tool_message.content,
+                        "tool_call_id": getattr(tool_message, "tool_call_id", ""),
+                    }
+                )
+
+    def _next_ai_message(self, messages: list[object]) -> _FakeAIMessage:
+        self._prompt_model.calls.append({"messages": list(messages)})
+        if not self._prompt_model._responses:
+            raise AssertionError("No fake LLM responses remaining.")
+        self._prompt_model._response_index += 1
+        response = self._prompt_model._responses.pop(0)
+        if isinstance(response, str):
+            return _FakeAIMessage(content=response)
+        else:
+            message = dict(response)
+            tool_calls = message.get("tool_calls")
+            normalized_tool_calls: list[dict[str, object]] = []
+            if isinstance(tool_calls, list):
+                for index, tool_call in enumerate(tool_calls, start=1):
+                    assert isinstance(tool_call, dict)
+                    normalized = dict(tool_call)
+                    normalized.setdefault(
+                        "id",
+                        f"fake-call-{self._prompt_model._response_index}-{index}",
+                    )
+                    normalized.setdefault("type", "tool_call")
+                    normalized_tool_calls.append(normalized)
+            invalid_tool_calls = message.get("invalid_tool_calls")
+            assert invalid_tool_calls is None or isinstance(invalid_tool_calls, list)
+            return _FakeAIMessage(
+                content=message.get("content", ""),
+                tool_calls=normalized_tool_calls,
+                invalid_tool_calls=invalid_tool_calls,
+            )
+
+
+def _fake_create_langchain_agent(
+    model: object,
+    *,
+    tools: list[object],
+    system_prompt: str,
+) -> _FakeLangChainAgent:
+    assert isinstance(model, _FakeLangChainPromptModel)
+    return _FakeLangChainAgent(
+        model,
+        tools=tools,
+        system_prompt=system_prompt,
+    )
 
 
 def _prompt_tool_call(
@@ -411,6 +465,15 @@ def _fail_session(reason: str) -> dict[str, object]:
     return _prompt_tool_call(
         "journey_fail_session",
         {"reason": reason},
+    )
+
+
+@pytest.fixture(autouse=True)
+def _install_fake_langchain_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_create_langchain_agent",
+        _fake_create_langchain_agent,
     )
 
 
@@ -937,7 +1000,9 @@ def test_journey_playwright_prompt_requires_model_or_env(monkeypatch):
         page.prompt("click sign in")
 
 
-def test_journey_playwright_prompt_reports_broken_langchain_install(monkeypatch):
+def test_journey_playwright_prompt_reports_langchain_model_initialization_failure(
+    monkeypatch,
+):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -948,18 +1013,34 @@ def test_journey_playwright_prompt_reports_broken_langchain_install(monkeypatch)
     )
     context.pages.append(page)
 
-    original_import_module = journey_playwright_prompt.importlib.import_module
+    def fail_init_chat_model(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RuntimeError("missing provider package")
 
-    def fail_import(name: str):
-        if name == "langchain.chat_models":
-            raise ImportError("missing langchain")
-        return original_import_module(name)
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "init_chat_model",
+        fail_init_chat_model,
+    )
 
-    monkeypatch.setattr(journey_playwright_prompt.importlib, "import_module", fail_import)
-
-    with pytest.raises(RuntimeError, match="project environment") as exc_info:
+    with pytest.raises(RuntimeError, match="failed to initialize LangChain model") as exc_info:
         page.prompt("click sign in", model="openai:gpt-4.1-mini")
-    assert sys.executable in str(exc_info.value)
+    assert "missing provider package" in str(exc_info.value)
+
+
+def test_journey_playwright_prompt_delegates_tool_execution_to_langchain_agent():
+    source = Path(journey_playwright_prompt.__file__).read_text(encoding="utf-8")
+
+    assert "from langchain.chat_models import init_chat_model" in source
+    assert "importlib.import_module" not in source
+    assert "create_agent" in source
+    assert "_build_agent_middleware" not in source
+    assert "wrap_model_call" not in source
+    assert "bind_tools" not in source
+    assert ".invoke(tool_call" not in source
+    assert "ToolMessage" not in source
+    assert "_extract_langchain_tool_calls" not in source
+    assert "_tool_result_message" not in source
 
 
 def test_journey_playwright_prompt_clicks_popup_and_returns_text(
@@ -1096,7 +1177,6 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
     assert 'click on a \\"Sign in\\" button and get the title' in log_output
     assert "model='anthropic:claude-sonnet-4-5'" in log_output
     assert "active=page 0 'Login page' at http://example.test/login" in log_output
-    assert "step 1/15: inspecting page 0 'Login page'" in log_output
     assert "step 1/15: AI will click selector '#sign-in'" in log_output
     assert "event=prompt_code" in log_output
     assert 'page.locator(\\"#sign-in\\").click(timeout=timeout_ms)' in log_output
@@ -1106,6 +1186,44 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         "step 3/15: finished with output: The opened popup title is Welcome popup."
         in log_output
     )
+
+
+def test_journey_playwright_prompt_runs_tool_work_on_prompt_thread(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    prompt_thread_id = threading.get_ident()
+    click_thread_ids: list[int] = []
+
+    def record_click_thread() -> None:
+        click_thread_ids.append(threading.get_ident())
+
+    page = _make_prompt_page(
+        title="Login page",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        elements=[
+            _prompt_element("#sign-in", name="Sign in"),
+        ],
+        click_handlers={"#sign-in": record_click_thread},
+    )
+    context.pages.append(page)
+
+    fake_model = _FakeLangChainPromptModel(
+        [
+            _run_code('page.locator("#sign-in").click(timeout=timeout_ms)'),
+            "Done.",
+        ]
+    )
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    page.prompt("click sign in", model="openai:gpt-4.1-mini")
+
+    assert click_thread_ids == [prompt_thread_id]
 
 
 def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
