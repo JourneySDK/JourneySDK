@@ -334,8 +334,9 @@ def test_run_docker_executes_compose_config_and_up(
         ),
     ]
     log_output = capsys.readouterr().out
-    assert "OK docker compose_start" in log_output
-    assert "OK docker compose_success" in log_output
+    assert "Docker" in log_output
+    assert "starting Docker Compose stack" in log_output
+    assert "Docker Compose stack started" in log_output
 
 
 def test_docker_run_cli_logs_subprocess_lifecycle(
@@ -363,8 +364,8 @@ def test_docker_run_cli_logs_subprocess_lifecycle(
         configure_logging("info")
 
     log_output = capsys.readouterr().out
-    assert "DBG docker subprocess_start" in log_output
-    assert "DBG docker subprocess_success" in log_output
+    assert "Debug: docker:subprocess_start" in log_output
+    assert "Debug: docker:subprocess_success" in log_output
 
 
 def test_docker_stack_statuses_and_logs_use_live_docker_metadata(

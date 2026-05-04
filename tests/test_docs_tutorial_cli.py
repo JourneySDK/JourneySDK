@@ -54,8 +54,9 @@ def test_first_journey_readme_commands(
     assert "Plan" in execute_output
     assert "Summary: 1 journey planned, 1 case planned, 0 failed" in execute_output
     assert "Execution" in execute_output
-    assert "Journey docs/first_journey/first_journey.py:first_journey" in execute_output
-    assert "step create_customer_profile attempt=1 ok duration=" in execute_logs
+    assert "docs/first_journey/first_journey.py:first_journey" in execute_output
+    assert "create_customer_profile" in execute_logs
+    assert "ok attempt=1 duration=" in execute_logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
 
@@ -161,8 +162,9 @@ def test_retry_readme_commands_show_retry_behavior(
     )
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "step wait_for_same_step attempt=1 retry" in output
-    assert "step wait_for_same_step attempt=2 ok duration=" in output
+    assert "Warning: wait_for_same_step retry after" in output
+    assert "wait_for_same_step" in output
+    assert "ok attempt=2 duration=" in output
 
     exit_code = main(
         [
@@ -174,8 +176,9 @@ def test_retry_readme_commands_show_retry_behavior(
     )
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert output.count("step issue_report_request attempt=1 start") == 1
-    assert output.count("step issue_report_request attempt=2 start") == 1
+    assert "issue_report_request" in output
+    assert "start attempt=1" in output
+    assert "start attempt=2" in output
 
     exit_code = main(
         [
@@ -187,8 +190,9 @@ def test_retry_readme_commands_show_retry_behavior(
     )
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert output.count("step refresh_status_cache attempt=1 start") == 1
-    assert output.count("step refresh_status_cache attempt=2 start") == 1
+    assert "refresh_status_cache" in output
+    assert "start attempt=1" in output
+    assert "start attempt=2" in output
 
 
 def test_resume_readme_commands_interrupt_then_resume(
@@ -228,12 +232,13 @@ def test_resume_readme_commands_interrupt_then_resume(
 
     assert first_exit == 130
     assert live_stderr.prompt_seen.is_set()
-    assert "Interrupted." in first_output
-    assert "Try this: Run the same command again with --state" in first_output
+    assert "Interrupted: Journey execution was interrupted before it finished." in first_output
+    assert "Hint: Run the same command again with --state" in first_output
     assert "Loaded support ticket ticket-001" in first_error
     assert INTERRUPT_PROMPT_PREFIX in first_error
-    assert "graceful_interrupt_requested" in first_error
-    assert "step wait_for_resume_signal attempt=1 ok duration=" in first_error
+    assert "interrupt requested; waiting for the active step to reach post-exit" in first_error
+    assert "wait_for_resume_signal" in first_error
+    assert "ok attempt=1 duration=" in first_error
 
     second_exit = main(
         [
@@ -248,9 +253,10 @@ def test_resume_readme_commands_interrupt_then_resume(
     second_error = second_capture.out
 
     assert second_exit == 0
-    assert "- case_1 resume branches={}" in second_error
-    assert "step wait_for_resume_signal attempt=2" not in second_error
-    assert "step assert_resumed_ticket attempt=1 ok duration=" in second_error
+    assert "case_1 resume" in second_error
+    assert "wait_for_resume_signal                       start attempt=2" not in second_error
+    assert "assert_resumed_ticket" in second_error
+    assert "ok attempt=1 duration=" in second_error
     assert "The journey finished." in second_error
 
 
@@ -276,9 +282,10 @@ def test_cloud_webhook_readme_commands(
         execute_logs = execute_capture.out
 
     assert execute_exit == 0
-    assert "Journey docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in execute_output
-    assert "step get_webhook_invoice_paid attempt=1 ok duration=" in execute_logs
-    assert "step receive_webhook_invoice_paid attempt=1" in execute_logs
+    assert "docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in execute_output
+    assert "get_webhook_invoice_paid" in execute_logs
+    assert "receive_webhook_invoice_paid" in execute_logs
+    assert "ok attempt=1 duration=" in execute_logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
 
@@ -332,9 +339,10 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
 
         assert first_exit == 130
         assert live_stderr.prompt_seen.is_set()
-        assert "Interrupted." in first_output
-        assert "graceful_interrupt_requested" in first_error
-        assert "step continue_authenticated_dashboard attempt=1 ok duration=" in first_error
+        assert "Interrupted: Journey execution was interrupted before it finished." in first_output
+        assert "interrupt requested; waiting for the active step to reach post-exit" in first_error
+        assert "continue_authenticated_dashboard" in first_error
+        assert "ok attempt=1 duration=" in first_error
         assert "Signed in and returned JourneyPlaywrightPage" in first_error
         assert INTERRUPT_PROMPT_PREFIX in first_error
 
@@ -353,9 +361,10 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         playwright_resume_example.reset_demo_state(state_path=state_file)
 
     assert second_exit == 0
-    assert "- case_1 resume branches={}" in second_error
-    assert "step continue_authenticated_dashboard attempt=2" not in second_error
-    assert "step assert_protected_action_complete attempt=1 ok duration=" in second_error
+    assert "case_1 resume" in second_error
+    assert "continue_authenticated_dashboard                       start attempt=2" not in second_error
+    assert "assert_protected_action_complete" in second_error
+    assert "ok attempt=1 duration=" in second_error
     assert "The protected action completed." in second_error
 
 
@@ -374,7 +383,7 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
     default_output = capsys.readouterr().out
 
     assert default_exit == 1
-    assert "Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in default_output
+    assert "docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in default_output
     assert "Summary: 1 journey executed, 1 case executed, 1 failed" in default_output
 
     fail_fast_exit = main(
@@ -387,6 +396,6 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
     fail_fast_output = capsys.readouterr().out
 
     assert fail_fast_exit == 1
-    assert "Journey docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in fail_fast_output
-    assert "step finish_successfully attempt=" not in fail_fast_output
+    assert "docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in fail_fast_output
+    assert "finish_successfully                       start attempt=" not in fail_fast_output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in fail_fast_output

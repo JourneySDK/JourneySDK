@@ -395,7 +395,7 @@ Journey-owned CLI output is emitted on stdout through the Journey logger. The de
 humans at a terminal, for example:
 
 ```console
-OK executor step_success | step create_customer_profile attempt=1 ok duration=0.012s
+      create_customer_profile  ok attempt=1 duration=0.012s
 ```
 
 Use `--output structured` for the logfmt-style `[journey] time=... component=... event=...` format, or

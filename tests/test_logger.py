@@ -28,9 +28,117 @@ def test_logger_writes_pretty_format_to_current_stdout(capsys: pytest.CaptureFix
     )
 
     captured = capsys.readouterr()
-    output = captured.out.strip()
     assert captured.err == ""
-    assert output == "OK executor step_success | step prepare attempt=1 ok duration=0.012s"
+    assert captured.out == "      prepare                       ok attempt=1 duration=0.012s\n"
+
+
+def test_logger_pretty_renders_plan_as_readable_timeline(capsys: pytest.CaptureFixture[str]):
+    logger = get_logger("cli")
+
+    logger.info("plan_start", "Plan")
+    logger.info(
+        "plan_journey",
+        "Journey test.py:flow",
+        display_file="test.py",
+        journey="flow",
+        cases=1,
+        function_ref="module:flow",
+        journey_id="flow",
+    )
+    logger.info(
+        "plan_metadata",
+        "journey_id=flow function_ref=module:flow",
+        display_file="test.py",
+        journey="flow",
+        function_ref="module:flow",
+        journey_id="flow",
+    )
+    logger.info(
+        "plan_case",
+        "- case_1 branch_env={} labels=['first', 'second']",
+        case="case_1",
+        branch_env={},
+        labels=["first", "second"],
+    )
+    logger.info(
+        "plan_summary",
+        "Summary: 1 journey planned, 1 case planned, 0 failed",
+        journeys=1,
+        cases=1,
+        failures=0,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == (
+        "Plan\n"
+        "  test.py:flow\n"
+        "    case_1  labels: first, second\n"
+        "  Summary: 1 journey planned, 1 case planned, 0 failed\n"
+    )
+
+
+def test_logger_pretty_renders_browser_and_ai_prompt_activity(
+    capsys: pytest.CaptureFixture[str],
+):
+    browser = get_logger("playwright")
+    prompt = get_logger("playwright-prompt")
+
+    browser.info(
+        "open_page_start",
+        "opening Playwright page",
+        browser="chromium",
+        headless=False,
+        url="https://app.example/login",
+    )
+    browser.info(
+        "open_page_success",
+        "Playwright page opened",
+        browser="chromium",
+        url="https://app.example/dashboard",
+    )
+    prompt.info(
+        "prompt_start",
+        "prompt start: instruction='Sign in using password \"1111\".'",
+        instruction='Sign in using password "1111".',
+        model="claude-sonnet-4-6",
+        max_steps=15,
+        timeout="5s",
+        active="page 0 'Login' at https://app.example/login",
+    )
+    prompt.info(
+        "prompt_action",
+        "step 1/15: AI will click selector '#sign-in'",
+        step=1,
+        max_steps=15,
+        action="click selector '#sign-in'",
+    )
+    prompt.info(
+        "prompt_code",
+        'step 1/15 code: page.locator("#sign-in").click()',
+        step_label="step 1/15",
+        code='page.locator("#sign-in").click()',
+    )
+    prompt.info(
+        "prompt_step_success",
+        "step 1/15: succeeded on page 0 'Login'",
+        step=1,
+        max_steps=15,
+        page=0,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == (
+        "        Browser                     opening chromium https://app.example/login headless=false\n"
+        "        Browser                     opened chromium https://app.example/dashboard\n"
+        "        AI prompt                   model=claude-sonnet-4-6 max_steps=15 timeout=5s\n"
+        "          instruction               Sign in using password \"[redacted]\".\n"
+        "          page                      page 0 'Login' at https://app.example/login\n"
+        "          1/15 action               click selector '#sign-in'\n"
+        "          1/15 code                 page.locator(\"#sign-in\").click()\n"
+        "          1/15 ok                   page 0 'Login'\n"
+    )
 
 
 def test_logger_writes_structured_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
@@ -63,7 +171,7 @@ def test_logger_respects_level_filtering_and_off(capsys: pytest.CaptureFixture[s
     logger.info("discovery_start", "discovering journeys")
     logger.warning("discovery_warning", "using fallback")
     captured = capsys.readouterr()
-    assert "discovery_warning" in captured.out
+    assert captured.out == "Warning: using fallback\n"
     assert captured.err == ""
 
     configure_logging("off")
@@ -147,7 +255,7 @@ def test_logger_colors_pretty_output_for_tty_streams() -> None:
 
     output = stream.getvalue()
     assert "\x1b[" in output
-    assert "WARN executor step_retry | retrying step step=prepare" in output
+    assert "Warning: prepare retrying" in output
 
 
 def test_logger_writes_jsonl_records_to_stdout(capsys: pytest.CaptureFixture[str]):
