@@ -16,7 +16,26 @@ def _reset_logging() -> None:
     configure_logging("info")
 
 
-def test_logger_writes_common_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
+def test_logger_writes_pretty_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
+    get_logger("executor").info(
+        "step_success",
+        "  step prepare attempt=1 ok duration=0.012s",
+        journey="flow",
+        case="case_1",
+        step="prepare",
+        attempt=1,
+        duration="0.012s",
+    )
+
+    captured = capsys.readouterr()
+    output = captured.out.strip()
+    assert captured.err == ""
+    assert output == "OK executor step_success | step prepare attempt=1 ok duration=0.012s"
+
+
+def test_logger_writes_structured_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
+    configure_logging("info", output_format="structured")
+
     get_logger("executor").info(
         "step_start",
         "starting step",
@@ -65,7 +84,7 @@ def test_logger_accepts_configured_stream_and_flushes() -> None:
             super().flush()
 
     stream = FlushRecordingStream()
-    configure_logging("debug", stream=stream)
+    configure_logging("debug", stream=stream, output_format="structured")
 
     get_logger("docker").debug("cli_start", "running command", command="docker ps")
 
@@ -75,6 +94,8 @@ def test_logger_accepts_configured_stream_and_flushes() -> None:
 
 
 def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
+    configure_logging("info", output_format="structured")
+
     get_logger("cloud").info(
         "request_start",
         "calling cloud",
@@ -92,6 +113,41 @@ def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
     assert 'authorization="[redacted]"' in output
     assert 'password="[redacted]"' in output
     assert "route=/v1/test" in output
+
+
+def test_logger_redacts_sensitive_fields_in_pretty(capsys: pytest.CaptureFixture[str]):
+    get_logger("cloud").info(
+        "request_start",
+        "calling cloud",
+        api_key="secret-api-key",
+        authorization="Bearer token",
+        password="secret-password",
+        route="/v1/test",
+    )
+
+    output = capsys.readouterr().out
+    assert "secret-api-key" not in output
+    assert "Bearer token" not in output
+    assert "secret-password" not in output
+    assert "api_key=[redacted]" in output
+    assert "authorization=[redacted]" in output
+    assert "password=[redacted]" in output
+    assert "route=/v1/test" in output
+
+
+def test_logger_colors_pretty_output_for_tty_streams() -> None:
+    class TtyStream(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stream = TtyStream()
+    configure_logging("info", stream=stream)
+
+    get_logger("executor").warning("step_retry", "retrying step", step="prepare")
+
+    output = stream.getvalue()
+    assert "\x1b[" in output
+    assert "WARN executor step_retry | retrying step step=prepare" in output
 
 
 def test_logger_writes_jsonl_records_to_stdout(capsys: pytest.CaptureFixture[str]):
@@ -122,3 +178,8 @@ def test_logger_rejects_invalid_level() -> None:
 
     with pytest.raises(ValueError):
         get_logger("executor").log("verbose", "event", "message")  # type: ignore[arg-type]
+
+
+def test_logger_rejects_invalid_output_format() -> None:
+    with pytest.raises(ValueError):
+        configure_logging("info", output_format="text")  # type: ignore[arg-type]

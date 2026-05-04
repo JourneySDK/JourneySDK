@@ -10,7 +10,7 @@ from threading import Lock
 from typing import Any, Literal, TextIO
 
 JourneyLogLevel = Literal["debug", "info", "warning", "error", "off"]
-JourneyOutputFormat = Literal["text", "jsonl"]
+JourneyOutputFormat = Literal["pretty", "structured", "jsonl"]
 
 _LEVEL_VALUES: dict[JourneyLogLevel, int] = {
     "debug": 10,
@@ -26,7 +26,7 @@ _LEVEL_NAMES: dict[JourneyLogLevel, str] = {
     "error": "ERROR",
     "off": "OFF",
 }
-_OUTPUT_FORMATS: set[JourneyOutputFormat] = {"text", "jsonl"}
+_OUTPUT_FORMATS: set[JourneyOutputFormat] = {"pretty", "structured", "jsonl"}
 _SAFE_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:/@+-]+$")
 _SENSITIVE_FIELD_FRAGMENTS = (
     "api_key",
@@ -39,7 +39,7 @@ _SENSITIVE_FIELD_FRAGMENTS = (
 
 _configured_level: JourneyLogLevel = "info"
 _configured_stream: TextIO | None = None
-_configured_output_format: JourneyOutputFormat = "text"
+_configured_output_format: JourneyOutputFormat = "pretty"
 _config_lock = Lock()
 
 
@@ -80,6 +80,7 @@ class JourneyLogger:
         timestamp = _format_timestamp()
         normalized_event = _normalize_event(event)
         output_format = _active_output_format()
+        stream = _active_stream()
         if output_format == "jsonl":
             line = _format_json_line(
                 timestamp=timestamp,
@@ -89,7 +90,7 @@ class JourneyLogger:
                 message=str(message),
                 fields=fields,
             )
-        else:
+        elif output_format == "structured":
             line = _format_log_line(
                 timestamp=timestamp,
                 level=level,
@@ -98,14 +99,22 @@ class JourneyLogger:
                 message=str(message),
                 fields=fields,
             )
-        stream = _active_stream()
+        else:
+            line = _format_pretty_line(
+                level=level,
+                component=self._component,
+                event=normalized_event,
+                message=str(message),
+                fields=fields,
+                stream=stream,
+            )
         print(line, file=stream, flush=True)
 
 
 def configure_logging(
     level: JourneyLogLevel = "info",
     stream: TextIO | None = None,
-    output_format: JourneyOutputFormat = "text",
+    output_format: JourneyOutputFormat = "pretty",
 ) -> None:
     """Configure process-wide Journey SDK output."""
 
@@ -165,6 +174,115 @@ def _format_json_line(
     for key in sorted(fields):
         record[key] = _json_field_value(key, fields[key])
     return json.dumps(record, ensure_ascii=True, default=str, separators=(",", ":"))
+
+
+def _format_pretty_line(
+    *,
+    level: JourneyLogLevel,
+    component: str,
+    event: str,
+    message: str,
+    fields: dict[str, object],
+    stream: TextIO,
+) -> str:
+    status = _pretty_status(level)
+    detail = _pretty_detail(event=event, message=message, fields=fields)
+    extras = _pretty_extra_fields(event=event, fields=fields)
+    suffix = f" {extras}" if extras else ""
+    line = f"{status} {component} {event} | {detail}{suffix}"
+    return _colorize_pretty(line, level=level, stream=stream)
+
+
+def _pretty_status(level: JourneyLogLevel) -> str:
+    if level == "warning":
+        return "WARN"
+    if level == "error":
+        return "ERR"
+    if level == "debug":
+        return "DBG"
+    return "OK"
+
+
+def _pretty_detail(
+    *,
+    event: str,
+    message: str,
+    fields: dict[str, object],
+) -> str:
+    if event == "step_success":
+        step = fields.get("step")
+        duration = fields.get("duration")
+        if step is not None and duration is not None:
+            attempt = fields.get("attempt")
+            if attempt is not None:
+                return f"step {step} attempt={attempt} ok duration={duration}"
+            return f"step {step} ok duration={duration}"
+    return message
+
+
+def _pretty_extra_fields(
+    *,
+    event: str,
+    fields: dict[str, object],
+) -> str:
+    hidden = _pretty_hidden_fields(event=event, fields=fields)
+    parts = []
+    for key in sorted(fields):
+        if key in hidden:
+            continue
+        value = _format_pretty_field_value(key, fields[key])
+        parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def _pretty_hidden_fields(*, event: str, fields: dict[str, object]) -> set[str]:
+    if (
+        event == "step_success"
+        and fields.get("step") is not None
+        and fields.get("duration") is not None
+    ):
+        return {"attempt", "case", "duration", "file", "journey", "node_index", "step"}
+    return set()
+
+
+def _format_pretty_field_value(key: str, value: object) -> str:
+    if _is_sensitive_field(key):
+        return "[redacted]"
+    safe_value = _json_safe_value(value)
+    if safe_value is None:
+        return "null"
+    if isinstance(safe_value, bool):
+        return "true" if safe_value else "false"
+    if isinstance(safe_value, int | float) and not isinstance(safe_value, bool):
+        return str(safe_value)
+    if isinstance(safe_value, str):
+        return safe_value
+    return json.dumps(
+        safe_value,
+        ensure_ascii=True,
+        default=str,
+        separators=(",", ":"),
+    )
+
+
+def _colorize_pretty(line: str, *, level: JourneyLogLevel, stream: TextIO) -> str:
+    if not _stream_supports_color(stream):
+        return line
+    colors = {
+        "debug": "\033[2m",
+        "info": "\033[32m",
+        "warning": "\033[33m",
+        "error": "\033[31m",
+    }
+    color = colors.get(level)
+    if color is None:
+        return line
+    return f"{color}{line}\033[0m"
+
+
+def _stream_supports_color(stream: TextIO) -> bool:
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty is not None and isatty())
 
 
 def _format_timestamp() -> str:

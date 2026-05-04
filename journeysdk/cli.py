@@ -1474,9 +1474,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        choices=("jsonl",),
-        default=None,
-        help="Set Journey output format; omit for default structured logs",
+        choices=("pretty", "structured", "jsonl"),
+        default="pretty",
+        help="Set Journey output format (default: pretty)",
     )
     parser.add_argument(
         "--log-level",
@@ -1506,7 +1506,7 @@ def _extract_option_value(argv: list[str], option: str) -> str | None:
 def _preconfigure_logging(argv: list[str]) -> None:
     level = _extract_option_value(argv, "--log-level") or "info"
     output = _extract_option_value(argv, "--output")
-    output_format = "jsonl" if output == "jsonl" else "text"
+    output_format = output if output in {"pretty", "structured", "jsonl"} else "pretty"
     try:
         configure_logging(level, output_format=output_format)  # type: ignore[arg-type]
     except ValueError:
@@ -1518,7 +1518,7 @@ def main(argv: list[str] | None = None) -> int:
     _preconfigure_logging(raw_argv)
     parser = build_parser()
     args = parser.parse_args(argv)
-    configure_logging(args.log_level, output_format=args.output or "text")
+    configure_logging(args.log_level, output_format=args.output)
     if args.interactive and getattr(args, "develop_step", None) is None:
         parser.error("--interactive requires --develop-step")
     return _cmd_execute(args)

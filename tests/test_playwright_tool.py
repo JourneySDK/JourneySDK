@@ -715,8 +715,8 @@ def test_open_page_opens_url_string_and_cleans_returned_page(
         "playwright_exit",
     ]
     log_output = capsys.readouterr().out
-    assert "component=playwright event=open_page_start" in log_output
-    assert "component=playwright event=open_page_success" in log_output
+    assert "OK playwright open_page_start" in log_output
+    assert "OK playwright open_page_success" in log_output
 
 
 def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypatch):
@@ -1172,14 +1172,14 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         ("prompt_rendered_html", "Welcome popup"),
         ("prompt_screenshot", "Welcome popup"),
     ]
-    assert "[journey]" in log_output
-    assert "component=playwright-prompt event=prompt_start" in log_output
-    assert 'click on a \\"Sign in\\" button and get the title' in log_output
+    assert "[journey]" not in log_output
+    assert "OK playwright-prompt prompt_start" in log_output
+    assert 'click on a "Sign in" button and get the title' in log_output
     assert "model='anthropic:claude-sonnet-4-5'" in log_output
     assert "active=page 0 'Login page' at http://example.test/login" in log_output
     assert "step 1/15: AI will click selector '#sign-in'" in log_output
-    assert "event=prompt_code" in log_output
-    assert 'page.locator(\\"#sign-in\\").click(timeout=timeout_ms)' in log_output
+    assert "OK playwright-prompt prompt_code" in log_output
+    assert 'page.locator("#sign-in").click(timeout=timeout_ms)' in log_output
     assert "discovered page 1 'Welcome popup' at http://example.test/sign-in-popup" in log_output
     assert "active page changed to page 1 'Welcome popup'" in log_output
     assert (
@@ -1382,7 +1382,7 @@ def test_journey_playwright_prompt_finish_with_blocking_error_raises(
     prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-visible-text>" in prompt_text
     assert reason in prompt_text
-    assert "event=prompt_failed" in log_output
+    assert "OK playwright-prompt prompt_failed" in log_output
     assert not (tmp_path / "sign-in.memory.json").exists()
 
 
@@ -1420,7 +1420,7 @@ def test_journey_playwright_prompt_fail_action_raises_without_final_output(
 
     assert len(fake_model.calls) == 1
     assert not fake_model.structured_calls
-    assert "event=prompt_failed" in log_output
+    assert "OK playwright-prompt prompt_failed" in log_output
     assert not (tmp_path / "sign-in.memory.json").exists()
 
 
@@ -1562,7 +1562,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
         ("prompt_screenshot", "Chat"),
     ]
     assert "step 1/15: AI will click selector '#attach'" in log_output
-    assert 'page.locator(\\"#attach\\").click(timeout=timeout_ms)' in log_output
+    assert 'page.locator("#attach").click(timeout=timeout_ms)' in log_output
     assert "step 1/15: rejected on page 0 'Chat'" in log_output
     assert "AssertionError: No click handler registered for '#attach'" in log_output
     assert (
@@ -1570,8 +1570,8 @@ def test_journey_playwright_prompt_retries_rejected_python(
         "'I need to fix a toilet'"
     ) in log_output
     assert (
-        'page.locator(\\"#composer\\").fill'
-        '(\\"I need to fix a toilet\\", timeout=timeout_ms)'
+        'page.locator("#composer").fill'
+        '("I need to fix a toilet", timeout=timeout_ms)'
     ) in log_output
 
 

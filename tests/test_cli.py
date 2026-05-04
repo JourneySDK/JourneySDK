@@ -134,7 +134,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "--state",
             "run.state",
             "--output",
-            "jsonl",
+            "structured",
             "--log-level",
             "debug",
             "--fail-fast",
@@ -146,7 +146,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.journey == "alpha"
     assert execute_args.step == "target"
     assert execute_args.state == "run.state"
-    assert execute_args.output == "jsonl"
+    assert execute_args.output == "structured"
     assert execute_args.log_level == "debug"
     assert execute_args.fail_fast is True
     assert execute_args.no_memory is True
@@ -181,6 +181,10 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
         parser.parse_args(["--step", "target", "--develop-step", "target"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--json"])
+
+    assert parser.parse_args(["--output", "pretty"]).output == "pretty"
+    assert parser.parse_args(["--output", "structured"]).output == "structured"
+    assert parser.parse_args(["--output", "jsonl"]).output == "jsonl"
 
 
 def test_execute_develop_step_rejects_json_mode(
@@ -325,7 +329,7 @@ def test_pause_choice_reads_one_key_from_tty(
     assert _read_pause_choice("Press c to continue or r to retry: ") == "r"
 
     output = capsys.readouterr().out
-    assert "component=cli event=pause_prompt" in output
+    assert "OK cli pause_prompt" in output
     assert "Press c to continue or r to retry: " in output
     assert ("read", 1) in calls
     assert ("set", 123, 7) in calls
@@ -421,8 +425,40 @@ def test_execute_prints_all_selected_plans_before_any_journey_runs(
         "Summary: 2 journeys planned, 2 cases planned, 0 failed",
         "Execution",
     )
-    assert "component=executor event=step_start" in log_output
+    assert "[journey]" not in log_output
+    assert "OK executor step_start" in log_output
     assert "  step alpha_step attempt=1 start" in log_output
+
+
+def test_execute_output_structured_preserves_logfmt_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+
+        def finish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(finish)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    exit_code = main(["--file", "flow.py", "--output", "structured"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "[journey]" in captured.out
+    assert "component=cli event=plan_start message=Plan" in captured.out
+    assert "component=executor event=step_success" in captured.out
+    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in captured.out
 
 
 def test_execute_log_level_off_suppresses_diagnostics(
@@ -732,11 +768,11 @@ def test_execute_streams_live_case_progress_for_all_branches(
     assert "- case_2 start branches={bg_1=branch_2}" in log_output
     assert "- case_2 ok steps=2 duration=" in log_output
     assert "  step prepare attempt=1 start" in log_output
-    assert "  step prepare attempt=1 ok duration=" in log_output
+    assert "step prepare attempt=1 ok duration=" in log_output
     assert "  branch bg_1=branch_1" in log_output
-    assert "  step finish_fast attempt=1 ok duration=" in log_output
+    assert "step finish_fast attempt=1 ok duration=" in log_output
     assert "  branch bg_1=branch_2" in log_output
-    assert "  step finish_manual attempt=1 ok duration=" in log_output
+    assert "step finish_manual attempt=1 ok duration=" in log_output
     assert "Summary: 1 journey executed, 2 cases executed, 0 failed" in output
     _assert_ordered(
         output,
@@ -799,9 +835,9 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
         in log_output
     )
     assert "stopped_at=finish_manual replay_anchor=prepare" in log_output
-    assert "  step prepare attempt=1 ok duration=" in log_output
+    assert "step prepare attempt=1 ok duration=" in log_output
     assert "  branch bg_1=branch_2" in log_output
-    assert "  step finish_manual attempt=1 ok duration=" in log_output
+    assert "step finish_manual attempt=1 ok duration=" in log_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
     _assert_ordered(
         output,
@@ -861,10 +897,10 @@ def test_execute_develop_step_steps_forward_with_continue(
         "Execution",
         "Development mode paused after step publish attempt=1 ok.",
     )
-    assert "  step prepare attempt=1 ok duration=" in log_output
-    assert "  step publish attempt=1 ok duration=" in log_output
+    assert "step prepare attempt=1 ok duration=" in log_output
+    assert "step publish attempt=1 ok duration=" in log_output
     assert "Development mode paused after step publish attempt=1 ok." in output
-    assert "  step cleanup attempt=1 ok duration=" in log_output
+    assert "step cleanup attempt=1 ok duration=" in log_output
     assert "Development mode paused after step cleanup attempt=1 ok." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
@@ -902,10 +938,10 @@ def test_execute_develop_step_exits_after_target_without_prompt(
     output = captured.out
     log_output = captured.out
     assert exit_code == 0
-    assert "  step prepare attempt=1 ok duration=" in log_output
-    assert "  step publish attempt=1 ok duration=" in log_output
+    assert "step prepare attempt=1 ok duration=" in log_output
+    assert "step publish attempt=1 ok duration=" in log_output
     assert "Development mode stopped after step publish attempt=1 ok." in log_output
-    assert "  step cleanup attempt=1 ok duration=" not in log_output
+    assert "step cleanup attempt=1 ok duration=" not in log_output
     assert "Press c to continue or r to retry" not in output
     assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
 
@@ -1363,9 +1399,9 @@ def test_execute_develop_step_retry_same_step_after_failed_pause(
     assert "Development mode paused after step poll attempt=1 failed (pending)." in output
     assert "  step poll attempt=2 failed duration=" in log_output
     assert "Development mode paused after step poll attempt=2 failed (pending)." in output
-    assert "  step poll attempt=3 ok duration=" in log_output
+    assert "step poll attempt=3 ok duration=" in log_output
     assert "Development mode paused after step poll attempt=3 ok." in output
-    assert "  step finish attempt=1 ok duration=" in log_output
+    assert "step finish attempt=1 ok duration=" in log_output
     assert "Development mode paused after step finish attempt=1 ok." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
@@ -1882,7 +1918,7 @@ def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in output
 
 
-def test_execute_streams_retry_events_in_text_mode(
+def test_execute_streams_retry_events_in_pretty_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1916,7 +1952,7 @@ def test_execute_streams_retry_events_in_text_mode(
     assert "  step poll attempt=1 retry duration=" in log_output
     assert "remaining=0 error=RuntimeError: pending" in log_output
     assert "  step poll attempt=2 start" in log_output
-    assert "  step poll attempt=2 ok duration=" in log_output
+    assert "step poll attempt=2 ok duration=" in log_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -2332,7 +2368,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
     assert int(seed_file.read_text(encoding="utf-8")) > int(runtime_seed)
 
 
-def test_execute_state_resume_streams_case_resume_in_text_mode(
+def test_execute_state_resume_streams_case_resume_in_pretty_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2376,7 +2412,7 @@ def test_execute_state_resume_streams_case_resume_in_text_mode(
     assert second_exit == 0
     assert "- case_1 resume branches={}" in second_logs
     assert "  step maybe_interrupt attempt=2 start" in second_logs
-    assert "  step maybe_interrupt attempt=2 ok duration=" in second_logs
+    assert "step maybe_interrupt attempt=2 ok duration=" in second_logs
     assert "- case_1 ok steps=1 duration=" in second_logs
 
 
@@ -2457,7 +2493,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
     assert "  step poll attempt=3 retry duration=" in second_logs
     assert "remaining=1 error=RuntimeError: pending" in second_logs
     assert "  step poll attempt=4 start" in second_logs
-    assert "  step poll attempt=4 ok duration=" in second_logs
+    assert "step poll attempt=4 ok duration=" in second_logs
 
     assert attempt_counter_file.read_text(encoding="utf-8") == "4"
     events = events_file.read_text(encoding="utf-8").splitlines()

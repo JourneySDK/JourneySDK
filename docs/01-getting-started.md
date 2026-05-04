@@ -46,19 +46,20 @@ That is the whole authored flow. The helper functions in the same file do the re
 uv run journey --file docs/first_journey/first_journey.py
 ```
 
-Expected structured stdout includes:
+Expected pretty stdout includes:
 
 ```console
-[journey] time=... level=INFO component=cli event=plan_start message=Plan
-[journey] time=... level=INFO component=cli event=plan_journey message="Journey docs/first_journey/first_journey.py:first_journey" ...
-[journey] time=... level=INFO component=executor event=step_start message="  step create_customer_profile attempt=1 start" ...
-[journey] time=... level=INFO component=executor event=step_success message="  step create_customer_profile attempt=1 ok duration=..." ...
-[journey] time=... level=INFO component=cli event=execute_summary message="Summary: 1 journey executed, 1 case executed, 0 failed" ...
+OK cli plan_start | Plan
+OK cli plan_journey | Journey docs/first_journey/first_journey.py:first_journey ...
+OK executor step_start | step create_customer_profile attempt=1 start ...
+OK executor step_success | step create_customer_profile attempt=1 ok duration=... ...
+OK cli execute_summary | Summary: 1 journey executed, 1 case executed, 0 failed ...
 ```
 
 The important part is not the formatting. The important part is that Journey routes plan summaries, execution results,
-and every step boundary through one logger-owned stdout stream. Use `--output jsonl` for one parseable JSON object per
-line, `--log-level off` to suppress all Journey-owned output, or `--log-level debug` for more tool detail.
+and every step boundary through one logger-owned stdout stream. Use `--output structured` for logfmt-style fields,
+`--output jsonl` for one parseable JSON object per line, `--log-level off` to suppress all Journey-owned output, or
+`--log-level debug` for more tool detail.
 
 ## One File Can Define More Than One Journey
 
@@ -101,6 +102,6 @@ uv run journey --file docs/selection_journeys/selection_journeys.py --journey in
 
 - Step outputs stay explicit. The second step receives the first step's return value directly.
 - `--journey` is the easiest way to work in a file that holds several flows.
-- `--output jsonl` is for tooling and CI. The default text output is better for humans during local development.
+- `--output jsonl` is for tooling and CI. The default pretty output is better for humans during local development.
 
 Continue with [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md) when you want one authored flow to cover multiple paths.

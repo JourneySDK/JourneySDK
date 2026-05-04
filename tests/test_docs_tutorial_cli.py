@@ -55,7 +55,7 @@ def test_first_journey_readme_commands(
     assert "Summary: 1 journey planned, 1 case planned, 0 failed" in execute_output
     assert "Execution" in execute_output
     assert "Journey docs/first_journey/first_journey.py:first_journey" in execute_output
-    assert "  step create_customer_profile attempt=1 ok duration=" in execute_logs
+    assert "step create_customer_profile attempt=1 ok duration=" in execute_logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
 
