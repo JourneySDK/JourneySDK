@@ -201,7 +201,13 @@ def _format_pretty_line(
     )
     if line is None:
         return None
-    return _colorize_pretty(line, level=level, stream=stream)
+    return _colorize_pretty(
+        line,
+        level=level,
+        component=component,
+        event=event,
+        stream=stream,
+    )
 
 
 def _pretty_render_event(
@@ -595,14 +601,37 @@ def _pretty_prompt_row(label: str, detail: object) -> str:
 
 
 def _pretty_prompt_continuation(detail: object) -> str:
-    return f"{' ' * 10}{' ' * (_PRETTY_PROMPT_LABEL_WIDTH + 1)}{_pretty_text(detail)}"
+    prefix = f"{' ' * 10}{' ' * (_PRETTY_PROMPT_LABEL_WIDTH + 1)}"
+    return _pretty_indent_lines(_pretty_text(detail), prefix)
 
 
 def _pretty_row(*, indent: int, label: str, detail: object, width: int) -> str:
     text = _pretty_text(detail)
     if not text:
         return f"{' ' * indent}{label}"
-    return f"{' ' * indent}{label:<{width}} {text}"
+    first_prefix = f"{' ' * indent}{label:<{width}} "
+    continuation_prefix = " " * len(first_prefix)
+    return _pretty_first_line_with_continuation(
+        text,
+        first_prefix=first_prefix,
+        continuation_prefix=continuation_prefix,
+    )
+
+
+def _pretty_indent_lines(text: str, prefix: str) -> str:
+    return "\n".join(f"{prefix}{line}" for line in text.splitlines() or [""])
+
+
+def _pretty_first_line_with_continuation(
+    text: str,
+    *,
+    first_prefix: str,
+    continuation_prefix: str,
+) -> str:
+    lines = text.splitlines() or [""]
+    rendered = [f"{first_prefix}{lines[0]}"]
+    rendered.extend(f"{continuation_prefix}{line}" for line in lines[1:])
+    return "\n".join(rendered)
 
 
 def _step_detail(action: str, fields: dict[str, object], *, include_attempt: bool) -> str:
@@ -798,7 +827,14 @@ def _format_pretty_field_value(key: str, value: object) -> str:
     )
 
 
-def _colorize_pretty(line: str, *, level: JourneyLogLevel, stream: TextIO) -> str:
+def _colorize_pretty(
+    line: str,
+    *,
+    level: JourneyLogLevel,
+    component: str,
+    event: str,
+    stream: TextIO,
+) -> str:
     if not _stream_supports_color(stream):
         return line
     colors = {
@@ -806,10 +842,60 @@ def _colorize_pretty(line: str, *, level: JourneyLogLevel, stream: TextIO) -> st
         "warning": "\033[33m",
         "error": "\033[31m",
     }
-    color = colors.get(level)
+    color = colors.get(level) or _pretty_event_color(component=component, event=event)
     if color is None:
         return line
     return f"{color}{line}\033[0m"
+
+
+def _pretty_event_color(*, component: str, event: str) -> str | None:
+    if component == "cli":
+        if event in {"plan_start", "execution_section"}:
+            return "\033[1m"
+        if event in {"plan_summary", "execute_summary"}:
+            return "\033[1m"
+        if event in {"plan_journey", "plan_case", "discovery_start", "discovery_complete"}:
+            return "\033[36m"
+        if event.startswith("interrupt") or event in {"execution_interrupted", "graceful_interrupt_requested"}:
+            return "\033[33m"
+        return None
+
+    if component == "executor":
+        if event in {"step_success", "case_complete"}:
+            return "\033[32m"
+        if event in {"step_retry", "step_interrupted"}:
+            return "\033[33m"
+        if event == "step_failure":
+            return "\033[31m"
+        if event in {"journey_start", "case_start", "case_resume", "step_start", "branch_select"}:
+            return "\033[36m"
+        return None
+
+    if component == "playwright":
+        if event == "open_page_failure" or event.startswith("browser_install_failure"):
+            return "\033[31m"
+        return "\033[36m"
+
+    if component == "playwright-prompt":
+        if event in {"prompt_failed", "prompt_rejected"}:
+            return "\033[33m"
+        if event in {"prompt_step_success", "prompt_finish"}:
+            return "\033[32m"
+        if event == "prompt_code":
+            return "\033[2m"
+        return "\033[35m"
+
+    if component in {
+        "cloud",
+        "docker",
+        "email",
+        "email-cloud",
+        "webhook",
+        "webhook-cloud",
+    }:
+        return "\033[36m"
+
+    return None
 
 
 def _stream_supports_color(stream: TextIO) -> bool:

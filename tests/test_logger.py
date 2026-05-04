@@ -141,6 +141,30 @@ def test_logger_pretty_renders_browser_and_ai_prompt_activity(
     )
 
 
+def test_logger_pretty_aligns_multiline_prompt_details(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    get_logger("playwright-prompt").info(
+        "prompt_rejected",
+        "step 1/15 rejected",
+        step=1,
+        max_steps=15,
+        detail=(
+            "TimeoutError: Locator.click: Timeout 5000ms exceeded.\n"
+            "Call log:\n"
+            "- waiting for get_by_role(\"button\", name=\"Log in\")"
+        ),
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == (
+        "          1/15 rejected             TimeoutError: Locator.click: Timeout 5000ms exceeded.\n"
+        "                                    Call log:\n"
+        "                                    - waiting for get_by_role(\"button\", name=\"Log in\")\n"
+    )
+
+
 def test_logger_writes_structured_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
     configure_logging("info", output_format="structured")
 
@@ -251,11 +275,37 @@ def test_logger_colors_pretty_output_for_tty_streams() -> None:
     stream = TtyStream()
     configure_logging("info", stream=stream)
 
+    get_logger("cli").info("plan_start", "Plan")
+    get_logger("playwright").info(
+        "open_page_start",
+        "opening Playwright page",
+        browser="chromium",
+        url="https://app.example/login",
+    )
+    get_logger("playwright-prompt").info(
+        "prompt_start",
+        "prompt start",
+        model="claude-sonnet-4-6",
+        max_steps=15,
+        timeout="5s",
+    )
+    get_logger("executor").info(
+        "step_success",
+        "  step prepare attempt=1 ok duration=0.012s",
+        step="prepare",
+        attempt=1,
+        duration="0.012s",
+    )
     get_logger("executor").warning("step_retry", "retrying step", step="prepare")
+    get_logger("executor").error("step_failure", "failing step", step="prepare")
 
     output = stream.getvalue()
-    assert "\x1b[" in output
-    assert "Warning: prepare retrying" in output
+    assert "\x1b[1mPlan\x1b[0m" in output
+    assert "\x1b[36m        Browser" in output
+    assert "\x1b[35m        AI prompt" in output
+    assert "\x1b[32m      prepare" in output
+    assert "\x1b[33mWarning: prepare retrying\x1b[0m" in output
+    assert "\x1b[31mError: prepare failed\x1b[0m" in output
 
 
 def test_logger_writes_jsonl_records_to_stdout(capsys: pytest.CaptureFixture[str]):
