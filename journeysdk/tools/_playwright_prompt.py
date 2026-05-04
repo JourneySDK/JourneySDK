@@ -17,7 +17,7 @@ from urllib.parse import urlsplit, urlunsplit
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langchain_core.tools import tool
-from journeysdk.logger import get_logger
+from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_line, pretty_row
 from journeysdk._prompt_memory import (
     MAX_PROMPT_MEMORY_ITEMS,
     load_prompt_memory_entry,
@@ -89,6 +89,34 @@ _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentEleme
 _VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
 _PROMPT_LOGGER = get_logger("playwright-prompt")
 _T = TypeVar("_T")
+_PROMPT_DETAIL_INDENT = 10
+_PROMPT_LABEL_WIDTH = 25
+
+
+def _prompt_row(label: object, detail: object = "", *, style: PrettyStyle = "accent") -> PrettyLine:
+    return pretty_row(
+        label,
+        detail,
+        indent=_PROMPT_DETAIL_INDENT,
+        label_width=_PROMPT_LABEL_WIDTH,
+        style=style,
+    )
+
+
+def _prompt_continuation(detail: object, *, style: PrettyStyle = "code") -> PrettyLine:
+    return pretty_line(
+        detail,
+        indent=_PROMPT_DETAIL_INDENT + _PROMPT_LABEL_WIDTH + 1,
+        style=style,
+    )
+
+
+def _prompt_step_ref(*, step: int | None, max_steps: int | None, step_label: str | None = None) -> str:
+    if step is not None and max_steps is not None:
+        return f"{step}/{max_steps}"
+    if step_label is not None and step_label.startswith("step "):
+        return step_label.removeprefix("step ")
+    return step_label or "step"
 
 
 @dataclass(frozen=True)
@@ -202,6 +230,21 @@ class _PromptSession:
             f"timeout={timeout_seconds:g}s; "
             f"active={_page_summary(active_page)}",
             event="prompt_start",
+            pretty=[
+                pretty_row(
+                    "AI prompt",
+                    (
+                        f"model={self._model} "
+                        f"max_steps={self._max_steps} "
+                        f"timeout={timeout_seconds:g}s"
+                    ),
+                    indent=8,
+                    label_width=27,
+                    style="accent",
+                ),
+                _prompt_row("instruction", self._instruction, style="accent"),
+                _prompt_row("page", _page_summary(active_page), style="accent"),
+            ],
             instruction=self._instruction,
             model=self._model,
             max_steps=self._max_steps,
@@ -216,6 +259,11 @@ class _PromptSession:
             f"step {step_index}/{self._max_steps}: AI will "
             f"{action_description}",
             event="prompt_action",
+            pretty=_prompt_row(
+                f"{step_index}/{self._max_steps} action",
+                action_description,
+                style="accent",
+            ),
             step=step_index,
             max_steps=self._max_steps,
             action=action_description,
@@ -231,6 +279,11 @@ class _PromptSession:
             _emit_prompt_log(
                 f"discovered {_page_summary(page)}",
                 event="page_discovered",
+                pretty=_prompt_row(
+                    "page discovered",
+                    _page_summary(page),
+                    style="accent",
+                ),
                 page=page.index,
                 title=page.title,
                 url=page.url,
@@ -243,6 +296,11 @@ class _PromptSession:
         _emit_prompt_log(
             f"active page changed to {_page_summary(active_page)}",
             event="active_page_change",
+            pretty=_prompt_row(
+                "active page",
+                _page_summary(active_page),
+                style="accent",
+            ),
             previous_page=previous_active_page_index,
             active_page=self._active_page_index,
             page_summary=_page_summary(active_page),
@@ -336,6 +394,11 @@ class _PromptSession:
             f"step {step_index}/{self._max_steps}: succeeded on "
             f"{_page_summary(self._prompt_pages()[self._active_page_index])}",
             event="prompt_step_success",
+            pretty=_prompt_row(
+                f"{step_index}/{self._max_steps} ok",
+                _page_summary(self._prompt_pages()[self._active_page_index]),
+                style="success",
+            ),
             step=step_index,
             max_steps=self._max_steps,
             page=self._active_page_index,
@@ -567,6 +630,13 @@ class _PromptSession:
         _emit_prompt_log(
             f"prompt stopped: {message}",
             event="prompt_stopped",
+            pretty=pretty_row(
+                "AI prompt",
+                message,
+                indent=8,
+                label_width=27,
+                style="warning",
+            ),
             max_steps=self._max_steps,
         )
         raise _PromptMaxStepsError(message)
@@ -597,6 +667,11 @@ class _PromptSession:
             f"step {step_index}/{self._max_steps}: finished with output: "
             f"{_prompt_output_summary(final_output)}",
             event="prompt_finish",
+            pretty=_prompt_row(
+                f"{step_index}/{self._max_steps} finish",
+                _prompt_output_summary(final_output),
+                style="success",
+            ),
             step=step_index,
             max_steps=self._max_steps,
             output=_prompt_output_summary(final_output),
@@ -746,6 +821,11 @@ class _PromptSession:
             f"{_page_summary(self._prompt_pages()[self._active_page_index])}: "
             f"{step.detail}",
             event="prompt_rejected",
+            pretty=_prompt_row(
+                f"{step_index}/{self._max_steps} rejected",
+                step.detail,
+                style="warning",
+            ),
             step=step_index,
             max_steps=self._max_steps,
             page=self._active_page_index,
@@ -765,6 +845,13 @@ class _PromptSession:
             f"step {step_index}/{self._max_steps}: prompt failed: "
             f"{normalized_reason}",
             event="prompt_failed",
+            pretty=pretty_row(
+                "AI prompt",
+                f"failed at {step_index}/{self._max_steps}: {normalized_reason}",
+                indent=8,
+                label_width=27,
+                style="warning",
+            ),
             step=step_index,
             max_steps=self._max_steps,
             page=self._active_page_index,
@@ -794,6 +881,11 @@ class _PromptSession:
                 _emit_prompt_log(
                     f"loaded prompt memory from {self._memory_path}",
                     event="prompt_memory_loaded",
+                    pretty=_prompt_row(
+                        "memory",
+                        f"loaded {self._memory_path}",
+                        style="accent",
+                    ),
                     path=str(self._memory_path),
                     key=self._memory_key,
                 )
@@ -831,6 +923,11 @@ class _PromptSession:
         _emit_prompt_log(
             f"wrote prompt memory to {self._memory_path}",
             event="prompt_memory_saved",
+            pretty=_prompt_row(
+                "memory",
+                f"saved {self._memory_path} run_count={run_count}",
+                style="accent",
+            ),
             path=str(self._memory_path),
             key=self._memory_key,
             run_count=run_count,
@@ -1100,16 +1197,19 @@ def _emit_prompt_log(
     message: str,
     *,
     event: str = "prompt_log",
+    pretty: object = None,
     **fields: object,
 ) -> None:
-    _PROMPT_LOGGER.info(event, message, **fields)
+    _PROMPT_LOGGER.info(event, message, pretty=pretty, **fields)
 
 
 def _emit_prompt_code_log(*, step_label: str, code: str) -> None:
+    step_ref = _prompt_step_ref(step=None, max_steps=None, step_label=step_label)
     if not code:
         _emit_prompt_log(
             f"{step_label} code: <blank>",
             event="prompt_code",
+            pretty=_prompt_row(f"{step_ref} code", "<blank>", style="code"),
             step_label=step_label,
             code="<blank>",
         )
@@ -1118,6 +1218,7 @@ def _emit_prompt_code_log(*, step_label: str, code: str) -> None:
         _emit_prompt_log(
             f"{step_label} code: {code}",
             event="prompt_code",
+            pretty=_prompt_row(f"{step_ref} code", code, style="code"),
             step_label=step_label,
             code=code,
         )
@@ -1125,12 +1226,14 @@ def _emit_prompt_code_log(*, step_label: str, code: str) -> None:
     _emit_prompt_log(
         f"{step_label} code:",
         event="prompt_code",
+        pretty=_prompt_row(f"{step_ref} code", "", style="code"),
         step_label=step_label,
     )
     for line in code.splitlines():
         _emit_prompt_log(
             f"  {line}",
             event="prompt_code",
+            pretty=_prompt_continuation(line, style="code"),
             step_label=step_label,
             code=line,
         )

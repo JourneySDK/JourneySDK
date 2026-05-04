@@ -18,7 +18,7 @@ branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydr
 - `journeysdk/planner.py`: journey compilation (aka planning)
 - `journeysdk/executor.py`: execution of a compiled journey
 - `journeysdk/cli.py`: CLI implementation
-- `journeysdk/logger.py`: shared diagnostic logging API and common stderr format
+- `journeysdk/logger.py`: shared diagnostic logging API and generic output formatting
 - `docs/`: runnable tutorial journeys plus the handbook pages that explain them
 
 ## Preferred commands
@@ -34,8 +34,9 @@ to scope to one file, `--journey` to scope to one decorated function name, and `
 case that reaches a target step label. Targeted `--step` runs report `replay_anchor` for branch step anchors, but they
 do not skip directly to that anchor unless state or retry behavior causes replay.
 
-Journey diagnostics use `journeysdk.logger.get_logger(...)` and emit `[journey] ...` lines to stderr by default. The
-CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout for plans, summaries, prompts, and JSON.
+Journey-owned output uses `journeysdk.logger.get_logger(...)` and writes to stdout. The default `pretty` output is for
+humans; `--output structured` emits `[journey] ...` logfmt records and `--output jsonl` emits JSON Lines. The CLI
+controls visibility with `--log-level debug|info|warning|error|off`.
 
 ## Core principles
 
@@ -77,11 +78,37 @@ CLI controls this with `--log-level debug|info|warning|error|off`; keep stdout f
   raw observations.
 - Keep memory names literal and unique within a compiled journey so planning can report mistakes before execution.
 
+## Logger dependency rule
+
+`journeysdk/logger.py` is infrastructure. It must not know about CLI, executor, Playwright, Docker, email, webhook,
+cloud, or any other component's event names or field semantics.
+
+Other modules depend on the logger by passing machine-readable event data and optional human-facing `pretty=` output:
+
+```python
+from journeysdk.logger import get_logger, pretty_row
+
+_LOGGER = get_logger("component")
+
+_LOGGER.info(
+    "event_name",
+    "machine-readable message",
+    pretty=pretty_row("Component", "human readable detail", indent=8, label_width=27, style="tool"),
+    useful_field="value",
+)
+```
+
+Use `pretty=False` for events that should remain in `structured` and `jsonl` but should not be shown in the human
+timeline. Do not add `if component == ...` or `if event == ...` branches to `logger.py`; put that formatting beside the
+event emitter instead. See `CONTRIBUTING.md` for the full Logger API rules.
+
 ## Change guidance
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.
-- Use `journeysdk.logger.get_logger(...)` for SDK, tool, or tutorial diagnostics instead of ad hoc
-  `print(..., file=sys.stderr)`.
+- Use `journeysdk.logger.get_logger(...)` for SDK, tool, or tutorial diagnostics instead of ad hoc `print(...)`.
+- Keep logger dependencies inverted: `journeysdk/logger.py` may know generic concepts like levels, redaction, rows, and
+  styles, but it must not branch on component names, Journey event names, or event field semantics. Put human `pretty=`
+  formatting beside the module that emits the event.
 - Do not add tests that assert exact prose inside `*.md` files; prefer behavior-level checks for runnable examples,
   CLI behavior, repository boundaries, or relevant file existence.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.

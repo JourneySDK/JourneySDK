@@ -22,7 +22,7 @@ from .errors import (
     InvalidBranchUsageError,
     StepNotFoundError,
 )
-from .logger import get_logger
+from .logger import get_logger, pretty_line, pretty_row
 from .models import (
     BranchMarkerNode,
     CaseExecutionReport,
@@ -365,6 +365,29 @@ def _step_name(node: StepNode) -> str:
     return node.label or node.node_id
 
 
+def _step_detail(action: str, *, attempt: int, duration: str | None = None) -> str:
+    parts = [action, f"attempt={attempt}"]
+    if duration is not None:
+        parts.append(f"duration={duration}")
+    return " ".join(parts)
+
+
+def _step_problem(
+    step: str,
+    action: str,
+    *,
+    duration: str | None,
+    error: str | None,
+    fallback: str,
+) -> str:
+    if duration is None:
+        return f"{step} {fallback}"
+    detail = f"{step} {action} after {duration}"
+    if error is not None:
+        detail += f" ({error})"
+    return detail
+
+
 class _LoggingExecutionObserver(_ExecutionObserver):
     def __init__(self) -> None:
         self._logger = get_logger("executor")
@@ -378,6 +401,7 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "journey_start",
             "starting journey execution",
+            pretty=pretty_line(f"  {plan.journey_id}", style="context"),
             journey=plan.journey_id,
             function_ref=plan.function_ref,
             cases=len(selected_cases),
@@ -393,6 +417,15 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "case_start",
             f"- {case_plan.case_id} start branches={_format_branch_env(case_plan.branch_env)}",
+            pretty=pretty_line(
+                f"    {case_plan.case_id}"
+                + (
+                    f"  branches={_format_branch_env(case_plan.branch_env)}"
+                    if case_plan.branch_env
+                    else ""
+                ),
+                style="context",
+            ),
             case=case_plan.case_id,
             branches=_format_branch_env(case_plan.branch_env),
             replay_anchor=replay_anchor,
@@ -410,6 +443,15 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "case_resume",
             f"- {case_plan.case_id} resume branches={_format_branch_env(case_plan.branch_env)}",
+            pretty=pretty_line(
+                f"    {case_plan.case_id} resume"
+                + (
+                    f"  branches={_format_branch_env(case_plan.branch_env)}"
+                    if case_plan.branch_env
+                    else ""
+                ),
+                style="context",
+            ),
             case=case_plan.case_id,
             branches=_format_branch_env(case_plan.branch_env),
             replay_anchor=replay_anchor,
@@ -428,6 +470,13 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "step_start",
             f"  step {_step_name(node)} attempt={attempt} start",
+            pretty=pretty_row(
+                _step_name(node),
+                _step_detail("start", attempt=attempt),
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
             case=case_plan.case_id,
             step=_step_name(node),
             node_index=node_index,
@@ -444,6 +493,13 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "branch_select",
             f"  branch {node.group_id}={node.active_key}",
+            pretty=pretty_row(
+                f"branch {node.group_id}",
+                node.active_key,
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
             case=case_plan.case_id,
             branch_group=node.group_id,
             branch=node.active_key,
@@ -471,6 +527,13 @@ class _LoggingExecutionObserver(_ExecutionObserver):
                 f"remaining={remaining_retries} "
                 f"error={_format_exception(error)}"
             ),
+            pretty=_step_problem(
+                _step_name(node),
+                "retry",
+                duration=_format_duration(duration_seconds),
+                error=_format_exception(error),
+                fallback="retrying",
+            ),
             case=case_plan.case_id,
             step=_step_name(node),
             node_index=node_index,
@@ -496,6 +559,17 @@ class _LoggingExecutionObserver(_ExecutionObserver):
                 f"  step {_step_name(node)} attempt={attempt} ok "
                 f"duration={_format_duration(duration_seconds)}"
             ),
+            pretty=pretty_row(
+                _step_name(node),
+                _step_detail(
+                    "ok",
+                    attempt=attempt,
+                    duration=_format_duration(duration_seconds),
+                ),
+                indent=6,
+                label_width=29,
+                style="success",
+            ),
             case=case_plan.case_id,
             step=_step_name(node),
             node_index=node_index,
@@ -519,6 +593,13 @@ class _LoggingExecutionObserver(_ExecutionObserver):
                 f"  step {_step_name(node)} attempt={attempt} failed "
                 f"duration={_format_duration(duration_seconds)} "
                 f"error={_format_exception(error)}"
+            ),
+            pretty=_step_problem(
+                _step_name(node),
+                "failed",
+                duration=_format_duration(duration_seconds),
+                error=_format_exception(error),
+                fallback="failed",
             ),
             case=case_plan.case_id,
             step=_step_name(node),
@@ -544,6 +625,13 @@ class _LoggingExecutionObserver(_ExecutionObserver):
                 f"  step {_step_name(node)} attempt={attempt} interrupted "
                 f"duration={_format_duration(duration_seconds)} "
                 f"error={_format_exception(error)}"
+            ),
+            pretty=_step_problem(
+                _step_name(node),
+                "interrupted",
+                duration=_format_duration(duration_seconds),
+                error=_format_exception(error),
+                fallback="interrupted",
             ),
             case=case_plan.case_id,
             step=_step_name(node),
@@ -574,6 +662,22 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "case_complete",
             " ".join(parts),
+            pretty=pretty_line(
+                f"    {report.case_id} done "
+                f"steps={sum(1 for record in report.records if record.node_type == 'StepNode')} "
+                f"duration={_format_duration(duration_seconds)}"
+                + (
+                    f" stopped_at={report.stopped_at_label}"
+                    if report.stopped_at_label is not None
+                    else ""
+                )
+                + (
+                    f" replay_anchor={report.replay_anchor}"
+                    if report.replay_anchor is not None
+                    else ""
+                ),
+                style="success",
+            ),
             case=report.case_id,
             steps=sum(1 for record in report.records if record.node_type == "StepNode"),
             duration=_format_duration(duration_seconds),
@@ -585,6 +689,7 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "journey_complete",
             "journey execution completed",
+            pretty=False,
             journey=report.journey_id,
             cases=len(report.case_reports),
         )
@@ -594,6 +699,10 @@ class _LoggingExecutionObserver(_ExecutionObserver):
             "develop_state_restart",
             "Already-run journey code changed before the paused step; "
             f"restarting {case_id} from the beginning.",
+            pretty=(
+                "Already-run journey code changed before the paused step; "
+                f"restarting {case_id} from the beginning."
+            ),
             case=case_id,
         )
 

@@ -15,13 +15,17 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
-from journeysdk.logger import get_logger
+from journeysdk.logger import PrettyLine, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
 _SUPPORTED_CONTAINER_STATES = {"running", "created", "exited"}
 _UNSUPPORTED_CONTAINER_STATES = {"paused", "restarting", "removing", "dead"}
 _LOGGER = get_logger("docker")
+
+
+def _docker_row(detail: object) -> PrettyLine:
+    return pretty_row("Docker", detail, indent=8, label_width=27, style="tool")
 
 
 @dataclass(frozen=True)
@@ -140,6 +144,7 @@ def run_docker(
         _LOGGER.info(
             "compose_start",
             "starting Docker Compose stack",
+            pretty=_docker_row("starting Docker Compose stack"),
             compose_file=original_compose_path,
             project=resolved_project_name,
         )
@@ -181,6 +186,7 @@ def run_docker(
         _LOGGER.info(
             "compose_success",
             "Docker Compose stack started",
+            pretty=_docker_row("Docker Compose stack started"),
             compose_file=stack.compose_file,
             project=stack.project_name,
         )
@@ -228,6 +234,7 @@ def _store_docker_snapshot(
     _LOGGER.info(
         "snapshot_store_start",
         "storing Docker Compose snapshot",
+        pretty=_docker_row("storing Docker Compose snapshot"),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
         snapshot_dir=snapshot_dir,
@@ -323,6 +330,7 @@ def _store_docker_snapshot(
     _LOGGER.info(
         "snapshot_store_success",
         "stored Docker Compose snapshot",
+        pretty=_docker_row("stored Docker Compose snapshot"),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
         containers=len(container_entries),
@@ -369,6 +377,7 @@ def _restore_docker_snapshot(
     _LOGGER.info(
         "snapshot_restore_start",
         "restoring Docker Compose snapshot",
+        pretty=_docker_row("restoring Docker Compose snapshot"),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
         snapshot_dir=snapshot_dir,
@@ -475,6 +484,7 @@ def _restore_docker_snapshot(
     _LOGGER.info(
         "snapshot_restore_success",
         "restored Docker Compose snapshot",
+        pretty=_docker_row("restored Docker Compose snapshot"),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
         containers=len(container_entries),

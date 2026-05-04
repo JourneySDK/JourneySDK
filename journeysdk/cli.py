@@ -27,7 +27,7 @@ from .executor import (
     _execute_plan,
     _use_step_interrupt_controller,
 )
-from .logger import configure_logging, get_logger
+from .logger import configure_logging, get_logger, pretty_line, pretty_row
 from .models import (
     BranchMarkerNode,
     CaseExecutionReport,
@@ -183,6 +183,49 @@ def _step_name(node: StepNode) -> str:
     return node.label or node.node_id
 
 
+def _pretty_target(*, display_file: str | None, journey: str | None) -> str:
+    if display_file is not None and journey is not None:
+        return f"{display_file}:{journey}"
+    if journey is not None:
+        return journey
+    if display_file is not None:
+        return display_file
+    return "journey"
+
+
+def _pretty_case_line(case: str, *, labels: list[str] | None = None, branches: str | None = None) -> str:
+    details = []
+    if labels:
+        details.append(f"labels: {', '.join(labels)}")
+    if branches:
+        details.append(f"branches: {branches}")
+    suffix = f"  {'; '.join(details)}" if details else ""
+    return f"    {case}{suffix}"
+
+
+def _pretty_step_detail(action: str, *, attempt: int, duration: str | None = None) -> str:
+    parts = [action, f"attempt={attempt}"]
+    if duration is not None:
+        parts.append(f"duration={duration}")
+    return " ".join(parts)
+
+
+def _pretty_step_problem(
+    step: str,
+    action: str,
+    *,
+    duration: str | None,
+    error: str | None,
+    fallback: str,
+) -> str:
+    if duration is None:
+        return f"{step} {fallback}"
+    detail = f"{step} {action} after {duration}"
+    if error is not None:
+        detail += f" ({error})"
+    return detail
+
+
 class _LiveTextReporter(_ExecutionObserver):
     def __init__(
         self,
@@ -210,6 +253,10 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "journey_start",
             "starting journey execution",
+            pretty=pretty_line(
+                f"  {_pretty_target(display_file=self._display, journey=self._journey_name)}",
+                style="context",
+            ),
             file=self._display,
             journey=self._journey_name,
             journey_id=plan.journey_id,
@@ -227,6 +274,15 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "case_start",
             f"- {case_plan.case_id} start branches={_format_branch_env(case_plan.branch_env)}",
+            pretty=pretty_line(
+                f"    {case_plan.case_id}"
+                + (
+                    f"  branches={_format_branch_env(case_plan.branch_env)}"
+                    if case_plan.branch_env
+                    else ""
+                ),
+                style="context",
+            ),
             file=self._display,
             journey=self._journey_name,
             case=case_plan.case_id,
@@ -246,6 +302,15 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "case_resume",
             f"- {case_plan.case_id} resume branches={_format_branch_env(case_plan.branch_env)}",
+            pretty=pretty_line(
+                f"    {case_plan.case_id} resume"
+                + (
+                    f"  branches={_format_branch_env(case_plan.branch_env)}"
+                    if case_plan.branch_env
+                    else ""
+                ),
+                style="context",
+            ),
             file=self._display,
             journey=self._journey_name,
             case=case_plan.case_id,
@@ -266,6 +331,13 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "step_start",
             f"  step {_step_name(node)} attempt={attempt} start",
+            pretty=pretty_row(
+                _step_name(node),
+                _pretty_step_detail("start", attempt=attempt),
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
             file=self._display,
             journey=self._journey_name,
             case=case_plan.case_id,
@@ -284,6 +356,13 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "branch_select",
             f"  branch {node.group_id}={node.active_key}",
+            pretty=pretty_row(
+                f"branch {node.group_id}",
+                node.active_key,
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
             file=self._display,
             journey=self._journey_name,
             case=case_plan.case_id,
@@ -313,6 +392,13 @@ class _LiveTextReporter(_ExecutionObserver):
                 f"remaining={remaining_retries} "
                 f"error={_format_exception(error)}"
             ),
+            pretty=_pretty_step_problem(
+                _step_name(node),
+                "retry",
+                duration=_format_duration(duration_seconds),
+                error=_format_exception(error),
+                fallback="retrying",
+            ),
             file=self._display,
             journey=self._journey_name,
             case=case_plan.case_id,
@@ -340,6 +426,17 @@ class _LiveTextReporter(_ExecutionObserver):
                 f"  step {_step_name(node)} attempt={attempt} ok "
                 f"duration={_format_duration(duration_seconds)}"
             ),
+            pretty=pretty_row(
+                _step_name(node),
+                _pretty_step_detail(
+                    "ok",
+                    attempt=attempt,
+                    duration=_format_duration(duration_seconds),
+                ),
+                indent=6,
+                label_width=29,
+                style="success",
+            ),
             file=self._display,
             journey=self._journey_name,
             case=case_plan.case_id,
@@ -365,6 +462,13 @@ class _LiveTextReporter(_ExecutionObserver):
                 f"  step {_step_name(node)} attempt={attempt} failed "
                 f"duration={_format_duration(duration_seconds)} "
                 f"error={_format_exception(error)}"
+            ),
+            pretty=_pretty_step_problem(
+                _step_name(node),
+                "failed",
+                duration=_format_duration(duration_seconds),
+                error=_format_exception(error),
+                fallback="failed",
             ),
             file=self._display,
             journey=self._journey_name,
@@ -392,6 +496,13 @@ class _LiveTextReporter(_ExecutionObserver):
                 f"  step {_step_name(node)} attempt={attempt} interrupted "
                 f"duration={_format_duration(duration_seconds)} "
                 f"error={_format_exception(error)}"
+            ),
+            pretty=_pretty_step_problem(
+                _step_name(node),
+                "interrupted",
+                duration=_format_duration(duration_seconds),
+                error=_format_exception(error),
+                fallback="interrupted",
             ),
             file=self._display,
             journey=self._journey_name,
@@ -424,6 +535,22 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "case_complete",
             " ".join(parts),
+            pretty=pretty_line(
+                f"    {report.case_id} done "
+                f"steps={_count_step_records(report)} "
+                f"duration={_format_duration(duration_seconds)}"
+                + (
+                    f" stopped_at={report.stopped_at_label}"
+                    if report.stopped_at_label is not None
+                    else ""
+                )
+                + (
+                    f" replay_anchor={report.replay_anchor}"
+                    if report.replay_anchor is not None
+                    else ""
+                ),
+                style="success",
+            ),
             file=self._display,
             journey=self._journey_name,
             case=report.case_id,
@@ -437,6 +564,7 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "journey_complete",
             "journey execution completed",
+            pretty=False,
             file=self._display,
             journey=self._journey_name,
             journey_id=report.journey_id,
@@ -448,6 +576,10 @@ class _LiveTextReporter(_ExecutionObserver):
             "develop_state_restart",
             "Already-run journey code changed before the paused step; "
             f"restarting {case_id} from the beginning.",
+            pretty=(
+                "Already-run journey code changed before the paused step; "
+                f"restarting {case_id} from the beginning."
+            ),
             file=self._display,
             journey=self._journey_name,
             case=case_id,
@@ -479,6 +611,9 @@ def _emit_errors(errors: list[_CommandError]) -> None:
         _CLI_LOGGER.error(
             "command_error",
             f"ERROR [{error.phase}] {location} ({error.error_type})",
+            pretty=(
+                f"{error.error_type} during {error.phase} at {location}"
+            ),
             phase=error.phase,
             location=location,
             error_type=error.error_type,
@@ -488,6 +623,7 @@ def _emit_errors(errors: list[_CommandError]) -> None:
         _CLI_LOGGER.error(
             "command_error_message",
             f"What happened: {error.message}",
+            pretty=pretty_line(f"What happened: {error.message}", style="error"),
             phase=error.phase,
             location=location,
             error_type=error.error_type,
@@ -496,6 +632,7 @@ def _emit_errors(errors: list[_CommandError]) -> None:
             _CLI_LOGGER.error(
                 "command_error_hint",
                 f"Try this: {error.hint}",
+                pretty=pretty_line(f"Try this: {error.hint}", style="error"),
                 phase=error.phase,
                 location=location,
                 error_type=error.error_type,
@@ -509,6 +646,7 @@ def _discover_targets(
     _CLI_LOGGER.info(
         "discovery_start",
         "discovering journeys",
+        pretty=f"Discovering journeys: {root}",
         root=str(root),
         file=args.file,
         journey=args.journey,
@@ -532,6 +670,7 @@ def _discover_targets(
         _CLI_LOGGER.error(
             "discovery_failure",
             "no journeys were found",
+            pretty="no journeys were found",
             root=str(root),
             file=args.file,
             journey=args.journey,
@@ -545,6 +684,10 @@ def _discover_targets(
     _CLI_LOGGER.info(
         "discovery_complete",
         "journey discovery completed",
+        pretty=(
+            f"Found {_count(len(discovered), 'journey')}"
+            + (f", {len(errors)} failed" if errors else "")
+        ),
         discovered=len(discovered),
         errors=len(errors),
     )
@@ -563,6 +706,7 @@ def _compile_targets(
         _CLI_LOGGER.info(
             "compile_start",
             "compiling journey",
+            pretty=False,
             file=str(target.file_path),
             journey=target.journey_name,
         )
@@ -572,6 +716,7 @@ def _compile_targets(
             _CLI_LOGGER.error(
                 "compile_failure",
                 "journey compilation failed",
+                pretty=False,
                 file=str(target.file_path),
                 journey=target.journey_name,
                 error=_format_exception(exc),
@@ -599,6 +744,7 @@ def _compile_targets(
         _CLI_LOGGER.info(
             "compile_success",
             "journey compiled",
+            pretty=False,
             file=str(target.file_path),
             journey=target.journey_name,
             cases=len(plan.case_plans),
@@ -692,7 +838,7 @@ def _step_stop_status(paused: _PausedExecution, *, verb: str) -> str:
 
 
 def _read_pause_choice(prompt: str) -> str:
-    _CLI_LOGGER.info("pause_prompt", prompt)
+    _CLI_LOGGER.info("pause_prompt", prompt, pretty=prompt)
     if not sys.stdin.isatty():
         return input("").strip().lower()
 
@@ -729,6 +875,7 @@ def _prompt_for_pause_action(paused: _PausedExecution) -> str:
         _CLI_LOGGER.info(
             "pause_invalid_choice",
             "Press 'c' to continue or 'r' to retry.",
+            pretty="Press 'c' to continue or 'r' to retry.",
         )
 
 
@@ -841,6 +988,7 @@ def _execute_all_targets(
         _CLI_LOGGER.info(
             "execution_start",
             "executing journey",
+            pretty=False,
             file=str(item.file_path),
             journey=item.journey_name,
         )
@@ -868,6 +1016,10 @@ def _execute_all_targets(
             _CLI_LOGGER.error(
                 "execution_failure",
                 "journey execution failed",
+                pretty=(
+                    f"{_pretty_target(display_file=_display_path(root, item.file_path), journey=item.journey_name)} "
+                    f"failed: {_format_exception(exc)}"
+                ),
                 file=str(item.file_path),
                 journey=item.journey_name,
                 error=_format_exception(exc),
@@ -895,6 +1047,7 @@ def _execute_all_targets(
         _CLI_LOGGER.info(
             "execution_success",
             "journey execution succeeded",
+            pretty=False,
             file=str(item.file_path),
             journey=item.journey_name,
             cases=len(report.case_reports),
@@ -921,6 +1074,7 @@ def _execute_target_step(
         _CLI_LOGGER.info(
             "execution_start",
             "executing targeted journey",
+            pretty=False,
             file=str(selected.file_path),
             journey=selected.journey_name,
             step=step,
@@ -949,6 +1103,10 @@ def _execute_target_step(
         _CLI_LOGGER.error(
             "execution_failure",
             "targeted journey execution failed",
+            pretty=(
+                f"{_pretty_target(display_file=_display_path(root, selected.file_path), journey=selected.journey_name)} "
+                f"failed: {_format_exception(exc)}"
+            ),
             file=str(selected.file_path),
             journey=selected.journey_name,
             step=step,
@@ -966,6 +1124,7 @@ def _execute_target_step(
     _CLI_LOGGER.info(
         "execution_success",
         "targeted journey execution succeeded",
+        pretty=False,
         file=str(selected.file_path),
         journey=selected.journey_name,
         step=step,
@@ -1045,6 +1204,7 @@ def _execute_target_pause(
         _CLI_LOGGER.info(
             "execution_start",
             "executing develop step",
+            pretty=False,
             file=str(selected.file_path),
             journey=selected.journey_name,
             develop_step=develop_step,
@@ -1086,6 +1246,7 @@ def _execute_target_pause(
                     _CLI_LOGGER.info(
                         "develop_step_stopped",
                         _step_stop_status(outcome, verb="Stopped"),
+                        pretty=_step_stop_status(outcome, verb="Stopped"),
                         file=str(selected.file_path),
                         journey=selected.journey_name,
                         step=outcome.paused_step.label or outcome.paused_step.node_id,
@@ -1099,6 +1260,7 @@ def _execute_target_pause(
             _CLI_LOGGER.info(
                 "execution_success",
                 "develop-step execution succeeded",
+                pretty=False,
                 file=str(selected.file_path),
                 journey=selected.journey_name,
                 develop_step=develop_step,
@@ -1161,6 +1323,10 @@ def _execute_target_pause(
                         "develop_step_reload",
                         f"Reloaded and recompiled {display}:{selected.journey_name} "
                         f"after {pause_action}.",
+                        pretty=(
+                            f"Reloaded and recompiled {display}:{selected.journey_name} "
+                            f"after {pause_action}."
+                        ),
                         file=str(selected.file_path),
                         journey=selected.journey_name,
                         action=pause_action,
@@ -1171,6 +1337,7 @@ def _execute_target_pause(
             _CLI_LOGGER.info(
                 "execution_success",
                 "develop-step execution succeeded",
+                pretty=False,
                 file=str(selected.file_path),
                 journey=selected.journey_name,
                 develop_step=develop_step,
@@ -1188,6 +1355,10 @@ def _execute_target_pause(
         _CLI_LOGGER.error(
             "execution_failure",
             "develop-step execution failed",
+            pretty=(
+                f"{_pretty_target(display_file=_display_path(root, selected.file_path), journey=selected.journey_name)} "
+                f"failed: {_format_exception(exc)}"
+            ),
             file=str(selected.file_path),
             journey=selected.journey_name,
             develop_step=develop_step,
@@ -1211,13 +1382,17 @@ def _emit_plan_output(
     compiled: list[_CompiledJourney],
     errors: list[_CommandError],
 ) -> None:
-    _CLI_LOGGER.info("plan_start", "Plan")
+    _CLI_LOGGER.info("plan_start", "Plan", pretty=pretty_line("Plan", style="heading"))
 
     for item in compiled:
         display = _display_path(root, item.file_path)
         _CLI_LOGGER.info(
             "plan_journey",
             f"Journey {display}:{item.journey_name}",
+            pretty=pretty_line(
+                f"  {_pretty_target(display_file=display, journey=item.journey_name)}",
+                style="context",
+            ),
             file=str(item.file_path),
             display_file=display,
             journey=item.journey_name,
@@ -1228,6 +1403,7 @@ def _emit_plan_output(
         _CLI_LOGGER.info(
             "plan_metadata",
             f"journey_id={item.plan.journey_id} function_ref={item.plan.function_ref}",
+            pretty=False,
             file=str(item.file_path),
             display_file=display,
             journey=item.journey_name,
@@ -1240,6 +1416,18 @@ def _emit_plan_output(
                 "plan_case",
                 f"- {case.case_id} branch_env={case.branch_env} "
                 f"labels={labels}",
+                pretty=pretty_line(
+                    _pretty_case_line(
+                        case.case_id,
+                        labels=labels,
+                        branches=(
+                            _format_branch_env(case.branch_env)
+                            if case.branch_env
+                            else None
+                        ),
+                    ),
+                    style="context",
+                ),
                 file=str(item.file_path),
                 display_file=display,
                 journey=item.journey_name,
@@ -1257,6 +1445,14 @@ def _emit_plan_output(
         f"{_count(len(compiled), 'journey')} planned, "
         f"{_count(total_cases, 'case')} planned, "
         f"{len(errors)} failed",
+        pretty=pretty_line(
+            "Summary: "
+            f"{_count(len(compiled), 'journey')} planned, "
+            f"{_count(total_cases, 'case')} planned, "
+            f"{len(errors)} failed",
+            indent=2,
+            style="heading",
+        ),
         journeys=len(compiled),
         cases=total_cases,
         failures=len(errors),
@@ -1293,6 +1489,14 @@ def _emit_execute_output(
         f"{_count(len(executed), 'journey')} executed, "
         f"{_count(total_cases, 'case')} executed, "
         f"{failed} failed",
+        pretty=pretty_line(
+            "Summary: "
+            f"{_count(len(executed), 'journey')} executed, "
+            f"{_count(total_cases, 'case')} executed, "
+            f"{failed} failed",
+            indent=2,
+            style="heading",
+        ),
         journeys=len(executed),
         cases=total_cases,
         failures=failed,
@@ -1300,6 +1504,7 @@ def _emit_execute_output(
     _CLI_LOGGER.info(
         "execute_result",
         "execution result",
+        pretty=False,
         root=str(root),
         journeys=len(executed),
         errors=len(payload_errors),
@@ -1308,13 +1513,21 @@ def _emit_execute_output(
 
 
 def _emit_execution_section() -> None:
-    _CLI_LOGGER.info("execution_section", "Execution")
+    _CLI_LOGGER.info(
+        "execution_section",
+        "Execution",
+        pretty=pretty_line("Execution", style="heading"),
+    )
 
 
 def _emit_interrupt_output(*, state: str | None) -> None:
     _CLI_LOGGER.warning(
         "execution_interrupted",
         "journey execution was interrupted",
+        pretty=pretty_line(
+            "Interrupted: Journey execution was interrupted before it finished.",
+            style="warning",
+        ),
         state=state,
     )
     hint = (
@@ -1325,6 +1538,7 @@ def _emit_interrupt_output(*, state: str | None) -> None:
     _CLI_LOGGER.warning(
         "interrupt_summary",
         "Interrupted.",
+        pretty=pretty_line(f"Hint: {hint}", style="warning"),
         state=state,
         interrupted=True,
         hint=hint,
@@ -1332,13 +1546,19 @@ def _emit_interrupt_output(*, state: str | None) -> None:
     _CLI_LOGGER.warning(
         "interrupt_message",
         "What happened: Journey execution was interrupted before it finished.",
+        pretty=False,
         state=state,
         interrupted=True,
         hint=hint,
     )
     if state is None:
         return
-    _CLI_LOGGER.warning("interrupt_hint", f"Try this: {hint}", state=state)
+    _CLI_LOGGER.warning(
+        "interrupt_hint",
+        f"Try this: {hint}",
+        pretty=False,
+        state=state,
+    )
 
 
 def _cmd_execute(args: argparse.Namespace) -> int:

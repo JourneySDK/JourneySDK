@@ -11,7 +11,7 @@ from threading import Lock
 from types import TracebackType
 from typing import Literal, TypedDict, cast
 
-from journeysdk.logger import get_logger
+from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import _require_executing_step
 from playwright.sync_api import Page as PlaywrightPage
@@ -61,6 +61,10 @@ _REHYDRATE_STORAGE_SCRIPT = """
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
 _PLAYWRIGHT_INSTALL_LOCK = Lock()
 _LOGGER = get_logger("playwright")
+
+
+def _browser_row(detail: object, *, style: PrettyStyle = "tool") -> PrettyLine:
+    return pretty_row("Browser", detail, indent=8, label_width=27, style=style)
 
 
 @dataclass(frozen=True)
@@ -385,6 +389,10 @@ def open_page(
     _LOGGER.info(
         "open_page_start",
         "opening Playwright page",
+        pretty=_browser_row(
+            f"opening {browser} {snapshot.url}"
+            + (" headless=false" if headless is False else "")
+        ),
         url=snapshot.url,
         browser=browser,
         headless=headless,
@@ -417,6 +425,7 @@ def open_page(
         _LOGGER.info(
             "open_page_success",
             "Playwright page opened",
+            pretty=_browser_row(f"opened {browser} {page.url}"),
             url=page.url,
             browser=browser,
         )
@@ -425,6 +434,7 @@ def open_page(
         _LOGGER.error(
             "open_page_failure",
             "failed to open Playwright page",
+            pretty=f"Browser failed to open {browser} {snapshot.url}: {_format_exception(exc)}",
             url=snapshot.url,
             browser=browser,
             error=_format_exception(exc),
@@ -460,6 +470,7 @@ def ensure_browser_installed(
     _LOGGER.info(
         "browser_install_check_start",
         "checking Playwright browser installation",
+        pretty=_browser_row(f"checking {browser} installation"),
         browser=browser,
     )
     with sync_playwright() as playwright:
@@ -470,6 +481,7 @@ def ensure_browser_installed(
     _LOGGER.info(
         "browser_install_check_success",
         "Playwright browser installation is available",
+        pretty=_browser_row(f"{browser} installation available"),
         browser=browser,
     )
 
@@ -534,6 +546,7 @@ def _install_playwright_browser(
         _LOGGER.info(
             "browser_install_start",
             "installing Playwright browser",
+            pretty=_browser_row(f"installing {browser}"),
             browser=browser,
             command=" ".join(command),
             executable_path=executable_path,
@@ -543,6 +556,7 @@ def _install_playwright_browser(
             _LOGGER.error(
                 "browser_install_failure",
                 "Playwright browser installation failed",
+                pretty=f"Browser failed to install {browser}",
                 browser=browser,
                 returncode=result.returncode,
             )
@@ -555,6 +569,7 @@ def _install_playwright_browser(
             _LOGGER.error(
                 "browser_install_missing_executable",
                 "Playwright browser install completed but executable is missing",
+                pretty=f"Browser installed {browser}, but the executable is missing",
                 browser=browser,
                 executable_path=executable_path,
             )
@@ -565,6 +580,7 @@ def _install_playwright_browser(
         _LOGGER.info(
             "browser_install_success",
             "Playwright browser installed",
+            pretty=_browser_row(f"installed {browser}"),
             browser=browser,
             executable_path=executable_path,
         )

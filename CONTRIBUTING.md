@@ -79,6 +79,41 @@ Do not persist screenshots, rendered HTML, full model prompts, or other raw obse
 Memory files are named `[memory].memory.json` and live beside the journey source. Planning must be able to validate
 literal memory names and reject duplicates before execution.
 
+## Logger API
+
+Journey-owned output must go through `journeysdk.logger`; do not use direct `print(...)` calls for SDK, CLI, tool, or
+tutorial diagnostics. The logger owns levels, stdout routing, redaction, `pretty` / `structured` / `jsonl` formatting,
+and `--log-level off` suppression.
+
+Keep dependency direction one-way: SDK modules may depend on `journeysdk.logger`, but `logger.py` must not know about
+CLI, executor, Playwright, Docker, email, webhook, or cloud event names. Each module that emits an event owns its own
+human-facing `pretty=` text.
+
+```python
+from journeysdk.logger import get_logger, pretty_line, pretty_row
+
+_LOGGER = get_logger("my-tool")
+
+_LOGGER.info(
+    "resource_start",
+    "starting resource",
+    pretty=pretty_row("My tool", "starting resource", indent=8, label_width=27, style="tool"),
+    resource_id=resource_id,
+)
+```
+
+Use `message` and keyword fields for machine-readable data. `--output structured` and `--output jsonl` include the
+event name, message, and fields, but never the `pretty=` value. Use `pretty=` only for human console rendering:
+
+- `pretty=None` lets the logger render a generic line from `message` plus fields.
+- `pretty=False` suppresses that event in `pretty` mode while preserving `structured` and `jsonl`.
+- `pretty="text"` emits one human line.
+- `pretty_line(...)` and `pretty_row(...)` emit styled, aligned human lines; pass a list for multi-line output.
+
+ANSI color is applied only for TTY streams and only from explicit generic styles such as `heading`, `tool`, `accent`,
+`code`, `success`, `warning`, `error`, and `muted`. Captured output and CI stay plain ASCII. Sensitive fields and
+password-like text are redacted in all formats, but callers should still avoid putting secrets in prose.
+
 ## Manual Release Flow
 
 1. Update the package version in `pyproject.toml`.

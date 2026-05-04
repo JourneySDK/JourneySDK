@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from email.utils import make_msgid
 from typing import Literal, Protocol, TypeAlias, TypedDict
 
-from journeysdk.logger import get_logger
+from journeysdk.logger import PrettyLine, get_logger, pretty_row
 
 from ._email_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
@@ -19,6 +19,10 @@ from ._email_cloud import (
 )
 
 _LOGGER = get_logger("email")
+
+
+def _email_row(detail: object) -> PrettyLine:
+    return pretty_row("Email", detail, indent=8, label_width=27, style="tool")
 
 EmailTransport: TypeAlias = Literal["cloud"]
 
@@ -76,11 +80,13 @@ def get_email_inbox() -> GetEmailInboxStep:
         _LOGGER.info(
             "inbox_resolve_start",
             "resolving cloud email inbox",
+            pretty=_email_row("resolving cloud email inbox"),
         )
         inbox = _load_cloud_email_inbox(owner="get_email_inbox", api_base_url=None)
         _LOGGER.info(
             "inbox_resolve_success",
             "resolved cloud email inbox",
+            pretty=_email_row("resolved cloud email inbox"),
             transport=inbox.transport,
             address=inbox.address,
             mailbox=inbox.mailbox,
@@ -143,6 +149,7 @@ def send_email(
         _LOGGER.info(
             "email_send_start",
             "sending email",
+            pretty=_email_row("sending email"),
             transport=inbox.transport,
             address=inbox.address,
             subject=normalized_subject,
@@ -165,6 +172,7 @@ def send_email(
         _LOGGER.info(
             "email_send_success",
             "email sent",
+            pretty=_email_row("email sent"),
             transport="cloud",
             message_id=validated_receipt["message_id"],
             to_count=len(validated_receipt["to"]),
@@ -224,6 +232,7 @@ def wait_for_email(
         _LOGGER.info(
             "email_wait_start",
             "waiting for email",
+            pretty=_email_row("waiting for email"),
             transport=inbox.transport,
             address=inbox.address,
             mailbox=inbox.mailbox,
@@ -245,6 +254,7 @@ def wait_for_email(
                 _LOGGER.info(
                     "email_wait_success",
                     "received email",
+                    pretty=_email_row("received email"),
                     transport=inbox.transport,
                     message_id=message["message_id"],
                     subject=message["subject"],
@@ -256,6 +266,7 @@ def wait_for_email(
                 _LOGGER.warning(
                     "email_wait_timeout",
                     "timed out waiting for email",
+                    pretty="Email timed out waiting for message",
                     transport=inbox.transport,
                     descriptor=descriptor,
                     timeout=timeout_seconds,
@@ -305,6 +316,7 @@ def _load_cloud_email_inbox(
     _LOGGER.info(
         "cloud_inbox_resolve_start",
         "loading cloud email inbox",
+        pretty=_email_row("loading cloud email inbox"),
         api_base_url=api_base_url,
     )
     try:
@@ -321,6 +333,7 @@ def _load_cloud_email_inbox(
     _LOGGER.info(
         "cloud_inbox_resolve_success",
         "loaded cloud email inbox",
+        pretty=_email_row("loaded cloud email inbox"),
         address=inbox.address,
         mailbox=inbox.mailbox,
         api_base_url=inbox.api_base_url,

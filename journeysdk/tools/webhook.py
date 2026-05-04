@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from journeysdk.logger import get_logger
+from journeysdk.logger import PrettyLine, get_logger, pretty_row
 from ._webhook_shared import (
     WebhookHeaders,
     WebhookQuery,
@@ -19,6 +19,10 @@ from ._webhook_shared import (
 from ._webhook_cloud import create_webhook_endpoint, fetch_next_request
 
 _LOGGER = get_logger("webhook")
+
+
+def _webhook_row(detail: object) -> PrettyLine:
+    return pretty_row("Webhook", detail, indent=8, label_width=27, style="tool")
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,7 @@ def get_webhook_endpoint(*, path: str) -> CloudWebhookEndpointStep:
         _LOGGER.info(
             "cloud_endpoint_create_start",
             "creating cloud webhook endpoint",
+            pretty=_webhook_row("creating cloud webhook endpoint"),
             path=normalized_path,
         )
         api_base_url, payload = create_webhook_endpoint(path=normalized_path)
@@ -105,6 +110,7 @@ def get_webhook_endpoint(*, path: str) -> CloudWebhookEndpointStep:
         _LOGGER.info(
             "cloud_endpoint_create_success",
             "created cloud webhook endpoint",
+            pretty=_webhook_row("created cloud webhook endpoint"),
             path=endpoint.path,
             endpoint_id=endpoint.endpoint_id,
             url=endpoint.url,
@@ -156,6 +162,7 @@ def wait_for_webhook_request(
         _LOGGER.info(
             "cloud_webhook_wait_start",
             "waiting for cloud webhook request",
+            pretty=_webhook_row("waiting for cloud webhook request"),
             path=normalized_path,
             endpoint_id=endpoint.endpoint_id,
             timeout=timeout_seconds,
@@ -173,6 +180,7 @@ def wait_for_webhook_request(
                 _LOGGER.info(
                     "cloud_webhook_wait_success",
                     "received cloud webhook request",
+                    pretty=_webhook_row("received cloud webhook request"),
                     path=normalized_path,
                     endpoint_id=endpoint.endpoint_id,
                     method=payload.get("method"),
@@ -183,6 +191,7 @@ def wait_for_webhook_request(
                 _LOGGER.warning(
                     "cloud_webhook_wait_timeout",
                     "timed out waiting for cloud webhook request",
+                    pretty="Webhook timed out waiting for request",
                     path=normalized_path,
                     endpoint_id=endpoint.endpoint_id,
                     timeout=timeout_seconds,

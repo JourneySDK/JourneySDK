@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from io import StringIO
+from pathlib import Path
 import re
 
 import pytest
 
-from journeysdk.logger import configure_logging, get_logger
+from journeysdk.logger import configure_logging, get_logger, pretty_line, pretty_row
 
 
 @pytest.fixture(autouse=True)
@@ -16,143 +17,68 @@ def _reset_logging() -> None:
     configure_logging("info")
 
 
-def test_logger_writes_pretty_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
-    get_logger("executor").info(
-        "step_success",
-        "  step prepare attempt=1 ok duration=0.012s",
-        journey="flow",
-        case="case_1",
-        step="prepare",
-        attempt=1,
-        duration="0.012s",
-    )
-
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out == "      prepare                       ok attempt=1 duration=0.012s\n"
-
-
-def test_logger_pretty_renders_plan_as_readable_timeline(capsys: pytest.CaptureFixture[str]):
-    logger = get_logger("cli")
-
-    logger.info("plan_start", "Plan")
-    logger.info(
-        "plan_journey",
-        "Journey test.py:flow",
-        display_file="test.py",
-        journey="flow",
-        cases=1,
-        function_ref="module:flow",
-        journey_id="flow",
-    )
-    logger.info(
-        "plan_metadata",
-        "journey_id=flow function_ref=module:flow",
-        display_file="test.py",
-        journey="flow",
-        function_ref="module:flow",
-        journey_id="flow",
-    )
-    logger.info(
-        "plan_case",
-        "- case_1 branch_env={} labels=['first', 'second']",
-        case="case_1",
-        branch_env={},
-        labels=["first", "second"],
-    )
-    logger.info(
-        "plan_summary",
-        "Summary: 1 journey planned, 1 case planned, 0 failed",
-        journeys=1,
-        cases=1,
-        failures=0,
-    )
-
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    assert captured.out == (
-        "Plan\n"
-        "  test.py:flow\n"
-        "    case_1  labels: first, second\n"
-        "  Summary: 1 journey planned, 1 case planned, 0 failed\n"
-    )
-
-
-def test_logger_pretty_renders_browser_and_ai_prompt_activity(
+def test_logger_writes_generic_pretty_fallback_to_current_stdout(
     capsys: pytest.CaptureFixture[str],
 ):
-    browser = get_logger("playwright")
-    prompt = get_logger("playwright-prompt")
-
-    browser.info(
-        "open_page_start",
-        "opening Playwright page",
-        browser="chromium",
-        headless=False,
-        url="https://app.example/login",
-    )
-    browser.info(
-        "open_page_success",
-        "Playwright page opened",
-        browser="chromium",
-        url="https://app.example/dashboard",
-    )
-    prompt.info(
-        "prompt_start",
-        "prompt start: instruction='Sign in using password \"1111\".'",
-        instruction='Sign in using password "1111".',
-        model="claude-sonnet-4-6",
-        max_steps=15,
-        timeout="5s",
-        active="page 0 'Login' at https://app.example/login",
-    )
-    prompt.info(
-        "prompt_action",
-        "step 1/15: AI will click selector '#sign-in'",
-        step=1,
-        max_steps=15,
-        action="click selector '#sign-in'",
-    )
-    prompt.info(
-        "prompt_code",
-        'step 1/15 code: page.locator("#sign-in").click()',
-        step_label="step 1/15",
-        code='page.locator("#sign-in").click()',
-    )
-    prompt.info(
-        "prompt_step_success",
-        "step 1/15: succeeded on page 0 'Login'",
-        step=1,
-        max_steps=15,
-        page=0,
+    get_logger("component").info(
+        "event_name",
+        "generic message",
+        detail="visible",
+        empty=None,
     )
 
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out == (
-        "        Browser                     opening chromium https://app.example/login headless=false\n"
-        "        Browser                     opened chromium https://app.example/dashboard\n"
-        "        AI prompt                   model=claude-sonnet-4-6 max_steps=15 timeout=5s\n"
-        "          instruction               Sign in using password \"[redacted]\".\n"
-        "          page                      page 0 'Login' at https://app.example/login\n"
-        "          1/15 action               click selector '#sign-in'\n"
-        "          1/15 code                 page.locator(\"#sign-in\").click()\n"
-        "          1/15 ok                   page 0 'Login'\n"
+    assert captured.out == "generic message detail=visible\n"
+
+
+def test_logger_accepts_explicit_pretty_text(capsys: pytest.CaptureFixture[str]):
+    get_logger("component").info(
+        "event_name",
+        "machine message",
+        pretty="Human message using password \"secret\".",
+        detail="machine-only",
     )
 
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == "Human message using password \"[redacted]\".\n"
 
-def test_logger_pretty_aligns_multiline_prompt_details(
+
+def test_logger_pretty_false_suppresses_only_pretty_output(
+    capsys: pytest.CaptureFixture[str],
+):
+    logger = get_logger("component")
+
+    logger.info("event_name", "machine message", pretty=False, detail="value")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+    configure_logging("info", output_format="structured")
+    logger.info("event_name", "machine message", pretty=False, detail="value")
+    captured = capsys.readouterr()
+    assert "message=\"machine message\"" in captured.out
+    assert "detail=value" in captured.out
+    assert "pretty" not in captured.out
+
+
+def test_logger_pretty_row_aligns_multiline_details(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    get_logger("playwright-prompt").info(
-        "prompt_rejected",
-        "step 1/15 rejected",
-        step=1,
-        max_steps=15,
-        detail=(
-            "TimeoutError: Locator.click: Timeout 5000ms exceeded.\n"
-            "Call log:\n"
-            "- waiting for get_by_role(\"button\", name=\"Log in\")"
+    get_logger("component").info(
+        "event_name",
+        "machine message",
+        pretty=pretty_row(
+            "1/15 rejected",
+            (
+                "TimeoutError: Locator.click: Timeout 5000ms exceeded.\n"
+                "Call log:\n"
+                "- waiting for get_by_role(\"button\", name=\"Log in\")"
+            ),
+            indent=10,
+            label_width=25,
+            style="warning",
         ),
     )
 
@@ -165,12 +91,61 @@ def test_logger_pretty_aligns_multiline_prompt_details(
     )
 
 
+def test_logger_pretty_sequence_renders_multiple_lines(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    get_logger("component").info(
+        "event_name",
+        "machine message",
+        pretty=[
+            pretty_line("Plan", style="heading"),
+            pretty_row("case_1", "labels: first", indent=4, label_width=8),
+        ],
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == "Plan\n    case_1   labels: first\n"
+
+
+def test_logger_styles_pretty_output_for_tty_streams() -> None:
+    class TtyStream(StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    stream = TtyStream()
+    configure_logging("info", stream=stream)
+
+    logger = get_logger("component")
+    logger.info("heading_event", "machine", pretty=pretty_line("Plan", style="heading"))
+    logger.info(
+        "tool_event",
+        "machine",
+        pretty=pretty_row("Browser", "opening chromium", indent=8, label_width=27, style="tool"),
+    )
+    logger.info(
+        "success_event",
+        "machine",
+        pretty=pretty_row("prepare", "ok", indent=6, label_width=29, style="success"),
+    )
+    logger.warning("warning_event", "machine", pretty="prepare retrying")
+    logger.error("error_event", "machine", pretty="prepare failed")
+
+    output = stream.getvalue()
+    assert "\x1b[1mPlan\x1b[0m" in output
+    assert "\x1b[36m        Browser" in output
+    assert "\x1b[32m      prepare" in output
+    assert "\x1b[33mWarning: prepare retrying\x1b[0m" in output
+    assert "\x1b[31mError: prepare failed\x1b[0m" in output
+
+
 def test_logger_writes_structured_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
     configure_logging("info", output_format="structured")
 
-    get_logger("executor").info(
-        "step_start",
+    get_logger("component").info(
+        "event_name",
         "starting step",
+        pretty=pretty_line("Human only"),
         journey="flow",
         case="case_1",
         step="prepare",
@@ -180,26 +155,28 @@ def test_logger_writes_structured_format_to_current_stdout(capsys: pytest.Captur
     captured = capsys.readouterr()
     output = captured.out.strip()
     assert captured.err == ""
+    assert "pretty" not in output
+    assert "Human only" not in output
     assert re.match(
         r'^\[journey\] time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z '
-        r'level=INFO component=executor event=step_start message="starting step" '
+        r'level=INFO component=component event=event_name message="starting step" '
         r"attempt=1 case=case_1 journey=flow step=prepare$",
         output,
     )
 
 
 def test_logger_respects_level_filtering_and_off(capsys: pytest.CaptureFixture[str]):
-    logger = get_logger("cli")
+    logger = get_logger("component")
     configure_logging("warning")
 
-    logger.info("discovery_start", "discovering journeys")
-    logger.warning("discovery_warning", "using fallback")
+    logger.info("info_event", "hidden")
+    logger.warning("warning_event", "using fallback")
     captured = capsys.readouterr()
     assert captured.out == "Warning: using fallback\n"
     assert captured.err == ""
 
     configure_logging("off")
-    logger.error("failure", "this should be suppressed")
+    logger.error("error_event", "this should be suppressed")
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
@@ -218,7 +195,7 @@ def test_logger_accepts_configured_stream_and_flushes() -> None:
     stream = FlushRecordingStream()
     configure_logging("debug", stream=stream, output_format="structured")
 
-    get_logger("docker").debug("cli_start", "running command", command="docker ps")
+    get_logger("component").debug("cli_start", "running command", command="docker ps")
 
     assert stream.flush_count == 1
     assert "level=DEBUG" in stream.getvalue()
@@ -228,7 +205,7 @@ def test_logger_accepts_configured_stream_and_flushes() -> None:
 def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
     configure_logging("info", output_format="structured")
 
-    get_logger("cloud").info(
+    get_logger("component").info(
         "request_start",
         "calling cloud",
         api_key="secret-api-key",
@@ -248,7 +225,7 @@ def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
 
 
 def test_logger_redacts_sensitive_fields_in_pretty(capsys: pytest.CaptureFixture[str]):
-    get_logger("cloud").info(
+    get_logger("component").info(
         "request_start",
         "calling cloud",
         api_key="secret-api-key",
@@ -267,53 +244,13 @@ def test_logger_redacts_sensitive_fields_in_pretty(capsys: pytest.CaptureFixture
     assert "route=/v1/test" in output
 
 
-def test_logger_colors_pretty_output_for_tty_streams() -> None:
-    class TtyStream(StringIO):
-        def isatty(self) -> bool:
-            return True
-
-    stream = TtyStream()
-    configure_logging("info", stream=stream)
-
-    get_logger("cli").info("plan_start", "Plan")
-    get_logger("playwright").info(
-        "open_page_start",
-        "opening Playwright page",
-        browser="chromium",
-        url="https://app.example/login",
-    )
-    get_logger("playwright-prompt").info(
-        "prompt_start",
-        "prompt start",
-        model="claude-sonnet-4-6",
-        max_steps=15,
-        timeout="5s",
-    )
-    get_logger("executor").info(
-        "step_success",
-        "  step prepare attempt=1 ok duration=0.012s",
-        step="prepare",
-        attempt=1,
-        duration="0.012s",
-    )
-    get_logger("executor").warning("step_retry", "retrying step", step="prepare")
-    get_logger("executor").error("step_failure", "failing step", step="prepare")
-
-    output = stream.getvalue()
-    assert "\x1b[1mPlan\x1b[0m" in output
-    assert "\x1b[36m        Browser" in output
-    assert "\x1b[35m        AI prompt" in output
-    assert "\x1b[32m      prepare" in output
-    assert "\x1b[33mWarning: prepare retrying\x1b[0m" in output
-    assert "\x1b[31mError: prepare failed\x1b[0m" in output
-
-
 def test_logger_writes_jsonl_records_to_stdout(capsys: pytest.CaptureFixture[str]):
     configure_logging("info", output_format="jsonl")
 
-    get_logger("cli").info(
+    get_logger("component").info(
         "execute_result",
         "execution result",
+        pretty=pretty_line("Human only"),
         payload={"journeys": [{"journey_name": "flow"}], "errors": []},
         api_token="secret-token",
     )
@@ -321,13 +258,15 @@ def test_logger_writes_jsonl_records_to_stdout(capsys: pytest.CaptureFixture[str
     captured = capsys.readouterr()
     assert captured.err == ""
     record = json.loads(captured.out)
+    assert "pretty" not in record
     assert record["level"] == "INFO"
-    assert record["component"] == "cli"
+    assert record["component"] == "component"
     assert record["event"] == "execute_result"
     assert record["message"] == "execution result"
     assert record["payload"]["journeys"][0]["journey_name"] == "flow"
     assert record["api_token"] == "[redacted]"
     assert "secret-token" not in captured.out
+    assert "Human only" not in captured.out
 
 
 def test_logger_rejects_invalid_level() -> None:
@@ -335,9 +274,27 @@ def test_logger_rejects_invalid_level() -> None:
         configure_logging("verbose")  # type: ignore[arg-type]
 
     with pytest.raises(ValueError):
-        get_logger("executor").log("verbose", "event", "message")  # type: ignore[arg-type]
+        get_logger("component").log("verbose", "event", "message")  # type: ignore[arg-type]
 
 
 def test_logger_rejects_invalid_output_format() -> None:
     with pytest.raises(ValueError):
         configure_logging("info", output_format="text")  # type: ignore[arg-type]
+
+
+def test_logger_has_no_component_or_event_specific_pretty_knowledge() -> None:
+    source = Path("journeysdk/logger.py").read_text(encoding="utf-8")
+
+    forbidden_tokens = [
+        "plan_start",
+        "plan_journey",
+        "step_success",
+        "open_page_start",
+        "prompt_code",
+        "playwright-prompt",
+        "docker",
+        "webhook",
+        "email-cloud",
+    ]
+    for token in forbidden_tokens:
+        assert token not in source

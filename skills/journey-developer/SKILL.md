@@ -86,9 +86,9 @@ Use `--file` to scope discovery to one file, `--journey` to select one decorated
 `--step LABEL` to execute only the single case that reaches a step label. A targeted run reports `replay_anchor` for
 branch step anchors but does not skip directly to that anchor unless state or retry behavior causes replay.
 
-Journey writes plans, summaries, prompts, and JSON to stdout. Live diagnostics go to stderr as structured
-`[journey]` log lines with `time`, `level`, `component`, `event`, and `message` fields. Use
-`--log-level debug|info|warning|error|off` to tune them; default `info` is usually best for local and agent runs.
+Journey-owned output goes through `journeysdk.logger` and writes to stdout. The default `pretty` format is for humans;
+use `--output structured` for `[journey]` logfmt records or `--output jsonl` for JSON Lines. Use
+`--log-level debug|info|warning|error|off` to tune visibility; default `info` is usually best for local and agent runs.
 
 Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step bindings. In CLI
 runs, first Ctrl-C lets the active step finish storage, exit returned handles, and stop at post-exit; rerunning resumes
@@ -142,5 +142,8 @@ in-process continue/retry prompt.
 - Keep official tool usage side-effect free during planning; acquire live resources inside step execution.
 - Use literal, unique prompt-memory names for AI-driven `prompt(...)` calls, and keep generated `*.memory.json` files
   reviewable if they are committed.
-- Use `journeysdk.logger.get_logger("component")` for SDK/tool/tutorial diagnostics instead of printing directly to stderr.
+- Use `journeysdk.logger.get_logger("component")` for SDK/tool/tutorial diagnostics instead of printing directly.
+- When adding logger calls, keep machine-readable fields in `message` and keyword fields, and pass `pretty=` only for
+  human output. Do not add component- or event-specific pretty formatting to `journeysdk/logger.py`; put it beside the
+  module that emits the event.
 - Use noninteractive `--develop-step` with persistent state for coding agents, and run the full relevant journey or test suite before wrapping up.
