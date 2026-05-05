@@ -10,11 +10,13 @@ import os
 import tempfile
 import textwrap
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeAlias
 
 from .errors import InvalidBranchUsageError
+from .planner import _PlanSession, _register_planning_step_hook
 from .session import get_session
 from .utils import callable_ref
 
@@ -39,6 +41,14 @@ class PromptMemoryReference:
     @property
     def location(self) -> str:
         return f"{self.file_path}:{self.line}:{self.column + 1}"
+
+
+_PromptMemoryIdentity: TypeAlias = tuple[str, int, int, str]
+_PromptMemoryRefsByName: TypeAlias = dict[
+    str,
+    dict[_PromptMemoryIdentity, PromptMemoryReference],
+]
+_PROMPT_MEMORY_PLANNING_STATE_KEY = "prompt_memory"
 
 
 def collect_prompt_memory_references(fn: object) -> tuple[PromptMemoryReference, ...]:
@@ -109,6 +119,55 @@ def format_duplicate_prompt_memory_error(
         f"Prompt memory name {name!r} is used by more than one prompt(...) call: "
         f"{locations}."
     )
+
+
+@dataclass
+class _PromptMemoryPlanningState:
+    refs_by_name: _PromptMemoryRefsByName = field(default_factory=dict)
+    refs_seen_by_session: dict[int, set[_PromptMemoryIdentity]] = field(
+        default_factory=dict
+    )
+
+    def validate_step(self, fn: object, *, planning_session_id: int) -> None:
+        refs_seen = self.refs_seen_by_session.setdefault(planning_session_id, set())
+        for reference in collect_prompt_memory_references(fn):
+            refs_by_identity = self.refs_by_name.setdefault(
+                reference.name,
+                {},
+            )
+            seen_in_session = reference.identity in refs_seen
+            refs_seen.add(reference.identity)
+            if reference.identity in refs_by_identity:
+                if seen_in_session:
+                    raise InvalidBranchUsageError(
+                        format_duplicate_prompt_memory_error(
+                            reference.name,
+                            (refs_by_identity[reference.identity], reference),
+                        ),
+                        hint=(
+                            "Use one unique memory name per prompt(...) invocation "
+                            "in a compiled journey."
+                        ),
+                    )
+                continue
+            if refs_by_identity:
+                references = tuple(refs_by_identity.values()) + (reference,)
+                raise InvalidBranchUsageError(
+                    format_duplicate_prompt_memory_error(reference.name, references),
+                    hint=(
+                        "Use one unique memory name per prompt(...) call in a "
+                        "compiled journey."
+                    ),
+                )
+            refs_by_identity[reference.identity] = reference
+
+
+def _validate_step_prompt_memory_references(session: _PlanSession, fn: object) -> None:
+    state = session.planning_state(
+        _PROMPT_MEMORY_PLANNING_STATE_KEY,
+        _PromptMemoryPlanningState,
+    )
+    state.validate_step(fn, planning_session_id=session.planning_session_id)
 
 
 def normalize_prompt_memory_name(name: object, *, owner: str) -> str:
@@ -284,3 +343,6 @@ def _write_prompt_memory_file(path: Path, data: Mapping[str, object]) -> None:
             except OSError:
                 pass
         raise
+
+
+_register_planning_step_hook(_validate_step_prompt_memory_references)

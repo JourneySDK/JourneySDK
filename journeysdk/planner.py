@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import FrameType
-from typing import ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar, cast
 
 from .errors import (
     InvalidBranchUsageError,
@@ -23,11 +24,6 @@ from .models import (
     StepRetry,
     _duration_to_seconds,
 )
-from ._prompt_memory import (
-    PromptMemoryReference,
-    collect_prompt_memory_references,
-    format_duplicate_prompt_memory_error,
-)
 from .session import use_session
 from .types import JourneyEntrypoint, StepFunction
 from .utils import callable_ref, callable_source_fingerprint
@@ -36,6 +32,7 @@ from .validator import JourneyValidation, resolve_branch_call_site, validate_jou
 BranchEnv = dict[str, str]
 P = ParamSpec("P")
 R = TypeVar("R")
+S = TypeVar("S")
 
 
 @dataclass
@@ -50,7 +47,13 @@ class _ActiveBranchChain:
     cases: list[BranchCase]
 
 
-PromptMemoryRefsByName = dict[str, dict[tuple[str, int, int, str], PromptMemoryReference]]
+_PLANNING_STEP_HOOKS: list[Callable[["_PlanSession", object], None]] = []
+
+
+def _register_planning_step_hook(
+    hook: Callable[["_PlanSession", object], None],
+) -> None:
+    _PLANNING_STEP_HOOKS.append(hook)
 
 
 class _PlanSession:
@@ -61,18 +64,24 @@ class _PlanSession:
         branch_env: BranchEnv,
         *,
         validation: JourneyValidation,
-        prompt_memory_refs_by_name: PromptMemoryRefsByName,
+        planning_state: dict[str, object],
+        planning_session_id: int,
     ) -> None:
         self.branch_env = dict(branch_env)
         self.validation = validation
+        self.planning_session_id = planning_session_id
         self.nodes: list[PlanNode] = []
+        self._planning_state = planning_state
         self._node_counter = 0
         self._group_counter = 0
         self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
         self._steps_seen: set[str] = set()
         self._journey_webhook_epoch = 0
-        self._prompt_memory_refs_by_name = prompt_memory_refs_by_name
-        self._prompt_memory_refs_seen_in_session: set[tuple[str, int, int, str]] = set()
+
+    def planning_state(self, key: str, factory: Callable[[], S]) -> S:
+        if key not in self._planning_state:
+            self._planning_state[key] = factory()
+        return cast(S, self._planning_state[key])
 
     def _next_node_id(self) -> str:
         self._node_counter += 1
@@ -95,7 +104,8 @@ class _PlanSession:
             raise TypeError(
                 "step(...) needs a callable as its first argument."
             )
-        self._register_step_prompt_memory_references(fn)
+        for hook in _PLANNING_STEP_HOOKS:
+            hook(self, fn)
         node_id = self._next_node_id()
         resolved_retry = _resolve_step_retry(
             retry=retry,
@@ -116,38 +126,6 @@ class _PlanSession:
         self.nodes.append(node)
         self._steps_seen.add(node.node_id)
         return PlannedValue(node_id=node.node_id, kind="step")
-
-    def _register_step_prompt_memory_references(self, fn: object) -> None:
-        for reference in collect_prompt_memory_references(fn):
-            refs_by_identity = self._prompt_memory_refs_by_name.setdefault(
-                reference.name,
-                {},
-            )
-            seen_in_session = reference.identity in self._prompt_memory_refs_seen_in_session
-            self._prompt_memory_refs_seen_in_session.add(reference.identity)
-            if reference.identity in refs_by_identity:
-                if seen_in_session:
-                    raise InvalidBranchUsageError(
-                        format_duplicate_prompt_memory_error(
-                            reference.name,
-                            (refs_by_identity[reference.identity], reference),
-                        ),
-                        hint=(
-                            "Use one unique memory name per prompt(...) invocation "
-                            "in a compiled journey."
-                        ),
-                    )
-                continue
-            if refs_by_identity:
-                references = tuple(refs_by_identity.values()) + (reference,)
-                raise InvalidBranchUsageError(
-                    format_duplicate_prompt_memory_error(reference.name, references),
-                    hint=(
-                        "Use one unique memory name per prompt(...) call in a "
-                        "compiled journey."
-                    ),
-                )
-            refs_by_identity[reference.identity] = reference
 
     def branch(self, *, start_from: str | None, frame: FrameType) -> bool:
         site = resolve_branch_call_site(frame)
@@ -275,14 +253,17 @@ def compile_journey(journey_fn: JourneyEntrypoint) -> JourneyPlan:
 
     queue: deque[BranchEnv] = deque([{}])
     case_plans: list[CasePlan] = []
-    prompt_memory_refs_by_name: PromptMemoryRefsByName = {}
+    planning_state: dict[str, object] = {}
+    planning_session_count = 0
 
     while queue:
         env = queue.popleft()
+        planning_session_count += 1
         session = _PlanSession(
             env,
             validation=validation,
-            prompt_memory_refs_by_name=prompt_memory_refs_by_name,
+            planning_state=planning_state,
+            planning_session_id=planning_session_count,
         )
 
         try:

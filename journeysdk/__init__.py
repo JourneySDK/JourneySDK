@@ -16,7 +16,6 @@ from .errors import (
     UnsupportedControlFlowError,
     UnsupportedLoopError,
 )
-from .executor import execute
 from .models import (
     CaseExecutionReport,
     CasePlan,
@@ -31,6 +30,8 @@ from .models import (
     StepRetry,
 )
 from .planner import compile_journey
+from . import _prompt_memory as _prompt_memory
+from .executor import execute
 from .rehydration import (
     JourneyRestoreContext,
     JourneyStoreContext,

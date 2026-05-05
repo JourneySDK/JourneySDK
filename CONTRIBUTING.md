@@ -79,6 +79,12 @@ Do not persist screenshots, rendered HTML, full model prompts, or other raw obse
 Memory files are named `[memory].memory.json` and live beside the journey source. Planning must be able to validate
 literal memory names and reject duplicates before execution.
 
+## Planning Hooks And Core Dependencies
+
+`journeysdk/planner.py` should stay tool-agnostic. If a feature needs compile-time validation when a step is planned,
+put that validation in the helper module owned by the feature and register it as a plain step-planning hook. Do not
+import prompt memory, Playwright, Docker, email, webhook, cloud, or other tool-specific helpers from the planner.
+
 ## Logger API
 
 Journey-owned output must go through `journeysdk.logger`; do not use direct `print(...)` calls for SDK, CLI, tool, or
