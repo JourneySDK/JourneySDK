@@ -78,11 +78,12 @@ controls visibility with `--log-level debug|info|warning|error|off`.
   raw observations.
 - Keep memory names literal and unique within a compiled journey so planning can report mistakes before execution.
 
-## Planner dependency rule
+## Core dependency rule
 
-`journeysdk/planner.py` owns generic journey planning only. It may expose private, generic planning hooks, but it must
-not import prompt memory, Playwright, Docker, email, webhook, cloud, or other tool-specific helpers. Put tool-specific
-planning validation in the helper module owned by that feature, and register it as a plain step-planning hook.
+High-level core modules such as `journeysdk/planner.py` and `journeysdk/executor.py` must stay generic. They must not
+import lower-level feature helpers such as prompt memory, Playwright, Docker, email, webhook, cloud clients, or other
+tool modules. Put feature-specific planning or execution support in the helper module owned by that feature, and
+connect back to core only through narrow generic hooks owned by the core module.
 
 ## Logger dependency rule
 
