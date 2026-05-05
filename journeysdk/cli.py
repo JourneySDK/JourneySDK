@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import tempfile
@@ -1733,8 +1734,46 @@ def _preconfigure_logging(argv: list[str]) -> None:
         configure_logging("info", output_format=output_format)
 
 
+def _active_environment_python() -> Path | None:
+    if "UV_RUN_RECURSION_DEPTH" not in os.environ:
+        return None
+    if os.environ.get("JOURNEY_ACTIVE_ENV_REEXEC") == "1":
+        return None
+
+    virtual_env = os.environ.get("VIRTUAL_ENV")
+    if not virtual_env:
+        return None
+
+    active_prefix = Path(virtual_env).resolve()
+    current_prefix = Path(sys.prefix).resolve()
+    if current_prefix == active_prefix:
+        return None
+
+    scripts_dir = "Scripts" if os.name == "nt" else "bin"
+    executable_name = "python.exe" if os.name == "nt" else "python"
+    active_python = active_prefix / scripts_dir / executable_name
+    if not active_python.exists():
+        return None
+    return active_python
+
+
+def _reexec_with_active_environment(argv: list[str]) -> None:
+    active_python = _active_environment_python()
+    if active_python is None:
+        return
+
+    env = {**os.environ, "JOURNEY_ACTIVE_ENV_REEXEC": "1"}
+    os.execve(
+        str(active_python),
+        [str(active_python), "-m", "journeysdk.cli", *argv],
+        env,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else argv
+    if argv is None:
+        _reexec_with_active_environment(raw_argv)
     _preconfigure_logging(raw_argv)
     parser = build_parser()
     args = parser.parse_args(argv)

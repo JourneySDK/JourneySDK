@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import textwrap
 from pathlib import Path
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from journeysdk.cli import _read_pause_choice, build_parser, main
+from journeysdk.cli import _active_environment_python, _read_pause_choice, build_parser, main
 from journeysdk.logger import configure_logging
 
 
@@ -252,6 +253,87 @@ def test_execute_interactive_requires_develop_step(
     assert exc_info.value.code == 2
     assert "--interactive requires --develop-step" in captured.out
     assert captured.err == ""
+
+
+def test_main_reexecs_with_uv_active_environment_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    active_env = tmp_path / "public" / ".venv"
+    active_python = active_env / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python"
+    )
+    active_python.parent.mkdir(parents=True)
+    active_python.write_text("", encoding="utf-8")
+
+    wrong_env = tmp_path / "workspace" / ".venv"
+    wrong_python = wrong_env / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python"
+    )
+    wrong_python.parent.mkdir(parents=True)
+    wrong_python.write_text("", encoding="utf-8")
+
+    class Reexec(RuntimeError):
+        pass
+
+    calls: list[tuple[str, list[str], dict[str, str]]] = []
+
+    def fake_execve(
+        path: str,
+        args: list[str],
+        env: dict[str, str],
+    ) -> None:
+        calls.append((path, args, env))
+        raise Reexec
+
+    monkeypatch.setattr(sys, "argv", ["journey", "--develop-step", "first"])
+    monkeypatch.setattr(sys, "prefix", str(wrong_env))
+    monkeypatch.setattr(sys, "executable", str(wrong_python))
+    monkeypatch.setenv("UV_RUN_RECURSION_DEPTH", "1")
+    monkeypatch.setenv("VIRTUAL_ENV", str(active_env))
+    monkeypatch.setattr(os, "execve", fake_execve)
+
+    with pytest.raises(Reexec):
+        main()
+
+    assert calls == [
+        (
+            str(active_python),
+            [str(active_python), "-m", "journeysdk.cli", "--develop-step", "first"],
+            {**os.environ, "JOURNEY_ACTIVE_ENV_REEXEC": "1"},
+        )
+    ]
+
+
+def test_active_environment_python_ignores_shared_base_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    base_python = tmp_path / "python"
+    base_python.write_text("", encoding="utf-8")
+
+    active_env = tmp_path / "public" / ".venv"
+    active_python = active_env / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python"
+    )
+    wrong_env = tmp_path / "workspace" / ".venv"
+    wrong_python = wrong_env / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python"
+    )
+    active_python.parent.mkdir(parents=True)
+    wrong_python.parent.mkdir(parents=True)
+    try:
+        active_python.symlink_to(base_python)
+        wrong_python.symlink_to(base_python)
+    except OSError as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+
+    monkeypatch.setattr(sys, "prefix", str(wrong_env))
+    monkeypatch.setattr(sys, "executable", str(wrong_python))
+    monkeypatch.setenv("UV_RUN_RECURSION_DEPTH", "1")
+    monkeypatch.setenv("VIRTUAL_ENV", str(active_env))
+
+    assert _active_environment_python() == active_python
 
 
 def test_execute_output_jsonl_emits_parseable_log_events(
