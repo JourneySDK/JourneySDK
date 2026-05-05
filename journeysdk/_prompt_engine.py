@@ -15,9 +15,8 @@ from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
 from journeysdk._prompt_memory import (
-    MAX_PROMPT_MEMORY_ITEMS,
     load_prompt_memory_entry,
-    normalize_prompt_instruction,
+    prompt_memory_entry_from_result,
     prompt_memory_key,
     prompt_memory_updates_disabled,
     truncate_prompt_memory_text,
@@ -84,6 +83,9 @@ class PromptToolContext:
     def record_action(self, record: JourneyLogRecord) -> None:
         self._session.record_action(record)
 
+    def record_memory_log(self, record: JourneyLogRecord) -> None:
+        self._session.record_memory_log(record)
+
     def observation_or_stop(self, *, step_index: int) -> list[dict[str, object]]:
         return self._session.tool_observation_or_stop(step_index=step_index)
 
@@ -133,6 +135,7 @@ class PromptEngineSession:
         self._memory_loaded = False
         self._prompt_model = self._load_model(model)
         self._action_records: list[JourneyLogRecord] = []
+        self._memory_log_records: list[JourneyLogRecord] = []
         self._prompt_thread_id = get_ident()
         self._prompt_thread_calls: Queue[_PromptThreadCall] = Queue()
 
@@ -159,6 +162,9 @@ class PromptEngineSession:
 
     def record_action(self, record: JourneyLogRecord) -> None:
         self._action_records.append(record)
+
+    def record_memory_log(self, record: JourneyLogRecord) -> None:
+        self._memory_log_records.append(record)
 
     def tool_observation_or_stop(
         self,
@@ -565,18 +571,14 @@ class PromptEngineSession:
             or prompt_memory_updates_disabled()
         ):
             return
-        entry = _memory_entry_from_result(
+        memory_records = tuple(self._memory_log_records or self._action_records)
+        entry = prompt_memory_entry_from_result(
             component=self._component,
             instruction=self._instruction,
             observation_signature=self._memory_observation_signature,
             final_output=final_output,
-            action_records=tuple(self._action_records),
+            log_records=memory_records,
         )
-        if self._memory_entry is not None:
-            entry["action_records"] = _merge_memory_records(
-                self._memory_entry.get("action_records"),
-                entry["action_records"],
-            )
         run_count = write_prompt_memory_entry(
             self._memory_path,
             self._memory_key,
@@ -589,71 +591,6 @@ class PromptEngineSession:
             key=self._memory_key,
             run_count=run_count,
         )
-
-
-def _memory_entry_from_result(
-    *,
-    component: str,
-    instruction: str,
-    observation_signature: str,
-    final_output: str | dict[str, object],
-    action_records: tuple[JourneyLogRecord, ...],
-) -> dict[str, object]:
-    return {
-        "component": component,
-        "instruction": normalize_prompt_instruction(instruction),
-        "observation_signature": observation_signature,
-        "final_output": _truncate_memory_value(final_output),
-        "action_records": [
-            _truncate_record(record.to_dict())
-            for record in action_records[-MAX_PROMPT_MEMORY_ITEMS:]
-        ],
-    }
-
-
-def _truncate_record(record: dict[str, object]) -> dict[str, object]:
-    return {
-        truncate_prompt_memory_text(key): _truncate_memory_value(value)
-        for key, value in record.items()
-        if isinstance(key, str)
-    }
-
-
-def _truncate_memory_value(value: object) -> object:
-    if value is None or isinstance(value, bool | int | float):
-        return value
-    if isinstance(value, str):
-        return truncate_prompt_memory_text(value)
-    if isinstance(value, list):
-        return [
-            _truncate_memory_value(item)
-            for item in value[-MAX_PROMPT_MEMORY_ITEMS:]
-        ]
-    if isinstance(value, dict):
-        return {
-            truncate_prompt_memory_text(key): _truncate_memory_value(item)
-            for key, item in list(value.items())[-MAX_PROMPT_MEMORY_ITEMS:]
-            if isinstance(key, str)
-        }
-    return truncate_prompt_memory_text(value)
-
-
-def _merge_memory_records(existing: object, current: object) -> list[dict[str, object]]:
-    merged: list[dict[str, object]] = []
-    seen: set[str] = set()
-    for collection in (existing, current):
-        if not isinstance(collection, list):
-            continue
-        for item in collection:
-            if not isinstance(item, dict):
-                continue
-            normalized = _truncate_record(item)
-            identity = json.dumps(normalized, sort_keys=True, default=str)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            merged.append(normalized)
-    return merged[-MAX_PROMPT_MEMORY_ITEMS:]
 
 
 def _prompt_output_summary(value: str | dict[str, object]) -> str:
@@ -828,4 +765,3 @@ def resolve_prompt_model(
     raise RuntimeError(
         f"{owner} requires model=... or the {env_var} environment variable."
     )
-

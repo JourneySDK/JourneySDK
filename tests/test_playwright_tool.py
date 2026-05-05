@@ -1562,7 +1562,14 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
     first_model = _FakeLangChainPromptModel(
         [
             _run_code('page.locator("#attach").click(timeout=timeout_ms)'),
-            _run_code('page.locator("#composer").fill("hello", timeout=timeout_ms)'),
+            _run_code(
+                "\n".join(
+                    [
+                        'composer = page.locator("#composer")',
+                        'composer.fill("hello", timeout=timeout_ms)',
+                    ]
+                )
+            ),
             "Started the chat.",
         ]
     )
@@ -1592,17 +1599,31 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
     assert entry["observation_signature"] == (
         '{"title":"Chat","url":"http://example.test/chat"}'
     )
-    action_records = entry["action_records"]
+    log_records = entry["log_records"]
     assert "successful_steps" not in entry
     assert "rejected_steps" not in entry
-    assert action_records[0]["target"] == (
+    assert "action_records" not in entry
+    assert [record["event"] for record in log_records] == [
+        "prompt_action",
+        "prompt_code",
+        "prompt_rejected",
+        "prompt_action",
+        "prompt_code",
+        "prompt_code",
+        "prompt_code",
+        "prompt_step_success",
+    ]
+    assert log_records[0]["component"] == "playwright-prompt"
+    assert log_records[1]["code"] == (
         'page.locator("#attach").click(timeout=timeout_ms)'
     )
-    assert action_records[0]["status"] == "rejected"
-    assert action_records[1]["target"] == (
-        'page.locator("#composer").fill("hello", timeout=timeout_ms)'
+    assert log_records[2]["detail"] == (
+        "AssertionError: No click handler registered for '#attach'"
     )
-    assert action_records[1]["status"] == "ok"
+    assert "code" not in log_records[4]
+    assert log_records[5]["code"] == 'composer = page.locator("#composer")'
+    assert log_records[6]["code"] == 'composer.fill("hello", timeout=timeout_ms)'
+    assert log_records[7]["page"] == 0
 
     second_model = _FakeLangChainPromptModel(["Done from memory."])
     monkeypatch.setattr(
@@ -1789,6 +1810,8 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
     assert load_calls
     assert not write_calls
     assert "Prompt memory JSON:" in prompt_text
+    assert "action_records" in prompt_text
+    assert "log_records" not in prompt_text
     assert "#cached" in prompt_text
 
 

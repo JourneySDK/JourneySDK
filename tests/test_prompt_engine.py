@@ -193,7 +193,8 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
     assert entry["component"] == "fake-tool"
     assert entry["observation_signature"] == "fake://ready"
     assert entry["final_output"] == "done"
-    assert entry["action_records"] == [
+    assert "action_records" not in entry
+    assert entry["log_records"] == [
         {
             "level": "INFO",
             "component": "fake-tool",

@@ -187,58 +187,82 @@ class _PromptSession:
             active=_page_summary(active_page),
         )
 
-    def _log_action(self, *, step_index: int, code: str) -> None:
+    def _log_action(
+        self,
+        *,
+        step_index: int,
+        code: str,
+    ) -> tuple[JourneyLogRecord, ...]:
         normalized_code = code.strip()
         action_description = _describe_prompt_action(normalized_code)
-        _emit_prompt_log(
-            f"step {step_index}/{self._max_steps}: AI will "
-            f"{action_description}",
-            event="prompt_action",
-            pretty=_prompt_row(
-                f"{step_index}/{self._max_steps} action",
-                action_description,
-                style="accent",
-            ),
-            step=step_index,
-            max_steps=self._max_steps,
-            action=action_description,
-        )
-        _emit_prompt_code_log(
-            step_label=f"step {step_index}/{self._max_steps}",
-            code=normalized_code,
-        )
-
-    def _log_new_pages(self, *, previous_page_count: int) -> None:
-        current_pages = self._prompt_page_payloads()
-        for page in current_pages[previous_page_count:]:
+        records = [
             _emit_prompt_log(
-                f"discovered {_page_summary(page)}",
-                event="page_discovered",
+                f"step {step_index}/{self._max_steps}: AI will "
+                f"{action_description}",
+                event="prompt_action",
                 pretty=_prompt_row(
-                    "page discovered",
-                    _page_summary(page),
+                    f"{step_index}/{self._max_steps} action",
+                    action_description,
                     style="accent",
                 ),
-                page=page["index"],
-                title=page["title"],
-                url=page["url"],
+                step=step_index,
+                max_steps=self._max_steps,
+                action=action_description,
             )
+        ]
+        records.extend(
+            _emit_prompt_code_log(
+                step_label=f"step {step_index}/{self._max_steps}",
+                code=normalized_code,
+            )
+        )
+        return tuple(records)
 
-    def _log_active_page_change(self, *, previous_active_page_index: int) -> None:
+    def _log_new_pages(
+        self,
+        *,
+        previous_page_count: int,
+    ) -> tuple[JourneyLogRecord, ...]:
+        current_pages = self._prompt_page_payloads()
+        records: list[JourneyLogRecord] = []
+        for page in current_pages[previous_page_count:]:
+            records.append(
+                _emit_prompt_log(
+                    f"discovered {_page_summary(page)}",
+                    event="page_discovered",
+                    pretty=_prompt_row(
+                        "page discovered",
+                        _page_summary(page),
+                        style="accent",
+                    ),
+                    page=page["index"],
+                    title=page["title"],
+                    url=page["url"],
+                )
+            )
+        return tuple(records)
+
+    def _log_active_page_change(
+        self,
+        *,
+        previous_active_page_index: int,
+    ) -> tuple[JourneyLogRecord, ...]:
         if previous_active_page_index == self._active_page_index:
-            return
+            return ()
         active_page = self._prompt_page_payloads()[self._active_page_index]
-        _emit_prompt_log(
-            f"active page changed to {_page_summary(active_page)}",
-            event="active_page_change",
-            pretty=_prompt_row(
-                "active page",
-                _page_summary(active_page),
-                style="accent",
+        return (
+            _emit_prompt_log(
+                f"active page changed to {_page_summary(active_page)}",
+                event="active_page_change",
+                pretty=_prompt_row(
+                    "active page",
+                    _page_summary(active_page),
+                    style="accent",
+                ),
+                previous_page=previous_active_page_index,
+                active_page=self._active_page_index,
+                page_summary=_page_summary(active_page),
             ),
-            previous_page=previous_active_page_index,
-            active_page=self._active_page_index,
-            page_summary=_page_summary(active_page),
         )
 
     def _build_observation(self) -> PromptObservation:
@@ -314,7 +338,8 @@ class _PromptSession:
 
         previous_page_count = len(self._pages)
         previous_active_page_index = self._active_page_index
-        self._log_action(step_index=step_index, code=normalized_code)
+        for record in self._log_action(step_index=step_index, code=normalized_code):
+            context.record_memory_log(record)
         try:
             step = self._execute_python_step(
                 step_index=step_index,
@@ -322,10 +347,14 @@ class _PromptSession:
                 target=target,
             )
         except Exception as exc:
-            self._log_new_pages(previous_page_count=previous_page_count)
-            self._log_active_page_change(
+            for record in self._log_new_pages(
+                previous_page_count=previous_page_count,
+            ):
+                context.record_memory_log(record)
+            for record in self._log_active_page_change(
                 previous_active_page_index=previous_active_page_index,
-            )
+            ):
+                context.record_memory_log(record)
             self._append_rejected_action(
                 context=context,
                 step_index=step_index,
@@ -335,22 +364,28 @@ class _PromptSession:
             )
             return context.observation_or_stop(step_index=step_index)
 
-        self._log_new_pages(previous_page_count=previous_page_count)
-        self._log_active_page_change(
+        for record in self._log_new_pages(previous_page_count=previous_page_count):
+            context.record_memory_log(record)
+        for record in self._log_active_page_change(
             previous_active_page_index=previous_active_page_index,
-        )
-        _emit_prompt_log(
-            f"step {step_index}/{self._max_steps}: succeeded on "
-            f"{_page_summary(self._prompt_page_payloads()[self._active_page_index])}",
-            event="prompt_step_success",
-            pretty=_prompt_row(
-                f"{step_index}/{self._max_steps} ok",
-                _page_summary(self._prompt_page_payloads()[self._active_page_index]),
-                style="success",
-            ),
-            step=step_index,
-            max_steps=self._max_steps,
-            page=self._active_page_index,
+        ):
+            context.record_memory_log(record)
+        context.record_memory_log(
+            _emit_prompt_log(
+                f"step {step_index}/{self._max_steps}: succeeded on "
+                f"{_page_summary(self._prompt_page_payloads()[self._active_page_index])}",
+                event="prompt_step_success",
+                pretty=_prompt_row(
+                    f"{step_index}/{self._max_steps} ok",
+                    _page_summary(
+                        self._prompt_page_payloads()[self._active_page_index]
+                    ),
+                    style="success",
+                ),
+                step=step_index,
+                max_steps=self._max_steps,
+                page=self._active_page_index,
+            )
         )
         context.record_action(step)
         return context.observation_or_stop(step_index=step_index)
@@ -409,20 +444,22 @@ class _PromptSession:
             detail=detail,
         )
         context.record_action(record)
-        _emit_prompt_log(
-            f"step {step_index}/{self._max_steps}: rejected on "
-            f"{_page_summary(self._prompt_page_payloads()[self._active_page_index])}: "
-            f"{detail}",
-            event="prompt_rejected",
-            pretty=_prompt_row(
-                f"{step_index}/{self._max_steps} rejected",
-                detail,
-                style="warning",
-            ),
-            step=step_index,
-            max_steps=self._max_steps,
-            page=self._active_page_index,
-            detail=detail,
+        context.record_memory_log(
+            _emit_prompt_log(
+                f"step {step_index}/{self._max_steps}: rejected on "
+                f"{_page_summary(self._prompt_page_payloads()[self._active_page_index])}: "
+                f"{detail}",
+                event="prompt_rejected",
+                pretty=_prompt_row(
+                    f"{step_index}/{self._max_steps} rejected",
+                    detail,
+                    style="warning",
+                ),
+                step=step_index,
+                max_steps=self._max_steps,
+                page=self._active_page_index,
+                detail=detail,
+            )
         )
         return record
 
@@ -580,44 +617,57 @@ def _emit_prompt_log(
     event: str = "prompt_log",
     pretty: object = None,
     **fields: object,
-) -> None:
+) -> JourneyLogRecord:
+    record = make_log_record(_PROMPT_LOGGER.component, event, message, **fields)
     _PROMPT_LOGGER.info(event, message, pretty=pretty, **fields)
+    return record
 
 
-def _emit_prompt_code_log(*, step_label: str, code: str) -> None:
+def _emit_prompt_code_log(
+    *,
+    step_label: str,
+    code: str,
+) -> tuple[JourneyLogRecord, ...]:
     step_ref = _prompt_step_ref(step=None, max_steps=None, step_label=step_label)
     if not code:
-        _emit_prompt_log(
-            f"{step_label} code: <blank>",
-            event="prompt_code",
-            pretty=_prompt_row(f"{step_ref} code", "<blank>", style="code"),
-            step_label=step_label,
-            code="<blank>",
+        return (
+            _emit_prompt_log(
+                f"{step_label} code: <blank>",
+                event="prompt_code",
+                pretty=_prompt_row(f"{step_ref} code", "<blank>", style="code"),
+                step_label=step_label,
+                code="<blank>",
+            ),
         )
-        return
     if "\n" not in code:
-        _emit_prompt_log(
-            f"{step_label} code: {code}",
-            event="prompt_code",
-            pretty=_prompt_row(f"{step_ref} code", code, style="code"),
-            step_label=step_label,
-            code=code,
+        return (
+            _emit_prompt_log(
+                f"{step_label} code: {code}",
+                event="prompt_code",
+                pretty=_prompt_row(f"{step_ref} code", code, style="code"),
+                step_label=step_label,
+                code=code,
+            ),
         )
-        return
-    _emit_prompt_log(
-        f"{step_label} code:",
-        event="prompt_code",
-        pretty=_prompt_row(f"{step_ref} code", "", style="code"),
-        step_label=step_label,
-    )
+    records = [
+        _emit_prompt_log(
+            f"{step_label} code:",
+            event="prompt_code",
+            pretty=_prompt_row(f"{step_ref} code", "", style="code"),
+            step_label=step_label,
+        )
+    ]
     for line in code.splitlines():
-        _emit_prompt_log(
-            f"  {line}",
-            event="prompt_code",
-            pretty=_prompt_continuation(line, style="code"),
-            step_label=step_label,
-            code=line,
+        records.append(
+            _emit_prompt_log(
+                f"  {line}",
+                event="prompt_code",
+                pretty=_prompt_continuation(line, style="code"),
+                step_label=step_label,
+                code=line,
+            )
         )
+    return tuple(records)
 
 
 def _page_summary(page: dict[str, object]) -> str:

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 from .errors import InvalidBranchUsageError
+from .logger import JourneyLogRecord
 from .planner import _PlanSession, _register_planning_step_hook
 from .session import get_session
 from .utils import callable_ref
@@ -278,6 +279,26 @@ def write_prompt_memory_entry(
     return run_count
 
 
+def prompt_memory_entry_from_result(
+    *,
+    component: str,
+    instruction: str,
+    observation_signature: str,
+    final_output: str | dict[str, object],
+    log_records: tuple[JourneyLogRecord, ...],
+) -> dict[str, object]:
+    return {
+        "component": component,
+        "instruction": normalize_prompt_instruction(instruction),
+        "observation_signature": observation_signature,
+        "final_output": _truncate_memory_value(final_output),
+        "log_records": [
+            _truncate_record(record.to_dict())
+            for record in log_records[-MAX_PROMPT_MEMORY_ITEMS:]
+        ],
+    }
+
+
 def truncate_prompt_memory_text(value: object) -> str:
     text = str(value)
     if len(text) <= MAX_PROMPT_MEMORY_TEXT_LENGTH:
@@ -291,6 +312,33 @@ def _is_prompt_call(call: ast.Call) -> bool:
     if isinstance(call.func, ast.Name):
         return call.func.id == "prompt"
     return False
+
+
+def _truncate_record(record: dict[str, object]) -> dict[str, object]:
+    return {
+        truncate_prompt_memory_text(key): _truncate_memory_value(value)
+        for key, value in record.items()
+        if isinstance(key, str)
+    }
+
+
+def _truncate_memory_value(value: object) -> object:
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        return truncate_prompt_memory_text(value)
+    if isinstance(value, list):
+        return [
+            _truncate_memory_value(item)
+            for item in value[-MAX_PROMPT_MEMORY_ITEMS:]
+        ]
+    if isinstance(value, dict):
+        return {
+            truncate_prompt_memory_text(key): _truncate_memory_value(item)
+            for key, item in list(value.items())[-MAX_PROMPT_MEMORY_ITEMS:]
+            if isinstance(key, str)
+        }
+    return truncate_prompt_memory_text(value)
 
 
 def _load_prompt_memory_file(path: Path) -> dict[str, object]:
