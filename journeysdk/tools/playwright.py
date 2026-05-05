@@ -18,9 +18,6 @@ from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
 
 from ._playwright_prompt import (
-    JourneyPlaywrightPromptPage,
-    JourneyPlaywrightPromptResult,
-    JourneyPlaywrightPromptStep,
     prompt_page,
 )
 
@@ -335,7 +332,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         action_timeout_seconds: float = 5.0,
         memory: str | None = None,
         output: Mapping[str, str | Mapping[str, object]] | None = None,
-    ) -> JourneyPlaywrightPromptResult:
+    ) -> str | dict[str, object]:
         """Use an LLM to inspect and interact with the live page.
 
         Args:
@@ -347,7 +344,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
             memory: Optional named prompt memory stored as `[memory].memory.json`.
             output: Optional structured-output fields. String values are field
                 descriptions for string output fields; mapping values are
-                JSON-schema property fragments. When omitted, result.output is
+                JSON-schema property fragments. When omitted, the return value is
                 plain text.
         """
 
@@ -618,9 +615,6 @@ def _cleanup_failure_message(failures: list[BaseException]) -> str:
 __all__ = [
     "PlaywrightCookie",
     "JourneyPlaywrightPage",
-    "JourneyPlaywrightPromptPage",
-    "JourneyPlaywrightPromptResult",
-    "JourneyPlaywrightPromptStep",
     "ensure_browser_installed",
     "open_page",
 ]

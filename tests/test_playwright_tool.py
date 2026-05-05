@@ -16,6 +16,7 @@ pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import Page as PlaywrightPage
 
+from journeysdk import _prompt_engine as journey_prompt_engine
 from journeysdk.tools import _playwright_prompt as journey_playwright_prompt
 from journeysdk.tools import playwright as journey_playwright
 
@@ -1019,7 +1020,7 @@ def test_journey_playwright_prompt_reports_langchain_model_initialization_failur
         raise RuntimeError("missing provider package")
 
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_prompt_engine,
         "init_chat_model",
         fail_init_chat_model,
     )
@@ -1031,10 +1032,12 @@ def test_journey_playwright_prompt_reports_langchain_model_initialization_failur
 
 def test_journey_playwright_prompt_delegates_tool_execution_to_langchain_agent():
     source = Path(journey_playwright_prompt.__file__).read_text(encoding="utf-8")
+    engine_source = Path(journey_prompt_engine.__file__).read_text(encoding="utf-8")
 
-    assert "from langchain.chat_models import init_chat_model" in source
+    assert "PromptEngineSession" in source
+    assert "from langchain.chat_models import init_chat_model" in engine_source
     assert "importlib.import_module" not in source
-    assert "create_agent" in source
+    assert "create_agent" in engine_source
     assert "_build_agent_middleware" not in source
     assert "wrap_model_call" not in source
     assert "bind_tools" not in source
@@ -1095,49 +1098,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
     )
     log_output = capsys.readouterr().out
 
-    assert result.output == "The opened popup title is Welcome popup."
-    assert result.model == "anthropic:claude-sonnet-4-5"
-    assert result.active_page_index == 1
-    assert result.pages == (
-        journey_playwright.JourneyPlaywrightPromptPage(
-            index=0,
-            url="http://example.test/login",
-            title="Login page",
-            is_original=True,
-        ),
-        journey_playwright.JourneyPlaywrightPromptPage(
-            index=1,
-            url="http://example.test/sign-in-popup",
-            title="Welcome popup",
-            is_original=False,
-        ),
-    )
-    assert result.steps == (
-        journey_playwright.JourneyPlaywrightPromptStep(
-            index=1,
-            page_index=0,
-            action="python",
-            target='page.locator("#sign-in").click(timeout=timeout_ms)',
-            status="ok",
-            detail="Executed Python snippet. Active page index is 0.",
-        ),
-        journey_playwright.JourneyPlaywrightPromptStep(
-            index=2,
-            page_index=1,
-            action="python",
-            target="switch_page(1)",
-            status="ok",
-            detail="Executed Python snippet. Active page index is 1.",
-        ),
-        journey_playwright.JourneyPlaywrightPromptStep(
-            index=3,
-            page_index=1,
-            action="finish",
-            target="",
-            status="ok",
-            detail="Prompt marked complete.",
-        ),
-    )
+    assert result == "The opened popup title is Welcome popup."
     assert len(fake_model.calls) == 3
     assert all(
         "Return whether the original browser task is completed."
@@ -1148,6 +1109,14 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
     assert not hasattr(journey_playwright_prompt, "_COLLECT_ELEMENTS_SCRIPT")
     first_prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-rendered-html>" in first_prompt_text
+    assert "Observation records JSON:" in first_prompt_text
+    assert "Known pages JSON:" not in first_prompt_text
+    assert '"event": "page"' in first_prompt_text
+    assert '"is_original": true' in first_prompt_text
+    second_prompt_text = fake_model.calls[1]["messages"][-1]["content"][0]["text"]
+    assert "Executed steps JSON:" not in second_prompt_text
+    assert '"event": "action"' in second_prompt_text
+    assert 'page.locator(\\"#sign-in\\").click(timeout=timeout_ms)' in second_prompt_text
     assert '<button id="sign-in" role="button">Sign in</button>' in first_prompt_text
     assert '"actions": [' not in first_prompt_text
     assert '"id": "e1"' not in first_prompt_text
@@ -1156,8 +1125,10 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         != -1
     )
     final_prompt_text = fake_model.calls[2]["messages"][-1]["content"][0]["text"]
-    assert "Executed steps JSON:" in final_prompt_text
-    assert '"action": "python"' in final_prompt_text
+    assert "Observation records JSON:" in final_prompt_text
+    assert "Executed steps JSON:" not in final_prompt_text
+    assert '"event": "action"' in final_prompt_text
+    assert '"action_type": "python"' in final_prompt_text
     assert "return the final answer as plain text" in final_prompt_text
     assert events == [
         ("prompt_rendered_html", "Login page"),
@@ -1263,7 +1234,7 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
         },
     )
 
-    assert result.output == {
+    assert result == {
         "popup_title": "Welcome popup",
         "has_welcome_text": True,
     }
@@ -1325,7 +1296,7 @@ def test_journey_playwright_prompt_final_output_includes_visible_error_text(monk
         output={"error": "An error message if found."},
     )
 
-    assert result.output == {
+    assert result == {
         "error": "Password is incorrect. Try again, or use another method.",
     }
     assert len(fake_model.calls) == 1
@@ -1529,23 +1500,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
     result = page.prompt("say you need to fix a toilet", model="openai:gpt-4.1-mini")
     log_output = capsys.readouterr().out
 
-    assert result.output == "Started the chat."
-    assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
-        index=1,
-        page_index=0,
-        action="python",
-        target='page.locator("#attach").click(timeout=timeout_ms)',
-        status="rejected",
-        detail="AssertionError: No click handler registered for '#attach'",
-    )
-    assert result.steps[1] == journey_playwright.JourneyPlaywrightPromptStep(
-        index=2,
-        page_index=0,
-        action="python",
-        target='page.locator("#composer").fill("I need to fix a toilet", timeout=timeout_ms)',
-        status="ok",
-        detail="Executed Python snippet. Active page index is 0.",
-    )
+    assert result == "Started the chat."
     assert page._fake_prompt_field_values == {"#composer": "I need to fix a toilet"}
     assert '<div id="composer" role="textbox">Message</div>' in fake_model.calls[0][
         "messages"
@@ -1632,16 +1587,22 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
     assert "png:Chat" not in serialized
     assert '<div id="composer"' not in serialized
     entry = next(iter(memory_payload["entries"].values()))
+    assert entry["component"] == "playwright"
     assert entry["final_output"] == "Started the chat."
-    assert entry["page_signature"] == (
+    assert entry["observation_signature"] == (
         '{"title":"Chat","url":"http://example.test/chat"}'
     )
-    assert entry["successful_steps"][0]["target"] == (
-        'page.locator("#composer").fill("hello", timeout=timeout_ms)'
-    )
-    assert entry["rejected_steps"][0]["target"] == (
+    action_records = entry["action_records"]
+    assert "successful_steps" not in entry
+    assert "rejected_steps" not in entry
+    assert action_records[0]["target"] == (
         'page.locator("#attach").click(timeout=timeout_ms)'
     )
+    assert action_records[0]["status"] == "rejected"
+    assert action_records[1]["target"] == (
+        'page.locator("#composer").fill("hello", timeout=timeout_ms)'
+    )
+    assert action_records[1]["status"] == "ok"
 
     second_model = _FakeLangChainPromptModel(["Done from memory."])
     monkeypatch.setattr(
@@ -1675,6 +1636,55 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
     assert "Prompt memory JSON:" not in third_prompt_text
 
 
+def test_journey_playwright_prompt_does_not_reuse_legacy_memory_shape(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    memory_path = tmp_path / "legacy.memory.json"
+    memory_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": {
+                    "legacy-key": {
+                        "tool": "playwright",
+                        "page_signature": '{"title":"Chat","url":"http://example.test/chat"}',
+                        "successful_steps": [
+                            {
+                                "target": 'page.locator("#legacy").click(timeout=timeout_ms)',
+                                "detail": "worked before",
+                            }
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Chat",
+        url="http://example.test/chat",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(["Done."])
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    page.prompt("say hello", model="openai:gpt-4.1-mini", memory="legacy")
+
+    prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    assert "Prompt memory JSON:" not in prompt_text
+    assert "#legacy" not in prompt_text
+
+
 def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
@@ -1696,17 +1706,17 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
         raise AssertionError("prompt memory should be disabled")
 
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_prompt_engine,
         "load_prompt_memory_entry",
         fail_memory_access,
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_prompt_engine,
         "write_prompt_memory_entry",
         fail_memory_access,
     )
 
-    def run_prompt() -> journey_playwright.JourneyPlaywrightPromptResult:
+    def run_prompt() -> str | dict[str, object]:
         return page.prompt("finish", model="openai:gpt-4.1-mini", memory="disabled")
 
     def memory_journey() -> None:
@@ -1738,10 +1748,15 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
     def load_memory(path: Path, key: str) -> dict[str, object]:
         load_calls.append((path, key))
         return {
-            "successful_steps": [
+            "action_records": [
                 {
+                    "level": "INFO",
+                    "component": "playwright",
+                    "event": "action",
+                    "message": "cached click",
                     "target": 'page.locator("#cached").click(timeout=timeout_ms)',
                     "detail": "worked before",
+                    "status": "ok",
                 }
             ]
         }
@@ -1752,17 +1767,17 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
         raise AssertionError("prompt memory updates should be disabled")
 
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_prompt_engine,
         "load_prompt_memory_entry",
         load_memory,
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_prompt_engine,
         "write_prompt_memory_entry",
         fail_memory_write,
     )
 
-    def run_prompt() -> journey_playwright.JourneyPlaywrightPromptResult:
+    def run_prompt() -> str | dict[str, object]:
         return page.prompt("finish", model="openai:gpt-4.1-mini", memory="readonly")
 
     def memory_journey() -> None:
@@ -1832,20 +1847,9 @@ def test_journey_playwright_prompt_retries_invalid_tool_arguments(monkeypatch):
 
     result = page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
-    assert result.output == "Recovered."
-    assert result.steps[0] == journey_playwright.JourneyPlaywrightPromptStep(
-        index=1,
-        page_index=0,
-        action="tool",
-        target="journey_run_code",
-        status="rejected",
-        detail=(
-            "ValueError: JourneyPlaywrightPage.prompt(...) "
-            "journey_run_code expects a non-blank code string."
-        ),
-    )
+    assert result == "Recovered."
     second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
-    assert '"action": "tool"' in second_prompt_text
+    assert '"action_type": "tool"' in second_prompt_text
     assert '"status": "rejected"' in second_prompt_text
 
 
@@ -1870,7 +1874,7 @@ def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):
 
     result = page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
-    assert result.output == "Recovered."
+    assert result == "Recovered."
     second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
     assert '"target": "page.locator(\\"#sign-in\\""' in second_prompt_text
     assert '"status": "rejected"' in second_prompt_text
@@ -1900,7 +1904,7 @@ def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
 
     result = page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
-    assert result.output == "Recovered."
+    assert result == "Recovered."
 
 
 def test_journey_playwright_prompt_rejects_blank_finish_then_recovers(monkeypatch):
@@ -1921,4 +1925,4 @@ def test_journey_playwright_prompt_rejects_blank_finish_then_recovers(monkeypatc
 
     result = page.prompt("finish clearly", model="openai:gpt-4.1-mini")
 
-    assert result.output == "Done."
+    assert result == "Done."

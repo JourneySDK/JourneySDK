@@ -344,14 +344,13 @@ def assert_dashboard(session: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
     return page
 ```
 
-The same live page can also run a bounded LLM action loop. `page.prompt(...)` returns a
-`JourneyPlaywrightPromptResult`; by default, `result.output` is a plain string. Pass `output=...` when you want
-LangChain structured output in `result.output`:
+The same live page can also run a bounded LLM action loop. By default, `page.prompt(...)` returns a plain string.
+Pass `output=...` when you want LangChain structured output as a dictionary:
 
 ```python
-from journeysdk.tools.playwright import JourneyPlaywrightPromptResult, open_page
+from journeysdk.tools.playwright import open_page
 
-def capture_popup_title() -> JourneyPlaywrightPromptResult:
+def capture_popup_title() -> dict[str, object]:
     page = open_page("https://app.example/login")
     try:
         return page.prompt(
@@ -373,9 +372,9 @@ The optional `memory="sign-in-popup"` argument stores compact lessons from succe
 `sign-in-popup.memory.json` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.
 The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
-`dict[str, object]` in `result.output` instead of plain text.
+`dict[str, object]` return value instead of plain text.
 If the browser task cannot be completed because the page shows a blocking app state, such as a locked account or
-invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning a successful prompt result.
+invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
 
 Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
 enabled, Journey stores the step inputs and outputs it may need to replay later, so those values must be

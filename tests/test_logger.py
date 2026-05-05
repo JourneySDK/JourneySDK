@@ -7,7 +7,13 @@ import re
 
 import pytest
 
-from journeysdk.logger import configure_logging, get_logger, pretty_line, pretty_row
+from journeysdk.logger import (
+    configure_logging,
+    get_logger,
+    make_log_record,
+    pretty_line,
+    pretty_row,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +36,49 @@ def test_logger_writes_generic_pretty_fallback_to_current_stdout(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out == "generic message detail=visible\n"
+
+
+def test_make_log_record_normalizes_json_safe_fields() -> None:
+    record = make_log_record(
+        "  component  ",
+        " event_name ",
+        "machine message",
+        detail={"nested": ("a", Path("file.txt"))},
+        count=3,
+    )
+
+    assert record.component == "component"
+    assert record.event == "event_name"
+    assert record.level == "info"
+    assert record.message == "machine message"
+    assert record.fields == {
+        "count": 3,
+        "detail": {"nested": ["a", "file.txt"]},
+    }
+    assert record.to_dict() == {
+        "level": "INFO",
+        "component": "component",
+        "event": "event_name",
+        "message": "machine message",
+        "count": 3,
+        "detail": {"nested": ["a", "file.txt"]},
+    }
+
+
+def test_make_log_record_redacts_sensitive_fields() -> None:
+    record = make_log_record(
+        "component",
+        "event_name",
+        "machine message",
+        api_token="secret-token",
+        nested={"password": "secret-password"},
+    )
+
+    assert record.fields == {
+        "api_token": "[redacted]",
+        "nested": {"password": "[redacted]"},
+    }
+    assert "secret" not in json.dumps(record.to_dict())
 
 
 def test_logger_accepts_explicit_pretty_text(capsys: pytest.CaptureFixture[str]):

@@ -160,14 +160,14 @@ def prompt_memory_updates_disabled() -> bool:
 
 def prompt_memory_key(
     *,
-    tool: str,
+    component: str,
     instruction: str,
-    page_signature: str,
+    observation_signature: str,
 ) -> str:
     payload = {
-        "tool": tool,
+        "component": component,
         "instruction": normalize_prompt_instruction(instruction),
-        "page_signature": page_signature,
+        "observation_signature": observation_signature,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

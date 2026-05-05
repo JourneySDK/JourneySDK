@@ -78,6 +78,28 @@ class PrettyLine:
     style: PrettyStyle | None = None
 
 
+@dataclass(frozen=True)
+class JourneyLogRecord:
+    """One JSON-safe structured Journey diagnostic record."""
+
+    level: JourneyLogLevel
+    component: str
+    event: str
+    message: str
+    fields: dict[str, object]
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the record in the same field shape as JSON log output."""
+
+        return {
+            "level": _LEVEL_NAMES[self.level],
+            "component": self.component,
+            "event": self.event,
+            "message": self.message,
+            **self.fields,
+        }
+
+
 PrettyValue: TypeAlias = str | PrettyLine | Sequence[str | PrettyLine] | bool | None
 
 
@@ -202,6 +224,32 @@ def get_logger(component: str) -> JourneyLogger:
     """Return a logger for one Journey SDK component."""
 
     return JourneyLogger(component)
+
+
+def make_log_record(
+    component: str,
+    event: str,
+    message: object,
+    *,
+    level: JourneyLogLevel = "info",
+    **fields: object,
+) -> JourneyLogRecord:
+    """Return one JSON-safe Journey log record without emitting it."""
+
+    if level == "off":
+        raise ValueError("make_log_record(...) does not accept level='off'.")
+    _require_level(level)
+    return JourneyLogRecord(
+        level=level,
+        component=_normalize_component(component),
+        event=_normalize_event(event),
+        message=str(message),
+        fields={
+            key: _json_field_value(key, fields[key])
+            for key in sorted(fields)
+            if fields[key] is not None
+        },
+    )
 
 
 def pretty_line(text: object, *, indent: int = 0, style: PrettyStyle | None = None) -> PrettyLine:
@@ -562,12 +610,14 @@ def _active_stream() -> TextIO:
 
 __all__ = [
     "JourneyLogLevel",
+    "JourneyLogRecord",
     "JourneyLogger",
     "JourneyOutputFormat",
     "PrettyLine",
     "PrettyStyle",
     "configure_logging",
     "get_logger",
+    "make_log_record",
     "pretty_line",
     "pretty_row",
 ]
