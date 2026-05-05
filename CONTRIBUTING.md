@@ -81,9 +81,9 @@ literal memory names and reject duplicates before execution.
 
 ## Planning Hooks And Core Dependencies
 
-`journeysdk/planner.py` should stay tool-agnostic. If a feature needs compile-time validation when a step is planned,
-put that validation in the helper module owned by the feature and register it as a plain step-planning hook. Do not
-import prompt memory, Playwright, Docker, email, webhook, cloud, or other tool-specific helpers from the planner.
+Keep the component dependency direction described in `AGENTS.md`: high-level orchestration modules stay generic, and
+feature/helper modules plug in through narrow hooks. If a feature needs compile-time validation when a step is planned,
+put that validation in the helper module owned by the feature and register it as a plain step-planning hook.
 
 ## Logger API
 

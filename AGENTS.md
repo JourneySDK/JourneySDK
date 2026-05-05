@@ -80,10 +80,19 @@ controls visibility with `--log-level debug|info|warning|error|off`.
 
 ## Core dependency rule
 
-High-level core modules such as `journeysdk/planner.py` and `journeysdk/executor.py` must stay generic. They must not
-import lower-level feature helpers such as prompt memory, Playwright, Docker, email, webhook, cloud clients, or other
-tool modules. Put feature-specific planning or execution support in the helper module owned by that feature, and
-connect back to core only through narrow generic hooks owned by the core module.
+Keep dependency direction one-way so high-level orchestration does not depend on lower-level feature helpers.
+
+- Foundational shared modules: `journeysdk/errors.py`, `journeysdk/models.py`, `journeysdk/types.py`,
+  `journeysdk/utils.py`, `journeysdk/session.py`, `journeysdk/rehydration.py`, and `journeysdk/logger.py`.
+- Core orchestration modules: `journeysdk/api.py`, `journeysdk/validator.py`, `journeysdk/planner.py`,
+  `journeysdk/executor.py`, `journeysdk/state.py`, `journeysdk/discovery.py`, and `journeysdk/cli.py`.
+- Feature/helper modules: `journeysdk/_prompt_memory.py`, `journeysdk/_prompt_engine.py`,
+  `journeysdk/_prompt_output.py`, and everything under `journeysdk/tools/`.
+
+Core orchestration modules may import foundational modules and other core orchestration modules. They must not import
+feature/helper modules or tool modules. Feature/helper modules may import foundational modules and narrow hooks exposed
+by core modules when they need to plug into planning or execution. `journeysdk/__init__.py` is the composition/export
+root and may import modules to assemble the public package.
 
 ## Logger dependency rule
 

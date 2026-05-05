@@ -9,6 +9,10 @@ def _public_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _workspace_root() -> Path:
+    return _public_root().parent
+
+
 def _tracked_text_files(root: Path) -> list[Path]:
     return [
         path
@@ -49,29 +53,54 @@ def test_base_package_includes_playwright_and_langchain_runtime_dependencies() -
     assert not any(dependency.startswith("litellm") for dependency in dependencies)
 
 
-def test_planner_has_no_prompt_memory_dependency() -> None:
-    planner_path = _public_root() / "journeysdk" / "planner.py"
-    tree = ast.parse(planner_path.read_text(encoding="utf-8"), filename=str(planner_path))
-
-    forbidden_modules = {"_prompt_memory", "journeysdk._prompt_memory"}
+def _imported_module_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    imported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported = {alias.name for alias in node.names}
-            assert not imported & forbidden_modules
+            imported.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            module = "." * node.level + node.module
-            assert node.module not in forbidden_modules
-            assert module not in {f".{name}" for name in forbidden_modules}
+            if node.level:
+                imported.add("." * node.level + node.module)
+            else:
+                imported.add(node.module)
+    return imported
 
-    forbidden_names = {
-        "PromptMemoryReference",
-        "collect_prompt_memory_references",
-        "format_duplicate_prompt_memory_error",
-        "prompt_memory_refs_by_name",
+
+def test_core_orchestration_modules_do_not_import_feature_helpers() -> None:
+    sdk = _public_root() / "journeysdk"
+    core_modules = (
+        "api.py",
+        "validator.py",
+        "planner.py",
+        "executor.py",
+        "state.py",
+        "discovery.py",
+        "cli.py",
+    )
+    forbidden_imports = {
+        "._prompt_memory",
+        "._prompt_engine",
+        "._prompt_output",
+        ".tools",
+        "journeysdk._prompt_memory",
+        "journeysdk._prompt_engine",
+        "journeysdk._prompt_output",
+        "journeysdk.tools",
     }
-    planner_text = planner_path.read_text(encoding="utf-8")
-    for name in forbidden_names:
-        assert name not in planner_text
+
+    for module in core_modules:
+        imported = _imported_module_names(sdk / module)
+        for item in imported:
+            assert item not in forbidden_imports
+            assert not item.startswith(".tools.")
+            assert not item.startswith("journeysdk.tools.")
+
+
+def test_root_agents_stays_workspace_level() -> None:
+    text = (_workspace_root() / "AGENTS.md").read_text(encoding="utf-8")
+    for token in ("planner.py", "executor.py", "_prompt_memory.py", "tool modules"):
+        assert token not in text
 
 
 def test_prompt_memory_owns_its_planning_hook() -> None:
