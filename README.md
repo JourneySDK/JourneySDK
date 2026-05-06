@@ -368,8 +368,8 @@ def capture_popup_title() -> dict[str, object]:
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
 `ANTHROPIC_API_KEY`, and either pass a LangChain model identifier like `model="anthropic:claude-sonnet-4-5"` or set
 `JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
-The optional `memory="sign-in-popup"` argument stores compact lessons from successful runs in
-`sign-in-popup.memory.json` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
+The optional `memory="sign-in-popup"` argument stores a replayable fast path from successful runs in
+`sign-in-popup.memory.md` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.
 The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
 `dict[str, object]` return value instead of plain text.

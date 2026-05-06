@@ -362,10 +362,10 @@ If the requested browser task cannot complete because the page shows a blocking 
 invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
 
 The `memory="sign-in-popup"` argument gives this prompt a named memory file. After a successful run, Journey writes
-`docs/playwright_prompt_journey/sign-in-popup.memory.json` beside the journey source. Later runs with the same prompt
-memory can show the model compact lessons from the prior successful run, such as selectors that worked or selectors
-that were rejected before the run recovered. Prompt memory stores summaries only; it does not store screenshots,
-rendered HTML, or full model prompts.
+`docs/playwright_prompt_journey/sign-in-popup.memory.md` beside the journey source. Later runs with the same prompt
+memory replay the successful fast path first, and fall back to the model with the remembered path as context if replay
+no longer matches the page. Prompt memory stores compact code and checks only; it does not store screenshots, rendered
+HTML, or full model prompts.
 
 Memory names must be literal strings and unique within one compiled journey. That keeps planning deterministic and
 makes memory files easy to review in version control. Use `--no-memory` when you want to run without reading or

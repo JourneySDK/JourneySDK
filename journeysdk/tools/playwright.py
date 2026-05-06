@@ -341,7 +341,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
                 `openai:gpt-4.1-mini` or `anthropic:claude-sonnet-4-5`.
             max_steps: Maximum generated Python snippets before failing.
             action_timeout_seconds: Timeout passed to generated Playwright actions.
-            memory: Optional named prompt memory stored as `[memory].memory.json`.
+            memory: Optional named prompt memory stored as `[memory].memory.md`.
             output: Optional structured-output fields. String values are field
                 descriptions for string output fields; mapping values are
                 JSON-schema property fragments. When omitted, the return value is

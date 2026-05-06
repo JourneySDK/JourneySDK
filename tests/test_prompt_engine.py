@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from langchain_core.tools import tool
+import pytest
 
+from journeysdk._prompt_memory import (
+    PromptMemoryEntry,
+    PromptMemorySection,
+    load_prompt_memory_entry,
+    write_prompt_memory_entry,
+)
 from journeysdk._prompt_engine import (
+    PromptMemoryDraft,
     PromptEngineSession,
     PromptObservation,
     PromptTextSection,
@@ -169,7 +176,7 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
         instruction="echo hello",
         model="fake:model",
         max_steps=3,
-        memory_path=tmp_path / "fake.memory.json",
+        memory_path=tmp_path / "fake.memory.md",
         output_schema=None,
         system_prompt="Use fake_echo when more work is needed.",
         logger=get_logger("fake-prompt"),
@@ -177,6 +184,19 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
         build_tools=build_tools,
         load_model=lambda model_name: model,
         create_agent=_fake_create_agent,
+        compile_memory=lambda context: PromptMemoryDraft(
+            sections=(
+                PromptMemorySection(
+                    heading="Fake replay",
+                    body='fake_echo("hello")',
+                    language="python",
+                ),
+                PromptMemorySection(
+                    heading="Fake notes",
+                    body=f"Compiled from {len(context.log_records)} log record.",
+                ),
+            ),
+        ),
     ).run()
 
     assert result == "done"
@@ -188,20 +208,186 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
     assert '"event": "action"' in second_prompt_text
     assert "fake-visible-text" in first_prompt_text
 
-    memory_payload = json.loads((tmp_path / "fake.memory.json").read_text(encoding="utf-8"))
-    entry = next(iter(memory_payload["entries"].values()))
-    assert entry["component"] == "fake-tool"
-    assert entry["observation_signature"] == "fake://ready"
-    assert entry["final_output"] == "done"
-    assert "action_records" not in entry
-    assert entry["log_records"] == [
-        {
-            "level": "INFO",
-            "component": "fake-tool",
-            "event": "action",
-            "message": "echoed hello",
-            "step": 1,
-            "status": "ok",
-            "target": "hello",
-        }
-    ]
+    entry = load_prompt_memory_entry(
+        tmp_path / "fake.memory.md",
+        component="fake-tool",
+        instruction="echo hello",
+        observation_signature="fake://ready",
+    )
+    assert entry is not None
+    assert entry.component == "fake-tool"
+    assert entry.observation_signature == "fake://ready"
+    assert entry.final_output == "done"
+    assert entry.sections == (
+        PromptMemorySection(
+            heading="Fake replay",
+            body='fake_echo("hello")',
+            language="python",
+        ),
+        PromptMemorySection(
+            heading="Fake notes",
+            body="Compiled from 1 log record.",
+        ),
+    )
+
+
+def test_prompt_memory_round_trips_markdown_entry(tmp_path: Path) -> None:
+    memory_path = tmp_path / "fake.memory.md"
+    entry = PromptMemoryEntry(
+        component="fake-tool",
+        instruction="remember this",
+        observation_signature="fake://ready",
+        sections=(
+            PromptMemorySection(
+                heading="Recipe",
+                body="Reuse the cached fake-tool handle.",
+            ),
+            PromptMemorySection(
+                heading="Fixture data",
+                body='{"selector": "#cached"}',
+                language="json",
+            ),
+        ),
+        final_output={"status": "done"},
+    )
+
+    run_count = write_prompt_memory_entry(memory_path, entry)
+
+    assert run_count == 1
+    assert memory_path.read_text(encoding="utf-8").startswith("# Journey Prompt Memory\n")
+    loaded = load_prompt_memory_entry(
+        memory_path,
+        component="fake-tool",
+        instruction="remember this",
+        observation_signature="fake://ready",
+    )
+    assert loaded == PromptMemoryEntry(
+        component="fake-tool",
+        instruction="remember this",
+        observation_signature="fake://ready",
+        sections=(
+            PromptMemorySection(
+                heading="Recipe",
+                body="Reuse the cached fake-tool handle.",
+            ),
+            PromptMemorySection(
+                heading="Fixture data",
+                body='{"selector": "#cached"}',
+                language="json",
+            ),
+        ),
+        final_output={"status": "done"},
+        run_count=1,
+        updated_at=loaded.updated_at if loaded is not None else "",
+    )
+
+
+def test_prompt_memory_ignores_mismatched_instruction_or_observation(
+    tmp_path: Path,
+) -> None:
+    memory_path = tmp_path / "sign-in.memory.md"
+    write_prompt_memory_entry(
+        memory_path,
+        PromptMemoryEntry(
+            component="playwright",
+            instruction="sign in",
+            observation_signature="login-page",
+            sections=(
+                PromptMemorySection(
+                    heading="Tool state",
+                    body="This section belongs to the tool.",
+                ),
+            ),
+            final_output="Signed in.",
+        ),
+    )
+
+    assert (
+        load_prompt_memory_entry(
+            memory_path,
+            component="playwright",
+            instruction="sign out",
+            observation_signature="login-page",
+        )
+        is None
+    )
+    assert (
+        load_prompt_memory_entry(
+            memory_path,
+            component="playwright",
+            instruction="sign in",
+            observation_signature="dashboard-page",
+        )
+        is None
+    )
+
+
+def test_prompt_memory_allows_entries_without_playwright_sections(
+    tmp_path: Path,
+) -> None:
+    memory_path = tmp_path / "generic.memory.md"
+    write_prompt_memory_entry(
+        memory_path,
+        PromptMemoryEntry(
+            component="fake-tool",
+            instruction="cache generic state",
+            observation_signature="fake://ready",
+            sections=(
+                PromptMemorySection(
+                    heading="Tool-specific state",
+                    body="not executable code",
+                ),
+            ),
+            final_output="Cached.",
+        ),
+    )
+
+    loaded = load_prompt_memory_entry(
+        memory_path,
+        component="fake-tool",
+        instruction="cache generic state",
+        observation_signature="fake://ready",
+    )
+
+    assert loaded is not None
+    assert loaded.sections == (
+        PromptMemorySection(
+            heading="Tool-specific state",
+            body="not executable code",
+        ),
+    )
+
+
+def test_prompt_memory_write_cleans_tmp_file_when_replace_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    memory_path = tmp_path / "sign-in.memory.md"
+    temp_paths: list[Path] = []
+
+    def fail_replace(source: object, target: object) -> None:
+        del target
+        temp_paths.append(Path(source))
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("journeysdk._prompt_memory.os.replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        write_prompt_memory_entry(
+            memory_path,
+            PromptMemoryEntry(
+                component="playwright",
+                instruction="sign in",
+                observation_signature="login-page",
+                sections=(
+                    PromptMemorySection(
+                        heading="Tool-specific state",
+                        body="replay details are not shared-memory concepts",
+                    ),
+                ),
+                final_output="Signed in.",
+            ),
+        )
+
+    assert temp_paths
+    assert all(not path.exists() for path in temp_paths)
