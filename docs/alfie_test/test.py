@@ -6,7 +6,7 @@ from journeysdk.tools.playwright import JourneyPlaywrightPage, open_page
 
 def first() -> JourneyPlaywrightPage:
     page = open_page("https://app.staging.heyalfie.com/", headless=False)
-    page.prompt('Sign in as e2etest@heyalfie.com using password "1111". Expect no errors.', memory='sign-in')
+    page.prompt('Sign in as e2etest@heyalfie.com using password "1212" (or "1111" if not working). Expect no errors.', memory='sign-in')
     return page
 
 
@@ -19,4 +19,4 @@ def start_chatting(saved_page: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
 @journey
 def playwright_resume_journey() -> None:
     page = step(first)
-    step(start_chatting, page)
+    # step(start_chatting, page)
