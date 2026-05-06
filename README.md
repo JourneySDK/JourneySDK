@@ -1,41 +1,42 @@
 # Journey SDK
 
-Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys.
+With AI, testing is the new coding.
 
 ## Overview
 
-Journey SDK is built around a simple idea: write one long-running journey in sequential Python, then let Journey SDK
-compile it into linear executable flows that can stop and resume at step boundaries. It is designed for workflows where
-a single journey can touch browsers, edge devices, background jobs, third-party services, voice or AI systems, and
-delayed side effects.
+Journey SDK is an AI-assisted workflow-as-code toolkit for testing long user journeys with branches, many steps,
+third-party services, and channels. Those journeys have always been painful to automate: teams duplicate similar test
+cases, rerun slow setup, babysit long waits, wire throwaway inboxes and callbacks, and hand-maintain browser selectors.
+Journey turns that into one Python journey that compiles paths, replays from durable steps, resumes long waits, uses
+Journey Cloud tools, and integrates natively with AI coding assistants.
 
-Every `step(...)` call is an interruption boundary. With `--state`, Journey saves step inputs and successful results so
-the next run can resume at a boundary. In the CLI, the first Ctrl-C during a running step waits for that step to reach
-post-exit and then stops; the next run continues after the completed step. Press Ctrl-C a second time to interrupt the
-dirty step immediately; that step restarts from the top later with the same saved inputs.
+The core value is:
 
-Each step is just plain Python, so teams can use existing testing tools and scripts without adapting them to a special
-framework. A `step` can run browser automation, mobile checks, API assertions, or service-specific validation logic.
-Official tools live under `journeysdk.tools`; today that includes the `webhook` tool for Journey Cloud-hosted webhook
-endpoints, the `email` tool for Journey Cloud-hosted inbox access, the `docker`
-tool for local Compose-backed snapshots, and the `playwright` tool for resumable page state plus bounded LLM-driven
-page interaction. Retryable steps can poll for async effects or replay from an earlier step.
+- **One journey spec for all paths**: use `branch()` inside ordinary Python so one journey compiles into the executable
+  cases users can take, without copying shared setup into separate tests.
+- **Replay from a step**: use `branch(start_from=...)` so later branch cases start from a known durable step boundary
+  instead of replaying expensive browser, account, cart, or service setup.
+- **Cloud tools for tests outside the browser**: use helpers under `journeysdk.tools` for hosted inboxes, webhook
+  endpoints, browser prompting, Docker snapshots, and other documented tool surfaces while app-specific integrations
+  keep their own code.
+- **Interrupt long waits, resume later**: run with `--state` so a test can stop while waiting on async work or a
+  third-party service and continue later from saved step state.
+- **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory for
+  faster repeat runs, and keep tests editable by the same AI coding assistants that write application code.
 
 That makes Journey SDK useful for flows such as:
 
-- verifying a Stripe payment or a HubSpot ticket as part of a user journey
-- polling until background work becomes visible in a third-party system
-- capturing a browser screenshot and asking an LLM to validate non-deterministic or AI-driven UI output
+- testing checkout paths such as card versus wallet payment from the same cart setup
+- waiting for email, SMS, voice, webhook, payment, or third-party side effects without keeping a laptop busy
+- asking an LLM-driven browser step to complete UI work while prompt memory reduces repeated model calls
+- iterating on one failed late step without rerunning the whole journey from the beginning
 
 ## Who it's for
 
-- QA engineers who need to test long, branching, cross-system flows without hand-writing every branch as a separate
-  test
-- developers and test engineers who want to express journey logic in plain Python instead of splitting it across
-  multiple frameworks
-- platform and workflow teams building internal automations, customer lifecycle flows, or agentic products with async
-  steps and third-party integrations
-- AI coding agents that need to generate, run, and iterate on journey tests while implementing features
+- developers and test engineers who want one Python journey for all meaningful user paths
+- QA teams replacing duplicated browser/API/channel tests with compiled journey cases
+- platform teams testing lifecycle flows that cross email, SMS, voice agents, payments, webhooks, and third-party APIs
+- AI coding agents that need to generate, run, and iterate on tests while implementing features
 
 ## AI Agent Support
 
@@ -61,7 +62,7 @@ uv add journey-sdk
 For authoring, import only the Journey primitives you use:
 
 ```python
-from journeysdk import journey, step
+from journeysdk import branch, journey, step
 ```
 
 ### Install The CLI
@@ -117,23 +118,65 @@ publish checklist.
 
 ## Authoring model
 
-Write one journey in sequential Python with `step`, `branch`, and optional step retries via
-`step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate module-level journey entrypoints with
-`@journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching
-workflows without duplicating test code. Step functions are plain callables: pass every required input as explicit
-arguments, and return any value that later steps or resumed runs must reuse. The step boundary is the durable unit:
-successful steps can be reused, while interrupted or retried steps restart from the top with saved inputs.
+Write one journey in sequential Python with `step`, `branch`, `branch(start_from=...)`, `--state`, and optional step
+retries via `step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate module-level journey entrypoints with
+`@journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching user
+paths without duplicating test code.
 
-Retryable steps can poll for async effects, rerun from the step itself, or replay from an earlier step.
-They are retried when they raise an exception and `retry` is greater than 0. The explicit defaults are `retry=0`,
+Step functions are plain callables: pass every required input as explicit arguments, and return any value that later
+steps or resumed runs must reuse. The step boundary is the durable unit: successful steps can be reused, interrupted
+or retried steps restart from the top with saved inputs, and `branch(start_from=...)` creates a replay anchor that
+lets each branch reuse the same saved setup.
+
+For example, one checkout journey can create a cart once, exercise card and wallet payment paths from that cart, use
+`page.prompt(...)` to drive the browser, wait for email and SMS, then verify the returned order id:
+
+```python
+from journeysdk import branch, journey, step
+from journeysdk.tools.email import get_email_inbox
+from journeysdk.tools.playwright import open_page
+
+
+def checkout(cart, inbox, method) -> dict[str, object]:
+    page = open_page(app_checkout_url(cart))
+    try:
+        return page.prompt(
+            f"Check out with {method}. Send receipts to {inbox.address}.",
+            memory="checkout",
+            output={"order_id": "The id of the created order."},
+        )
+    finally:
+        page.__exit__(None, None, None)
+
+
+@journey
+def checkout_journey() -> None:
+    inbox = step(get_email_inbox())
+    cart = step(create_cart, inbox.address)
+
+    if branch(start_from=cart):
+        order = step(checkout, cart, inbox, "card")
+    elif branch(start_from=cart):
+        order = step(checkout, cart, inbox, "wallet")
+
+    messages = step(wait_for_email_and_sms, order["order_id"], inbox)
+    step(mark_order_ready, order["order_id"], messages)
+```
+
+`get_email_inbox()` and `open_page()` are documented SDK tools. Functions such as `create_cart`,
+`wait_for_email_and_sms`, and `mark_order_ready` are app-specific integration code. Voice agents, SMS, WhatsApp,
+payments, and third-party APIs should stay app-specific unless the docs describe an official helper.
+
+Retryable steps can poll for async effects, rerun from the step itself, or replay from an earlier step. They are
+retried when they raise an exception and `retry` is greater than 0. The explicit defaults are `retry=0`,
 `retry_delay=5`, and `retry_from=None`; when retries are enabled and `retry_from` is omitted, the current step is
 retried.
 
 ## Glossary
 
-- **Journey**: one decorated Python function that describes the full workflow under test.
-- **Case**: one linear executable path compiled from a journey, including one selected branch choice for each branch
-  group.
+- **Journey**: one decorated Python function that describes the full user journey under test.
+- **Case**: one linear executable path compiled from a journey, including one selected inline `if branch()` /
+  `elif branch()` choice where the journey can split.
 - **Step**: one `step(...)` call and the plain Python function it runs.
 - **Step boundary**: the boundary before and after a step where Journey can save progress, stop, retry, or resume.
 - **State file**: the `--state` file that stores selected cases, completed case reports, active progress, saved step
@@ -386,9 +429,14 @@ command can reuse that saved progress; delete the file when you want to start fr
 
 ## How it works
 
-1. Write a journey in Python using the primitives from `journeysdk/api.py`.
-2. Run `journey`, which compiles the authored journey into linear cases and executes them.
-3. Use `--step` when you only want the case that reaches one target step label.
+1. Write one journey spec in Python using `journey`, `step`, `branch`, and documented helpers from
+   `journeysdk.tools`.
+2. Run `journey`, which compiles branch choices into linear executable cases and executes them.
+3. Use `branch(start_from=...)`, retries, and state files to replay from durable step boundaries instead of rerunning
+   every expensive setup step.
+4. Use `--state` when a long test may be interrupted while waiting on async work or a third-party service.
+5. Use `--step` or `--develop-step` when you only want the case that reaches one target step label.
+6. Use `page.prompt(..., memory=...)` when a browser step is easier to describe than hand-maintain with selectors.
 
 Journey-owned CLI output is emitted on stdout through the Journey logger. The default `pretty` format is meant for
 humans at a terminal, for example:
@@ -417,14 +465,18 @@ selected case changed, Journey starts that case over so the reused prefix is not
 
 ## Core principles
 
-- **Workflow as code**: author one test journey in Python and let Journey SDK compile it into linear flows
-- **Simplicity over flexibility**: keep the framework footprint small so the testing logic stays easy to follow
-- **Tool-friendly**: integrate external systems and domain-specific tools without forcing them into a custom DSL
-- **Journey-centric**: optimize around the full business process rather than isolated pages or API calls
-- **Interruptible step boundaries**: keep long journeys restartable by saving progress between steps and replaying from
-  explicit boundaries
-- **Single-step execution**: make it cheap to run only the flow that reaches a target step label during development
-- **Fast step iteration**: retry one paused develop step from saved state without replaying the whole journey
+- **One journey spec for all paths**: author the full user journey once and let `branch()` compile the executable
+  cases.
+- **Replay from a step**: use `branch(start_from=...)`, retries, and targeted runs to reuse saved setup from durable
+  step boundaries.
+- **Interrupt long waits, resume later**: keep long journeys restartable by saving progress between steps with
+  `--state`.
+- **Cloud tools for external tests**: integrate hosted inboxes, webhooks, browser pages, Docker snapshots, and
+  app-specific channel or service code without forcing them into a custom DSL.
+- **AI-generated steps with `page.prompt(...)`**: describe browser work in natural language and let prompt memory make
+  repeat runs faster.
+- **Native with AI coding assistants**: keep tests in ordinary Python files so coding agents can generate, edit, run,
+  and debug them beside application code.
 
 ## Quick start
 
@@ -475,9 +527,9 @@ The official webhook and email SDK tools require Journey Cloud; the SDK no longe
 directly to SMTP/IMAP servers.
 
 Journey Cloud authenticates SDK control-plane calls with `Authorization: Bearer $JOURNEY_CLOUD_API_KEY`. The same
-pattern should apply to all Journey cloud tools: the first API key that reserves a cloud resource becomes its owner.
-That means a webhook path, mail inbox, or similar cloud-managed identifier belongs to the API key that claimed it
-first, and other API keys should not be able to reserve or manage that same resource afterward.
+pattern should apply to all Journey cloud tools: the first API key that reserves a cloud-managed handle becomes its
+owner. That means a webhook path, mail inbox, or similar cloud-managed identifier belongs to the API key that claimed
+it first, and other API keys should not be able to reserve or manage that same handle afterward.
 
 ## Testing
 
@@ -493,6 +545,6 @@ Smoke test the built package and CLI locally:
 ./scripts/smoke_test_package.sh
 ```
 
-See [`docs/README.md`](docs/README.md) for the runnable handbook. It starts with getting oriented in Journey's
-authoring model, then walks through branching, retries, resume, browser automation, Journey Cloud integrations, and
-debugging failure modes with code, commands, and expected CLI output.
+See [`docs/README.md`](docs/README.md) for the runnable handbook. It starts with one journey spec for all paths, then
+walks through replay from a step, retries, interrupting long waits and resuming later, browser automation with
+`page.prompt(...)`, Journey Cloud tools, and debugging failure modes with code, commands, and expected CLI output.

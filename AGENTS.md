@@ -2,12 +2,15 @@
 
 ## Project
 
-Journey SDK is a workflow-as-code QA toolkit for long, branching, async, cross-system user journeys. Authors write one
-journey in sequential Python with primitives like `step`, `branch`, and `step(..., retry=...)`, and
-Journey SDK compiles or executes the resulting linear cases.
+Journey SDK is an AI-assisted workflow-as-code QA toolkit for long, branching, async, cross-system user journeys.
+Authors write one journey spec in ordinary Python, compile user paths with `branch()`, replay from saved step
+boundaries with `branch(start_from=...)`, interrupt long waits with `--state`, use cloud tools from
+`journeysdk.tools`, and describe browser work with `page.prompt(...)`.
 
-See `README.md` for the deeper product description, use cases, tutorial context, and glossary. Use that vocabulary
-consistently: step boundary, state file, saved step binding, dirty step, replay boundary, replay anchor,
+See `README.md` for the deeper product description, use cases, tutorial context, and glossary. Keep the
+public-facing landing page, `README.md`, and `docs/` aligned when product messaging or SDK surfaces change; docs and
+README copy are the source of truth for supported APIs, and landing-page copy must not invent SDK helpers. Use that
+vocabulary consistently: step boundary, state file, saved step binding, dirty step, replay boundary, replay anchor,
 branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydration, and rehydratable value.
 
 ## Key files
@@ -55,7 +58,7 @@ controls visibility with `--log-level debug|info|warning|error|off`.
 - Journey SDK cloud tools authenticate control-plane calls with `JOURNEY_CLOUD_API_KEY` against a Journey Cloud base
   URL.
 - Compilation should stay side-effect free; authentication happens only at execution time.
-- The first API key to reserve a cloud resource should own it from then on.
+- The first API key to reserve a cloud-managed handle should own it from then on.
 - That first-key-wins rule should be consistent across cloud tools, whether the reserved identifier is a webhook path,
   a mail inbox, or another cloud-managed handle.
 - Callback URLs may remain unauthenticated when the generated URL itself is the capability used by the system
@@ -120,7 +123,8 @@ event emitter instead. See `CONTRIBUTING.md` for the full Logger API rules.
 
 ## Change guidance
 
-- Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), plus tests, aligned with behavior changes.
+- Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), public-facing landing-page copy, plus tests,
+  aligned with behavior changes.
 - Use `journeysdk.logger.get_logger(...)` for SDK, tool, or tutorial diagnostics instead of ad hoc `print(...)`.
 - Keep logger dependencies inverted: `journeysdk/logger.py` may know generic concepts like levels, redaction, rows, and
   styles, but it must not branch on component names, Journey event names, or event field semantics. Put human `pretty=`
