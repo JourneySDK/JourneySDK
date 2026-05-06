@@ -16,6 +16,11 @@ pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import Page as PlaywrightPage
 
+from journeysdk._prompt_memory import (
+    PromptMemoryEntry,
+    PromptMemorySection,
+    write_prompt_memory_entry,
+)
 from journeysdk import _prompt_engine as journey_prompt_engine
 from journeysdk.tools import _playwright_prompt as journey_playwright_prompt
 from journeysdk.tools import playwright as journey_playwright
@@ -336,6 +341,7 @@ class _FakeLangChainPromptModel:
         self._responses = list(responses)
         self._structured_responses = list(structured_responses or [])
         self.calls: list[dict[str, object]] = []
+        self.direct_calls: list[dict[str, object]] = []
         self.structured_calls: list[dict[str, object]] = []
         self._response_index = 0
 
@@ -349,6 +355,16 @@ class _FakeLangChainPromptModel:
 
     def add_structured_responses(self, responses: list[object]) -> None:
         self._structured_responses.extend(responses)
+
+    def invoke(self, messages: list[object]) -> _FakeAIMessage:
+        self.direct_calls.append({"messages": list(messages)})
+        if not self._responses:
+            raise AssertionError("No fake direct LLM responses remaining.")
+        self._response_index += 1
+        response = self._responses.pop(0)
+        if isinstance(response, str):
+            return _FakeAIMessage(content=response)
+        return _FakeAIMessage(content=response.get("content", ""))
 
 
 class _FakeLangChainAgent:
@@ -1357,7 +1373,7 @@ def test_journey_playwright_prompt_finish_with_blocking_error_raises(
     assert reason in prompt_text
     assert "AI prompt" in log_output
     assert "failed" in log_output
-    assert not (tmp_path / "sign-in.memory.json").exists()
+    assert not (tmp_path / "sign-in.memory.md").exists()
 
 
 def test_journey_playwright_prompt_fail_action_raises_without_final_output(
@@ -1396,7 +1412,7 @@ def test_journey_playwright_prompt_fail_action_raises_without_final_output(
     assert not fake_model.structured_calls
     assert "AI prompt" in log_output
     assert "failed" in log_output
-    assert not (tmp_path / "sign-in.memory.json").exists()
+    assert not (tmp_path / "sign-in.memory.md").exists()
 
 
 def test_journey_playwright_prompt_rejects_invalid_output_specs(monkeypatch):
@@ -1534,7 +1550,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
     ) in log_output
 
 
-def test_journey_playwright_prompt_writes_and_reuses_named_memory(
+def test_journey_playwright_prompt_compiles_and_replays_named_memory(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -1558,19 +1574,60 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
         ],
     )
     context.pages.append(page)
+    page._fake_prompt_elements.extend(
+        [
+            _prompt_element(
+                "#password-field",
+                name="Password",
+                role="textbox",
+                tag_name="input",
+            ),
+            _prompt_element("#submit", name="Continue"),
+        ]
+    )
+
+    def submit_login() -> None:
+        if page._fake_prompt_field_values.get("#password-field") == "1111":
+            page._fake_prompt_visible_texts.add("Welcome")
+
+    page._fake_prompt_click_handlers["#submit"] = submit_login
 
     first_model = _FakeLangChainPromptModel(
         [
-            _run_code('page.locator("#attach").click(timeout=timeout_ms)'),
             _run_code(
                 "\n".join(
                     [
-                        'composer = page.locator("#composer")',
-                        'composer.fill("hello", timeout=timeout_ms)',
+                        'page.locator("#password-field").fill("1212", timeout=timeout_ms)',
+                        'page.locator("#submit").click(timeout=timeout_ms)',
                     ]
                 )
             ),
-            "Started the chat.",
+            _run_code(
+                "\n".join(
+                    [
+                        'page.locator("#password-field").fill("1111", timeout=timeout_ms)',
+                        'page.locator("#submit").click(timeout=timeout_ms)',
+                    ]
+                )
+            ),
+            "Signed in.",
+            "\n".join(
+                [
+                    "## Replay code",
+                    "```python",
+                    'page.locator("#password-field").fill("1111", timeout=timeout_ms)',
+                    'page.locator("#submit").click(timeout=timeout_ms)',
+                    "```",
+                    "",
+                    "## Success check code",
+                    "```python",
+                    'page.locator("text=Welcome").wait_for(state="visible", timeout=timeout_ms)',
+                    "```",
+                    "",
+                    "## Notes",
+                    "Use the known-good password directly.",
+                ]
+            ),
         ]
     )
     monkeypatch.setattr(
@@ -1579,68 +1636,61 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
         lambda model: first_model,
     )
 
-    page.prompt(
-        "say hello",
+    assert page.prompt(
+        "sign in",
         model="openai:gpt-4.1-mini",
         memory="chat-start",
-    )
+    ) == "Signed in."
 
-    memory_path = tmp_path / "chat-start.memory.json"
-    memory_payload = json.loads(memory_path.read_text(encoding="utf-8"))
-    serialized = json.dumps(memory_payload)
-    assert memory_payload["version"] == 1
-    assert "rendered-html" not in serialized
-    assert "data:image" not in serialized
-    assert "png:Chat" not in serialized
-    assert '<div id="composer"' not in serialized
-    entry = next(iter(memory_payload["entries"].values()))
-    assert entry["component"] == "playwright"
-    assert entry["final_output"] == "Started the chat."
-    assert entry["observation_signature"] == (
-        '{"title":"Chat","url":"http://example.test/chat"}'
-    )
-    log_records = entry["log_records"]
-    assert "successful_steps" not in entry
-    assert "rejected_steps" not in entry
-    assert "action_records" not in entry
-    assert [record["event"] for record in log_records] == [
-        "prompt_action",
-        "prompt_code",
-        "prompt_rejected",
-        "prompt_action",
-        "prompt_code",
-        "prompt_code",
-        "prompt_code",
-        "prompt_step_success",
-    ]
-    assert log_records[0]["component"] == "playwright-prompt"
-    assert log_records[1]["code"] == (
-        'page.locator("#attach").click(timeout=timeout_ms)'
-    )
-    assert log_records[2]["detail"] == (
-        "AssertionError: No click handler registered for '#attach'"
-    )
-    assert "code" not in log_records[4]
-    assert log_records[5]["code"] == 'composer = page.locator("#composer")'
-    assert log_records[6]["code"] == 'composer.fill("hello", timeout=timeout_ms)'
-    assert log_records[7]["page"] == 0
+    memory_path = tmp_path / "chat-start.memory.md"
+    memory_text = memory_path.read_text(encoding="utf-8")
+    assert 'page.locator("#password-field").fill("1111", timeout=timeout_ms)' in memory_text
+    assert '"1212"' not in memory_text
+    assert "rendered-html" not in memory_text
+    assert "data:image" not in memory_text
+    assert "png:Chat" not in memory_text
+    assert '<div id="composer"' not in memory_text
+    assert first_model.direct_calls
 
-    second_model = _FakeLangChainPromptModel(["Done from memory."])
+    replay_events: list[object] = []
+    replay_context = _FakePromptContext()
+    replay_page = _make_prompt_page(
+        title="Chat",
+        url="http://example.test/chat?session=secret#composer",
+        context=replay_context,
+        events=replay_events,
+        elements=list(page._fake_prompt_elements),
+    )
+    replay_context.pages.append(replay_page)
+
+    def submit_replay_login() -> None:
+        if replay_page._fake_prompt_field_values.get("#password-field") == "1111":
+            replay_page._fake_prompt_visible_texts.add("Welcome")
+
+    replay_page._fake_prompt_click_handlers["#submit"] = submit_replay_login
+
+    def fail_model_load(model: str) -> object:
+        del model
+        raise AssertionError("replay should not load or call a model")
+
     monkeypatch.setattr(
         journey_playwright_prompt,
         "_load_langchain_model",
-        lambda model: second_model,
+        fail_model_load,
     )
-    page.prompt(
-        "say hello",
+    assert replay_page.prompt(
+        "sign in",
         model="openai:gpt-4.1-mini",
         memory="chat-start",
-    )
-    second_prompt_text = second_model.calls[0]["messages"][1]["content"][0]["text"]
-    assert "Prompt memory JSON:" in second_prompt_text
-    assert "#attach" in second_prompt_text
-    assert "#composer" in second_prompt_text
-    assert "hello" in second_prompt_text
+    ) == "Signed in."
+    assert (
+        "prompt_fill",
+        "Chat",
+        "#password-field",
+        "1111",
+        5000,
+    ) in replay_events
+    assert all("1212" not in repr(event) for event in replay_events)
 
     third_model = _FakeLangChainPromptModel(["Done without memory."])
     monkeypatch.setattr(
@@ -1649,12 +1699,147 @@ def test_journey_playwright_prompt_writes_and_reuses_named_memory(
         lambda model: third_model,
     )
     page.prompt(
-        "say goodbye",
+        "sign out",
         model="openai:gpt-4.1-mini",
         memory="chat-start",
     )
     third_prompt_text = third_model.calls[0]["messages"][1]["content"][0]["text"]
-    assert "Prompt memory JSON:" not in third_prompt_text
+    assert "Prompt memory:" not in third_prompt_text
+
+
+def test_journey_playwright_prompt_falls_back_when_memory_replay_fails(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    write_prompt_memory_entry(
+        tmp_path / "sign-in.memory.md",
+        PromptMemoryEntry(
+            component="playwright",
+            instruction="sign in",
+            observation_signature='{"title":"Login","url":"http://example.test/login"}',
+            sections=(
+                PromptMemorySection(
+                    heading="Replay code",
+                    body='page.locator("#missing").click(timeout=timeout_ms)',
+                    language="python",
+                ),
+                PromptMemorySection(
+                    heading="Success check code",
+                    body='page.locator("text=Welcome").wait_for(state="visible", timeout=timeout_ms)',
+                    language="python",
+                ),
+                PromptMemorySection(
+                    heading="Notes",
+                    body="This stale selector used to work.",
+                ),
+            ),
+            final_output="Signed in from memory.",
+        ),
+    )
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        elements=[
+            _prompt_element("#password-field", name="Password", role="textbox", tag_name="input"),
+        ],
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(["Recovered after fallback."])
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt(
+        "sign in",
+        model="openai:gpt-4.1-mini",
+        memory="sign-in",
+    ) == "Recovered after fallback."
+
+    prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    assert "Prompt memory:" in prompt_text
+    assert "Replay failed before fallback:" in prompt_text
+    assert "#missing" in prompt_text
+
+
+@pytest.mark.parametrize(
+    ("sections", "expected_detail"),
+    [
+        (
+            (
+                PromptMemorySection(
+                    heading="Success check code",
+                    body="assert True",
+                    language="python",
+                ),
+            ),
+            "Replay code",
+        ),
+        (
+            (
+                PromptMemorySection(
+                    heading="Replay code",
+                    body='page.locator("#cached").click(timeout=timeout_ms)',
+                    language="text",
+                ),
+                PromptMemorySection(
+                    heading="Success check code",
+                    body="assert True",
+                    language="python",
+                ),
+            ),
+            "Replay code",
+        ),
+    ],
+)
+def test_journey_playwright_prompt_validates_memory_sections_at_playwright_boundary(
+    monkeypatch,
+    tmp_path: Path,
+    sections: tuple[PromptMemorySection, ...],
+    expected_detail: str,
+):
+    monkeypatch.chdir(tmp_path)
+    write_prompt_memory_entry(
+        tmp_path / "sign-in.memory.md",
+        PromptMemoryEntry(
+            component="playwright",
+            instruction="sign in",
+            observation_signature='{"title":"Login","url":"http://example.test/login"}',
+            sections=sections,
+            final_output="Signed in from memory.",
+        ),
+    )
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(["Recovered after invalid memory."])
+    monkeypatch.setattr(
+        journey_playwright_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt(
+        "sign in",
+        model="openai:gpt-4.1-mini",
+        memory="sign-in",
+    ) == "Recovered after invalid memory."
+
+    prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    assert "Replay failed before fallback:" in prompt_text
+    assert expected_detail in prompt_text
 
 
 def test_journey_playwright_prompt_does_not_reuse_legacy_memory_shape(
@@ -1702,7 +1887,7 @@ def test_journey_playwright_prompt_does_not_reuse_legacy_memory_shape(
     page.prompt("say hello", model="openai:gpt-4.1-mini", memory="legacy")
 
     prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
-    assert "Prompt memory JSON:" not in prompt_text
+    assert "Prompt memory:" not in prompt_text
     assert "#legacy" not in prompt_text
 
 
@@ -1746,7 +1931,11 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
     journey_sdk.execute(memory_journey, no_memory=True)
 
 
-def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch):
+def test_journey_playwright_prompt_respects_execute_no_memory_update(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1754,49 +1943,65 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
         url="http://example.test/login",
         context=context,
         events=events,
+        elements=[_prompt_element("#cached", name="Cached")],
     )
     context.pages.append(page)
-    model = _FakeLangChainPromptModel(["Done."])
-    monkeypatch.setattr(
-        journey_playwright_prompt,
-        "_load_langchain_model",
-        lambda model_name: model,
-    )
 
-    load_calls: list[tuple[Path, str]] = []
+    def mark_done() -> None:
+        page._fake_prompt_visible_texts.add("Done")
+
+    page._fake_prompt_click_handlers["#cached"] = mark_done
+
+    load_calls: list[tuple[Path, str, str, str]] = []
     write_calls: list[tuple[object, ...]] = []
 
-    def load_memory(path: Path, key: str) -> dict[str, object]:
-        load_calls.append((path, key))
-        return {
-            "action_records": [
-                {
-                    "level": "INFO",
-                    "component": "playwright",
-                    "event": "action",
-                    "message": "cached click",
-                    "target": 'page.locator("#cached").click(timeout=timeout_ms)',
-                    "detail": "worked before",
-                    "status": "ok",
-                }
-            ]
-        }
+    def load_memory(
+        path: Path,
+        *,
+        component: str,
+        instruction: str,
+        observation_signature: str,
+    ) -> PromptMemoryEntry:
+        load_calls.append((path, component, instruction, observation_signature))
+        return PromptMemoryEntry(
+            component=component,
+            instruction=instruction,
+            observation_signature=observation_signature,
+            sections=(
+                PromptMemorySection(
+                    heading="Replay code",
+                    body='page.locator("#cached").click(timeout=timeout_ms)',
+                    language="python",
+                ),
+                PromptMemorySection(
+                    heading="Success check code",
+                    body=(
+                        'page.locator("text=Done").wait_for'
+                        '(state="visible", timeout=timeout_ms)'
+                    ),
+                    language="python",
+                ),
+            ),
+            final_output="Done from readonly memory.",
+        )
 
     def fail_memory_write(*args: object, **kwargs: object) -> object:
         del kwargs
         write_calls.append(args)
         raise AssertionError("prompt memory updates should be disabled")
 
-    monkeypatch.setattr(
-        journey_prompt_engine,
-        "load_prompt_memory_entry",
-        load_memory,
-    )
+    monkeypatch.setattr(journey_prompt_engine, "load_prompt_memory_entry", load_memory)
     monkeypatch.setattr(
         journey_prompt_engine,
         "write_prompt_memory_entry",
         fail_memory_write,
     )
+
+    def fail_model_load(model_name: str) -> object:
+        del model_name
+        raise AssertionError("readonly replay should not require a model")
+
+    monkeypatch.setattr(journey_playwright_prompt, "_load_langchain_model", fail_model_load)
 
     def run_prompt() -> str | dict[str, object]:
         return page.prompt("finish", model="openai:gpt-4.1-mini", memory="readonly")
@@ -1806,13 +2011,9 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(monkeypatch
 
     journey_sdk.execute(memory_journey, no_memory_update=True)
 
-    prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
     assert load_calls
     assert not write_calls
-    assert "Prompt memory JSON:" in prompt_text
-    assert "action_records" in prompt_text
-    assert "log_records" not in prompt_text
-    assert "#cached" in prompt_text
+    assert ("prompt_click", "Login", "#cached", 5000) in events
 
 
 def test_journey_playwright_prompt_enforces_max_steps(

@@ -15,9 +15,10 @@ from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
 from journeysdk._prompt_memory import (
+    PromptMemoryEntry,
+    PromptMemorySection,
     load_prompt_memory_entry,
     prompt_memory_entry_from_result,
-    prompt_memory_key,
     prompt_memory_updates_disabled,
     truncate_prompt_memory_text,
     write_prompt_memory_entry,
@@ -51,6 +52,26 @@ class PromptObservation:
     sections: tuple[PromptTextSection, ...] = ()
     images: tuple[PromptImage, ...] = ()
     visible_text: str = ""
+
+
+@dataclass(frozen=True)
+class PromptMemoryReplayResult:
+    final_output: str | dict[str, object]
+
+
+@dataclass(frozen=True)
+class PromptMemoryDraft:
+    sections: tuple[PromptMemorySection, ...]
+
+
+@dataclass(frozen=True)
+class PromptMemoryCompileContext:
+    component: str
+    instruction: str
+    observation_signature: str
+    final_output: str | dict[str, object]
+    log_records: tuple[JourneyLogRecord, ...]
+    final_observation: PromptObservation
 
 
 @dataclass
@@ -114,6 +135,11 @@ class PromptEngineSession:
         load_model: Callable[[str], object] | None = None,
         create_agent: Callable[..., object] | None = None,
         before_final_observation: Callable[[], None] | None = None,
+        replay_memory: Callable[[PromptMemoryEntry], PromptMemoryReplayResult | None]
+        | None = None,
+        compile_memory: Callable[[PromptMemoryCompileContext], PromptMemoryDraft | None]
+        | None = None,
+        format_memory: Callable[[PromptMemoryEntry, str | None], str] | None = None,
     ) -> None:
         self._component = component
         self._owner = owner
@@ -129,11 +155,14 @@ class PromptEngineSession:
         self._load_model = load_model or _load_langchain_model
         self._create_agent = create_agent or _create_langchain_agent
         self._before_final_observation = before_final_observation
-        self._memory_key: str | None = None
         self._memory_observation_signature: str | None = None
-        self._memory_entry: dict[str, object] | None = None
+        self._memory_entry: PromptMemoryEntry | None = None
         self._memory_loaded = False
-        self._prompt_model = self._load_model(model)
+        self._memory_replay_error: str | None = None
+        self._replay_memory = replay_memory
+        self._compile_memory = compile_memory
+        self._format_memory = format_memory or _format_prompt_memory_for_prompt
+        self._prompt_model: object | None = None
         self._action_records: list[JourneyLogRecord] = []
         self._memory_log_records: list[JourneyLogRecord] = []
         self._prompt_thread_id = get_ident()
@@ -141,6 +170,11 @@ class PromptEngineSession:
 
     def run(self) -> str | dict[str, object]:
         observation = self._build_observation()
+        memory_entry = self._memory_for_observation(observation)
+        replay_result = self._try_replay_memory(memory_entry)
+        if replay_result is not None:
+            return replay_result.final_output
+        self._prompt_model = self._load_model(self._model)
         agent = self._create_agent(
             self._prompt_model,
             tools=self._build_tools(PromptToolContext(self)),
@@ -235,8 +269,10 @@ class PromptEngineSession:
         if memory_entry is not None:
             memory_section = [
                 "",
-                "Prompt memory JSON:",
-                json.dumps(memory_entry, sort_keys=True, indent=2),
+                self._format_memory(
+                    memory_entry,
+                    self._memory_replay_error,
+                ),
             ]
         if self._output_schema is None:
             output_section = [
@@ -425,7 +461,10 @@ class PromptEngineSession:
             max_steps=self._max_steps,
             output=_prompt_output_summary(final_output),
         )
-        self._write_memory(final_output=final_output)
+        self._write_memory(
+            final_output=final_output,
+            final_observation=final_observation,
+        )
         return final_output
 
     def _parse_final_output(
@@ -459,6 +498,8 @@ class PromptEngineSession:
     ) -> object:
         if self._output_schema is None:
             raise RuntimeError(f"{self._owner} structured output was not configured.")
+        if self._prompt_model is None:
+            self._prompt_model = self._load_model(self._model)
         try:
             structured_model = self._prompt_model.with_structured_output(
                 self._output_schema.json_schema,
@@ -539,58 +580,115 @@ class PromptEngineSession:
     def _memory_for_observation(
         self,
         observation: PromptObservation,
-    ) -> dict[str, object] | None:
+    ) -> PromptMemoryEntry | None:
         if self._memory_path is None:
             return None
         if not self._memory_loaded:
             self._memory_loaded = True
             self._memory_observation_signature = observation.signature
-            self._memory_key = prompt_memory_key(
+            self._memory_entry = load_prompt_memory_entry(
+                self._memory_path,
                 component=self._component,
                 instruction=self._instruction,
                 observation_signature=observation.signature,
-            )
-            self._memory_entry = load_prompt_memory_entry(
-                self._memory_path,
-                self._memory_key,
             )
             if self._memory_entry is not None:
                 self._logger.info(
                     "prompt_memory_loaded",
                     f"loaded prompt memory from {self._memory_path}",
                     path=str(self._memory_path),
-                    key=self._memory_key,
                 )
         return self._memory_entry
 
-    def _write_memory(self, *, final_output: str | dict[str, object]) -> None:
+    def _try_replay_memory(
+        self,
+        memory_entry: PromptMemoryEntry | None,
+    ) -> PromptMemoryReplayResult | None:
+        if memory_entry is None or self._replay_memory is None:
+            return None
+        try:
+            replay_result = self._replay_memory(memory_entry)
+        except Exception as exc:
+            self._memory_replay_error = str(exc)
+            return None
+        return replay_result
+
+    def _write_memory(
+        self,
+        *,
+        final_output: str | dict[str, object],
+        final_observation: PromptObservation,
+    ) -> None:
         if (
             self._memory_path is None
-            or self._memory_key is None
             or self._memory_observation_signature is None
             or prompt_memory_updates_disabled()
+            or self._compile_memory is None
         ):
             return
-        memory_records = tuple(self._memory_log_records or self._action_records)
+        draft = self._compile_memory(
+            PromptMemoryCompileContext(
+                component=self._component,
+                instruction=self._instruction,
+                observation_signature=self._memory_observation_signature,
+                final_output=final_output,
+                log_records=tuple(self._memory_log_records or self._action_records),
+                final_observation=final_observation,
+            )
+        )
+        if draft is None:
+            return
         entry = prompt_memory_entry_from_result(
             component=self._component,
             instruction=self._instruction,
             observation_signature=self._memory_observation_signature,
             final_output=final_output,
-            log_records=memory_records,
+            sections=draft.sections,
         )
         run_count = write_prompt_memory_entry(
             self._memory_path,
-            self._memory_key,
             entry,
         )
         self._logger.info(
             "prompt_memory_saved",
             f"wrote prompt memory to {self._memory_path}",
             path=str(self._memory_path),
-            key=self._memory_key,
             run_count=run_count,
         )
+
+
+def _format_prompt_memory_for_prompt(
+    entry: PromptMemoryEntry,
+    replay_error: str | None = None,
+) -> str:
+    replay_error_section: list[str] = []
+    if replay_error:
+        replay_error_section = [
+            "",
+            "Prior memory replay failed before fallback:",
+            replay_error.strip(),
+        ]
+    rendered_sections: list[str] = []
+    for section in entry.sections:
+        rendered_sections.extend(["", section.heading + ":"])
+        if section.language is None:
+            rendered_sections.append(section.body)
+        else:
+            rendered_sections.extend(
+                [
+                    f"```{section.language}",
+                    section.body,
+                    "```",
+                ]
+            )
+    return "\n".join(
+        [
+            "Prompt memory:",
+            "Use this prior successful memory as a hint, but trust the current observation.",
+            *replay_error_section,
+            *rendered_sections,
+        ]
+    )
 
 
 def _prompt_output_summary(value: str | dict[str, object]) -> str:

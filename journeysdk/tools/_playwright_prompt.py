@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import base64
 import json
+import re
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
@@ -20,6 +21,8 @@ from journeysdk.logger import (
     pretty_row,
 )
 from journeysdk._prompt_memory import (
+    PromptMemoryEntry,
+    PromptMemorySection,
     resolve_prompt_memory_path,
 )
 from journeysdk._prompt_output import (
@@ -30,10 +33,14 @@ from journeysdk._prompt_output import (
 from journeysdk._prompt_engine import (
     PromptEngineSession,
     PromptImage,
+    PromptMemoryCompileContext,
+    PromptMemoryDraft,
+    PromptMemoryReplayResult,
     PromptObservation,
     PromptToolContext,
     PromptTextSection,
     _create_langchain_agent as _create_prompt_engine_agent,
+    _extract_langchain_text,
     _load_langchain_model as _load_prompt_engine_model,
     resolve_prompt_model,
 )
@@ -43,6 +50,9 @@ JOURNEY_PLAYWRIGHT_PROMPT_MODEL_ENV = "JOURNEY_PLAYWRIGHT_PROMPT_MODEL"
 
 _PROMPT_RUN_CODE_TOOL_NAME = "journey_run_code"
 _PROMPT_FAIL_SESSION_TOOL_NAME = "journey_fail_session"
+_PLAYWRIGHT_REPLAY_SECTION = "Replay code"
+_PLAYWRIGHT_SUCCESS_CHECK_SECTION = "Success check code"
+_PLAYWRIGHT_NOTES_SECTION = "Notes"
 
 _PROMPT_SYSTEM_MESSAGE = """You control a Playwright sync browser page with tools.
 
@@ -79,11 +89,41 @@ screenshot contains a matching message.
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
+_PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE = """Create replayable Journey Playwright prompt memory.
+
+Return Markdown with exactly these sections:
+
+## Replay code
+```python
+<minimal Playwright code to perform the successful path next time>
+```
+
+## Success check code
+```python
+<assertions or waits that prove the original instruction is complete>
+```
+
+## Notes
+<short notes for fallback prompting>
+
+Rules:
+- Use only names available to Journey prompt code: page, pages, timeout_ms, switch_page(index).
+- Keep only the successful path needed for the next run.
+- Remove rejected, failed, speculative, redundant, or superseded attempts.
+- If a later fallback corrected an earlier value, keep only the corrected value.
+- Prefer robust Playwright locators and pass timeout=timeout_ms to waits/actions.
+- Do not include screenshots, rendered HTML, hidden reasoning, or prose outside the requested sections.
+"""
+
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
 _VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
 _PROMPT_LOGGER = get_logger("playwright-prompt")
 _PROMPT_DETAIL_INDENT = 10
 _PROMPT_LABEL_WIDTH = 25
+_MEMORY_DRAFT_FENCE_PATTERN = re.compile(
+    r"^```(?P<language>[A-Za-z0-9_-]*)\n(?P<body>.*?)\n```",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def _prompt_row(label: object, detail: object = "", *, style: PrettyStyle = "accent") -> PrettyLine:
@@ -151,6 +191,9 @@ class _PromptSession:
             load_model=_load_langchain_model,
             create_agent=_create_langchain_agent,
             before_final_observation=self._settle_active_page_for_final_output,
+            replay_memory=self._replay_memory,
+            compile_memory=self._compile_memory,
+            format_memory=_format_playwright_memory_for_prompt,
         ).run()
 
     def _log_start(self) -> None:
@@ -309,6 +352,88 @@ class _PromptSession:
             )
 
         return [journey_run_code, journey_fail_session]
+
+    def _replay_memory(
+        self,
+        entry: PromptMemoryEntry,
+    ) -> PromptMemoryReplayResult | None:
+        _emit_prompt_log(
+            f"replaying prompt memory on {_page_summary(self._prompt_page_payloads()[self._active_page_index])}",
+            event="prompt_memory_replay_start",
+            pretty=_prompt_row(
+                "memory replay",
+                _page_summary(self._prompt_page_payloads()[self._active_page_index]),
+                style="accent",
+            ),
+        )
+        try:
+            replay_code = _playwright_memory_code(
+                entry,
+                _PLAYWRIGHT_REPLAY_SECTION,
+            )
+            success_check_code = _playwright_memory_code(
+                entry,
+                _PLAYWRIGHT_SUCCESS_CHECK_SECTION,
+            )
+            self._execute_python_code(
+                replay_code,
+                filename="<journey-playwright-memory-replay>",
+            )
+            self._execute_python_code(
+                success_check_code,
+                filename="<journey-playwright-memory-check>",
+            )
+        except Exception as exc:
+            detail = _format_python_error(exc)
+            _emit_prompt_log(
+                f"prompt memory replay failed: {detail}",
+                event="prompt_memory_replay_failed",
+                pretty=_prompt_row("memory replay failed", detail, style="warning"),
+                detail=detail,
+            )
+            raise RuntimeError(detail) from exc
+        _emit_prompt_log(
+            "prompt memory replay succeeded",
+            event="prompt_memory_replay_success",
+            pretty=_prompt_row("memory replay", "succeeded", style="success"),
+        )
+        return PromptMemoryReplayResult(final_output=entry.final_output)
+
+    def _compile_memory(
+        self,
+        context: PromptMemoryCompileContext,
+    ) -> PromptMemoryDraft | None:
+        try:
+            model = _load_langchain_model(self._model)
+            response = model.invoke(
+                [
+                    {
+                        "role": "system",
+                        "content": _PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE,
+                    },
+                    {
+                        "role": "user",
+                        "content": _memory_compile_prompt(context),
+                    },
+                ]
+            )
+            response_text = _extract_langchain_text(
+                response,
+                owner="JourneyPlaywrightPage.prompt(...) memory compiler",
+            )
+            return _parse_memory_draft(response_text)
+        except Exception as exc:
+            _emit_prompt_log(
+                f"prompt memory compile skipped: {_format_python_error(exc)}",
+                event="prompt_memory_compile_failed",
+                pretty=_prompt_row(
+                    "memory compile",
+                    _format_python_error(exc),
+                    style="warning",
+                ),
+                detail=_format_python_error(exc),
+            )
+            return None
 
     def _run_code_tool(
         self,
@@ -475,6 +600,24 @@ class _PromptSession:
             raise ValueError(
                 "JourneyPlaywrightPage.prompt(...) expected the model to return Python code."
             )
+        self._execute_python_code(
+            normalized_code,
+            filename="<journey-playwright-prompt>",
+        )
+        return _prompt_action_record(
+            step_index=step_index,
+            max_steps=self._max_steps,
+            page_index=self._active_page_index,
+            action_type="python",
+            target=target,
+            status="ok",
+            detail=f"Executed Python snippet. Active page index is {self._active_page_index}.",
+        )
+
+    def _execute_python_code(self, code: str, *, filename: str) -> None:
+        normalized_code = code.strip()
+        if not normalized_code:
+            raise ValueError("JourneyPlaywrightPage.prompt(...) expected Python code.")
         self._discover_pages()
         namespace: dict[str, object] = {
             "__builtins__": {},
@@ -493,20 +636,11 @@ class _PromptSession:
             return target_page
 
         namespace["switch_page"] = switch_page
-        compiled = compile(normalized_code, "<journey-playwright-prompt>", "exec")
+        compiled = compile(normalized_code, filename, "exec")
         try:
             exec(compiled, namespace, namespace)
         finally:
             self._discover_pages()
-        return _prompt_action_record(
-            step_index=step_index,
-            max_steps=self._max_steps,
-            page_index=self._active_page_index,
-            action_type="python",
-            target=target,
-            status="ok",
-            detail=f"Executed Python snippet. Active page index is {self._active_page_index}.",
-        )
 
     def _discover_pages(self) -> None:
         context = _page_context(self._original_page)
@@ -547,6 +681,160 @@ class _PromptSession:
                 }
             )
         return prompt_pages
+
+
+def _memory_compile_prompt(context: PromptMemoryCompileContext) -> str:
+    return "\n".join(
+        [
+            f"Instruction:\n{context.instruction}",
+            "",
+            "Initial observation signature:",
+            context.observation_signature,
+            "",
+            "Final output JSON:",
+            json.dumps(context.final_output, sort_keys=True, indent=2)
+            if isinstance(context.final_output, dict)
+            else json.dumps(context.final_output),
+            "",
+            "Action and recovery log records JSON:",
+            json.dumps(
+                [record.to_dict() for record in context.log_records],
+                sort_keys=True,
+                indent=2,
+            ),
+            "",
+            "Final visible text:",
+            context.final_observation.visible_text,
+        ]
+    )
+
+
+def _parse_memory_draft(text: str) -> PromptMemoryDraft:
+    replay_code = _memory_draft_code_section(text, "Replay code")
+    success_check_code = _memory_draft_code_section(text, "Success check code")
+    notes = _memory_draft_text_section(text, "Notes")
+    return PromptMemoryDraft(
+        sections=_playwright_memory_sections(
+            replay_code=replay_code,
+            success_check_code=success_check_code,
+            notes=notes,
+        ),
+    )
+
+
+def _playwright_memory_sections(
+    *,
+    replay_code: str,
+    success_check_code: str,
+    notes: str = "",
+) -> tuple[PromptMemorySection, ...]:
+    sections = [
+        PromptMemorySection(
+            heading=_PLAYWRIGHT_REPLAY_SECTION,
+            body=replay_code,
+            language="python",
+        ),
+        PromptMemorySection(
+            heading=_PLAYWRIGHT_SUCCESS_CHECK_SECTION,
+            body=success_check_code,
+            language="python",
+        ),
+    ]
+    if notes.strip():
+        sections.append(
+            PromptMemorySection(
+                heading=_PLAYWRIGHT_NOTES_SECTION,
+                body=notes.strip(),
+            )
+        )
+    return tuple(sections)
+
+
+def _playwright_memory_code(entry: PromptMemoryEntry, heading: str) -> str:
+    section = _playwright_memory_section(entry, heading)
+    if section.language != "python":
+        raise RuntimeError(
+            f"Playwright prompt memory section {heading!r} must use a python code fence."
+        )
+    code = section.body.strip()
+    if not code:
+        raise RuntimeError(
+            f"Playwright prompt memory section {heading!r} must not be blank."
+        )
+    return code
+
+
+def _playwright_memory_section(
+    entry: PromptMemoryEntry,
+    heading: str,
+) -> PromptMemorySection:
+    for section in entry.sections:
+        if section.heading == heading:
+            return section
+    raise RuntimeError(f"Playwright prompt memory is missing section {heading!r}.")
+
+
+def _format_playwright_memory_for_prompt(
+    entry: PromptMemoryEntry,
+    replay_error: str | None = None,
+) -> str:
+    lines = [
+        "Prompt memory:",
+        "Use this prior successful Playwright fast path as a hint, but trust the current page.",
+    ]
+    if replay_error:
+        lines.extend(["", "Replay failed before fallback:", replay_error.strip()])
+    for heading in (
+        _PLAYWRIGHT_REPLAY_SECTION,
+        _PLAYWRIGHT_SUCCESS_CHECK_SECTION,
+        _PLAYWRIGHT_NOTES_SECTION,
+    ):
+        section = next(
+            (item for item in entry.sections if item.heading == heading),
+            None,
+        )
+        if section is None:
+            continue
+        lines.extend(["", f"{heading}:"])
+        if section.language is None:
+            lines.append(section.body)
+        else:
+            lines.extend([f"```{section.language}", section.body, "```"])
+    return "\n".join(lines).strip()
+
+
+def _memory_draft_code_section(text: str, heading: str) -> str:
+    section = _memory_draft_text_section(text, heading)
+    if not section:
+        raise RuntimeError(f"memory compiler response is missing {heading!r}.")
+    match = _MEMORY_DRAFT_FENCE_PATTERN.search(section.strip())
+    if match is None:
+        raise RuntimeError(f"memory compiler response {heading!r} needs a code fence.")
+    language = match.group("language")
+    if language and language != "python":
+        raise RuntimeError(f"memory compiler response {heading!r} must use python.")
+    code = match.group("body").strip()
+    if not code:
+        raise RuntimeError(f"memory compiler response {heading!r} must not be blank.")
+    return code
+
+
+def _memory_draft_text_section(text: str, heading: str) -> str:
+    marker = f"## {heading}"
+    lines = text.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip() == marker:
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for index in range(start, len(lines)):
+        if lines[index].startswith("## "):
+            end = index
+            break
+    return "\n".join(lines[start:end]).strip()
 
 
 def prompt_page(

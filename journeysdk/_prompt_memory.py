@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import tempfile
 import textwrap
 from collections.abc import Mapping
@@ -16,15 +17,36 @@ from pathlib import Path
 from typing import TypeAlias
 
 from .errors import InvalidBranchUsageError
-from .logger import JourneyLogRecord
 from .planner import _PlanSession, _register_planning_step_hook
 from .session import get_session
 from .utils import callable_ref
 
-PROMPT_MEMORY_FORMAT_VERSION = 1
-PROMPT_MEMORY_SUFFIX = ".memory.json"
-MAX_PROMPT_MEMORY_ITEMS = 10
+PROMPT_MEMORY_FORMAT_VERSION = 2
+PROMPT_MEMORY_SUFFIX = ".memory.md"
 MAX_PROMPT_MEMORY_TEXT_LENGTH = 1000
+_PROMPT_MEMORY_TITLE = "# Journey Prompt Memory"
+_FENCE_PATTERN = re.compile(
+    r"^```(?P<language>[A-Za-z0-9_-]*)\n(?P<body>.*?)\n```",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+@dataclass(frozen=True)
+class PromptMemorySection:
+    heading: str
+    body: str
+    language: str | None = None
+
+
+@dataclass(frozen=True)
+class PromptMemoryEntry:
+    component: str
+    instruction: str
+    observation_signature: str
+    sections: tuple[PromptMemorySection, ...]
+    final_output: str | dict[str, object]
+    run_count: int = 0
+    updated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -218,64 +240,71 @@ def prompt_memory_updates_disabled() -> bool:
     return bool(callable(update_disabled) and update_disabled())
 
 
-def prompt_memory_key(
-    *,
-    component: str,
-    instruction: str,
-    observation_signature: str,
-) -> str:
-    payload = {
-        "component": component,
-        "instruction": normalize_prompt_instruction(instruction),
-        "observation_signature": observation_signature,
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def normalize_prompt_instruction(instruction: str) -> str:
     return " ".join(instruction.split())
 
 
-def load_prompt_memory_entry(path: Path, key: str) -> dict[str, object] | None:
-    data = _load_prompt_memory_file(path)
-    entries = data["entries"]
-    if not isinstance(entries, dict):
-        raise RuntimeError(
-            f"Prompt memory file '{path}' has invalid entries data."
-        )
-    entry = entries.get(key)
-    if entry is None:
+def prompt_memory_fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def load_prompt_memory_entry(
+    path: Path,
+    *,
+    component: str,
+    instruction: str,
+    observation_signature: str,
+) -> PromptMemoryEntry | None:
+    if not path.exists():
         return None
-    if not isinstance(entry, dict):
-        raise RuntimeError(
-            f"Prompt memory file '{path}' has an invalid entry for key '{key}'."
-        )
-    return dict(entry)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"Could not read prompt memory file '{path}': {exc}") from exc
+    entry = parse_prompt_memory_entry(text, path=path)
+    expected_instruction = normalize_prompt_instruction(instruction)
+    if entry.component != component:
+        return None
+    if entry.instruction != expected_instruction:
+        return None
+    if entry.observation_signature != observation_signature:
+        return None
+    return entry
 
 
 def write_prompt_memory_entry(
     path: Path,
-    key: str,
-    entry: Mapping[str, object],
+    entry: PromptMemoryEntry,
 ) -> int:
-    data = _load_prompt_memory_file(path)
-    entries = data["entries"]
-    if not isinstance(entries, dict):
-        raise RuntimeError(
-            f"Prompt memory file '{path}' has invalid entries data."
-        )
-    prior = entries.get(key)
     prior_run_count = 0
-    if isinstance(prior, dict) and isinstance(prior.get("run_count"), int):
-        prior_run_count = prior["run_count"]
-
-    updated = dict(entry)
+    if path.exists():
+        try:
+            prior = parse_prompt_memory_entry(
+                path.read_text(encoding="utf-8"),
+                path=path,
+            )
+        except RuntimeError:
+            prior = None
+        if prior is not None:
+            prior_run_count = prior.run_count
     run_count = prior_run_count + 1
-    updated["run_count"] = run_count
-    updated["updated_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    entries[key] = updated
-    _write_prompt_memory_file(path, data)
+    updated = PromptMemoryEntry(
+        component=entry.component,
+        instruction=normalize_prompt_instruction(entry.instruction),
+        observation_signature=entry.observation_signature,
+        sections=tuple(
+            PromptMemorySection(
+                heading=_normalize_section_heading(section.heading),
+                body=section.body.strip(),
+                language=_normalize_section_language(section.language),
+            )
+            for section in entry.sections
+        ),
+        final_output=entry.final_output,
+        run_count=run_count,
+        updated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
+    _write_prompt_memory_file(path, render_prompt_memory_entry(updated))
     return run_count
 
 
@@ -285,18 +314,253 @@ def prompt_memory_entry_from_result(
     instruction: str,
     observation_signature: str,
     final_output: str | dict[str, object],
-    log_records: tuple[JourneyLogRecord, ...],
-) -> dict[str, object]:
-    return {
-        "component": component,
-        "instruction": normalize_prompt_instruction(instruction),
-        "observation_signature": observation_signature,
-        "final_output": _truncate_memory_value(final_output),
-        "log_records": [
-            _truncate_record(record.to_dict())
-            for record in log_records[-MAX_PROMPT_MEMORY_ITEMS:]
-        ],
-    }
+    sections: tuple[PromptMemorySection, ...],
+) -> PromptMemoryEntry:
+    return PromptMemoryEntry(
+        component=component,
+        instruction=normalize_prompt_instruction(instruction),
+        observation_signature=observation_signature,
+        sections=sections,
+        final_output=final_output,
+    )
+
+
+def parse_prompt_memory_entry(text: str, *, path: Path | None = None) -> PromptMemoryEntry:
+    label = f"Prompt memory file '{path}'" if path is not None else "Prompt memory"
+    if not text.startswith(_PROMPT_MEMORY_TITLE):
+        raise RuntimeError(f"{label} must start with {_PROMPT_MEMORY_TITLE!r}.")
+    metadata = _parse_prompt_memory_metadata(text)
+    component = _required_metadata(metadata, "component", label=label)
+    instruction = _required_metadata(metadata, "instruction", label=label)
+    observation_signature = _required_metadata(
+        metadata,
+        "observation_signature",
+        label=label,
+    )
+    _validate_fingerprint(
+        metadata,
+        "instruction_sha256",
+        instruction,
+        label=label,
+    )
+    _validate_fingerprint(
+        metadata,
+        "observation_signature_sha256",
+        observation_signature,
+        label=label,
+    )
+    sections = _parse_prompt_memory_sections(text, label=label)
+    final_output = _parse_final_output_section(text, label=label)
+    run_count = _parse_int_metadata(metadata.get("run_count"), label=label)
+    updated_at = metadata.get("updated_at", "")
+    return PromptMemoryEntry(
+        component=component,
+        instruction=instruction,
+        observation_signature=observation_signature,
+        sections=sections,
+        final_output=final_output,
+        run_count=run_count,
+        updated_at=updated_at,
+    )
+
+
+def render_prompt_memory_entry(entry: PromptMemoryEntry) -> str:
+    instruction = normalize_prompt_instruction(entry.instruction)
+    final_output_language = "json" if isinstance(entry.final_output, dict) else "text"
+    if isinstance(entry.final_output, dict):
+        final_output = json.dumps(entry.final_output, sort_keys=True, indent=2)
+    else:
+        final_output = entry.final_output
+    rendered_sections: list[str] = []
+    for section in entry.sections:
+        rendered_sections.extend(_render_prompt_memory_section(section))
+    return "\n".join(
+        [
+            _PROMPT_MEMORY_TITLE,
+            "",
+            f"version: {PROMPT_MEMORY_FORMAT_VERSION}",
+            f"component: {entry.component}",
+            f"instruction: {instruction}",
+            f"instruction_sha256: {prompt_memory_fingerprint(instruction)}",
+            f"observation_signature: {entry.observation_signature}",
+            (
+                "observation_signature_sha256: "
+                f"{prompt_memory_fingerprint(entry.observation_signature)}"
+            ),
+            f"run_count: {entry.run_count}",
+            f"updated_at: {entry.updated_at}",
+            *rendered_sections,
+            "",
+            "## Final output",
+            f"```{final_output_language}",
+            str(final_output).strip(),
+            "```",
+            "",
+        ]
+    )
+
+
+def _render_prompt_memory_section(section: PromptMemorySection) -> list[str]:
+    heading = _normalize_section_heading(section.heading)
+    body = section.body.strip()
+    language = _normalize_section_language(section.language)
+    if language is None:
+        return ["", f"## {heading}", body]
+    return ["", f"## {heading}", f"```{language}", body, "```"]
+
+
+def _normalize_section_heading(heading: str) -> str:
+    if not isinstance(heading, str):
+        raise ValueError("Prompt memory section heading must be a string.")
+    normalized = heading.strip()
+    if not normalized:
+        raise ValueError("Prompt memory section heading must be non-empty.")
+    if "\n" in normalized or "\r" in normalized:
+        raise ValueError("Prompt memory section heading must be one line.")
+    if normalized == "Final output":
+        raise ValueError("Prompt memory section heading 'Final output' is reserved.")
+    return normalized
+
+
+def _normalize_section_language(language: str | None) -> str | None:
+    if language is None:
+        return None
+    if not isinstance(language, str):
+        raise ValueError("Prompt memory section language must be a string or None.")
+    normalized = language.strip()
+    if not normalized:
+        return None
+    if "\n" in normalized or "\r" in normalized or "`" in normalized:
+        raise ValueError("Prompt memory section language must be a simple fence tag.")
+    return normalized
+
+
+def _parse_prompt_memory_metadata(text: str) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for line in text.splitlines()[1:]:
+        if line.startswith("## "):
+            break
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key:
+            metadata[key] = value.strip()
+    return metadata
+
+
+def _required_metadata(
+    metadata: Mapping[str, str],
+    key: str,
+    *,
+    label: str,
+) -> str:
+    value = metadata.get(key, "").strip()
+    if not value:
+        raise RuntimeError(f"{label} is missing required metadata {key!r}.")
+    return value
+
+
+def _validate_fingerprint(
+    metadata: Mapping[str, str],
+    key: str,
+    value: str,
+    *,
+    label: str,
+) -> None:
+    actual = metadata.get(key, "").strip()
+    expected = prompt_memory_fingerprint(value)
+    if actual != expected:
+        raise RuntimeError(f"{label} has an invalid {key!r}.")
+
+
+def _parse_int_metadata(value: str | None, *, label: str) -> int:
+    if value is None or not value.strip():
+        return 0
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{label} has invalid run_count metadata.") from exc
+    return max(0, parsed)
+
+
+def _parse_final_output_section(text: str, *, label: str) -> str | dict[str, object]:
+    body, language = _required_fenced_section(text, "Final output", label=label)
+    if language == "json":
+        try:
+            loaded = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"{label} has invalid final output JSON.") from exc
+        if not isinstance(loaded, dict):
+            raise RuntimeError(f"{label} final output JSON must be an object.")
+        return loaded
+    return body
+
+
+def _parse_prompt_memory_sections(
+    text: str,
+    *,
+    label: str,
+) -> tuple[PromptMemorySection, ...]:
+    sections: list[PromptMemorySection] = []
+    for heading, body in _iter_sections(text):
+        if heading == "Final output":
+            continue
+        normalized_heading = _normalize_section_heading(heading)
+        normalized_body = body.strip()
+        language: str | None = None
+        fence = _FENCE_PATTERN.fullmatch(normalized_body)
+        if fence is not None:
+            language = _normalize_section_language(fence.group("language"))
+            normalized_body = fence.group("body").strip()
+        sections.append(
+            PromptMemorySection(
+                heading=normalized_heading,
+                body=normalized_body,
+                language=language,
+            )
+        )
+    return tuple(sections)
+
+
+def _required_fenced_section(
+    text: str,
+    heading: str,
+    *,
+    label: str,
+) -> tuple[str, str]:
+    section = _section_text(text, heading)
+    if section is None:
+        raise RuntimeError(f"{label} is missing required section {heading!r}.")
+    match = _FENCE_PATTERN.search(section.strip())
+    if match is None:
+        raise RuntimeError(f"{label} {heading!r} must contain a fenced code block.")
+    return match.group("body"), match.group("language")
+
+
+def _section_text(text: str, heading: str) -> str | None:
+    for section_heading, body in _iter_sections(text):
+        if section_heading == heading:
+            return body.strip()
+    return None
+
+
+def _iter_sections(text: str) -> tuple[tuple[str, str], ...]:
+    sections: list[tuple[str, str]] = []
+    current_heading: str | None = None
+    current_body: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current_heading is not None:
+                sections.append((current_heading, "\n".join(current_body).strip()))
+            current_heading = line.removeprefix("## ").strip()
+            current_body = []
+            continue
+        if current_heading is not None:
+            current_body.append(line)
+    if current_heading is not None:
+        sections.append((current_heading, "\n".join(current_body).strip()))
+    return tuple(sections)
 
 
 def truncate_prompt_memory_text(value: object) -> str:
@@ -314,59 +578,7 @@ def _is_prompt_call(call: ast.Call) -> bool:
     return False
 
 
-def _truncate_record(record: dict[str, object]) -> dict[str, object]:
-    return {
-        truncate_prompt_memory_text(key): _truncate_memory_value(value)
-        for key, value in record.items()
-        if isinstance(key, str)
-    }
-
-
-def _truncate_memory_value(value: object) -> object:
-    if value is None or isinstance(value, bool | int | float):
-        return value
-    if isinstance(value, str):
-        return truncate_prompt_memory_text(value)
-    if isinstance(value, list):
-        return [
-            _truncate_memory_value(item)
-            for item in value[-MAX_PROMPT_MEMORY_ITEMS:]
-        ]
-    if isinstance(value, dict):
-        return {
-            truncate_prompt_memory_text(key): _truncate_memory_value(item)
-            for key, item in list(value.items())[-MAX_PROMPT_MEMORY_ITEMS:]
-            if isinstance(key, str)
-        }
-    return truncate_prompt_memory_text(value)
-
-
-def _load_prompt_memory_file(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {
-            "version": PROMPT_MEMORY_FORMAT_VERSION,
-            "entries": {},
-        }
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            loaded = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Could not read prompt memory file '{path}': {exc}") from exc
-    if not isinstance(loaded, dict):
-        raise RuntimeError(f"Prompt memory file '{path}' must contain a JSON object.")
-    if loaded.get("version") != PROMPT_MEMORY_FORMAT_VERSION:
-        raise RuntimeError(
-            f"Prompt memory file '{path}' uses unsupported format version "
-            f"{loaded.get('version')!r}."
-        )
-    if "entries" not in loaded:
-        loaded["entries"] = {}
-    if not isinstance(loaded["entries"], dict):
-        raise RuntimeError(f"Prompt memory file '{path}' has invalid entries data.")
-    return loaded
-
-
-def _write_prompt_memory_file(path: Path, data: Mapping[str, object]) -> None:
+def _write_prompt_memory_file(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path | None = None
     try:
@@ -379,8 +591,7 @@ def _write_prompt_memory_file(path: Path, data: Mapping[str, object]) -> None:
             suffix=".tmp",
         ) as handle:
             tmp_path = Path(handle.name)
-            json.dump(data, handle, sort_keys=True, indent=2)
-            handle.write("\n")
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)

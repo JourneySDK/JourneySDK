@@ -73,10 +73,11 @@ cleanup for non-returned live resources, and rehydration of returned values.
 Official tools that add an AI-driven `prompt(...)` method should use the shared helpers in
 `journeysdk._prompt_memory` instead of inventing their own storage. The method should accept
 `memory: str | None = None`, respect `--no-memory` / `execute(..., no_memory=True)` and
-`--no-memory-update` / `execute(..., no_memory_update=True)`, and store only compact summaries from successful runs.
-Do not persist screenshots, rendered HTML, full model prompts, or other raw observations that may contain secrets.
+`--no-memory-update` / `execute(..., no_memory_update=True)`, and store only compact replay code and checks from
+successful runs. Do not persist screenshots, rendered HTML, full model prompts, or other raw observations that may
+contain secrets.
 
-Memory files are named `[memory].memory.json` and live beside the journey source. Planning must be able to validate
+Memory files are named `[memory].memory.md` and live beside the journey source. Planning must be able to validate
 literal memory names and reject duplicates before execution.
 
 ## Planning Hooks And Core Dependencies
