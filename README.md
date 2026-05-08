@@ -145,7 +145,7 @@ waiting for a webhook request or checking an inbox. A single step can use one to
 through many touchpoints as the user flow crosses systems.
 
 Official touchpoints live under `journeysdk.touchpoints`. Use them when the SDK provides a general-purpose helper,
-such as Playwright pages, hosted email inboxes, hosted webhook endpoints, or Docker snapshots. App-specific
+such as browser pages, hosted email inboxes, hosted webhook endpoints, or Docker snapshots. App-specific
 touchpoints, such as a Stripe assertion, HubSpot ticket lookup, internal admin API, or custom back-office check, should
 stay as normal Python code beside your journey until the SDK documents an official helper for that surface.
 
@@ -155,7 +155,7 @@ For example, one checkout journey can create a cart once, exercise card and wall
 ```python
 from journeysdk import branch, journey, step
 from journeysdk.touchpoints.email import get_email_inbox
-from journeysdk.touchpoints.playwright import open_page
+from journeysdk.touchpoints.browser import open_page
 
 
 def checkout(cart, inbox, method) -> dict[str, object]:
@@ -254,7 +254,7 @@ behavior for active state, step bindings, or branch-anchor snapshots.
 Restored values should be usable as later step inputs. For values backed by live
 external resources, store enough data to reopen the resource explicitly in the
 next step instead of trying to pickle the live resource itself. Official touchpoints
-follow this pattern: `JourneyPlaywrightPage` stores browser state, and later
+follow this pattern: `JourneyBrowserPage` stores browser state, and later
 steps reopen it with `open_page(saved_page)`.
 
 ## Step Lifecycle
@@ -322,7 +322,7 @@ contains it, or close it explicitly with local `try` / `finally` code.
 Keep lifecycle methods idempotent, and close only resources owned by that touchpoint
 call. If the step returns a value that must survive retries, `--state`, or
 branch replay, that value should also implement the Journey rehydration
-protocol above; do not rely on pickling live resources. `JourneyPlaywrightPage`
+protocol above; do not rely on pickling live resources. `JourneyBrowserPage`
 is the canonical example because it implements both protocols: `__exit__`
 closes the live browser objects at step exit, while `__store__` / `__restore__`
 save enough browser state for a later step to reopen the page explicitly.
@@ -390,11 +390,11 @@ step(
 )
 ```
 
-The Playwright touchpoint packages one page into a resumable step value:
+The browser touchpoint packages one page into a resumable step value:
 
 ```python
-from journeysdk.touchpoints.playwright import (
-    JourneyPlaywrightPage,
+from journeysdk.touchpoints.browser import (
+    JourneyBrowserPage,
     open_page,
 )
 
@@ -404,17 +404,20 @@ def login_and_capture_session():
     page.wait_for_url("**/dashboard")
     return page
 
-def assert_dashboard(session: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
+def assert_dashboard(session: JourneyBrowserPage) -> JourneyBrowserPage:
     page = open_page(session)
     assert page.url.endswith("/dashboard")
     return page
 ```
 
+`JourneyBrowserPage` extends Playwright's sync `Page`, so ordinary Playwright page methods and locators work on the
+returned object. See the [Playwright Page API](https://playwright.dev/python/docs/api/class-page) for reference.
+
 The same live page can also run a bounded LLM action loop. By default, `page.prompt(...)` returns a plain string.
 Pass `output=...` when you want LangChain structured output as a dictionary:
 
 ```python
-from journeysdk.touchpoints.playwright import open_page
+from journeysdk.touchpoints.browser import open_page
 
 def capture_popup_title() -> dict[str, object]:
     page = open_page("https://app.example/login")
@@ -433,7 +436,7 @@ def capture_popup_title() -> dict[str, object]:
 
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
 `ANTHROPIC_API_KEY`, and either pass a LangChain model identifier like `model="anthropic:claude-sonnet-4-5"` or set
-`JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
+`JOURNEY_BROWSER_PROMPT_MODEL`.
 The optional `memory="sign-in-popup"` argument stores a replayable fast path from successful runs in
 `sign-in-popup.memory.md` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.

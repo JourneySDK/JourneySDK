@@ -350,7 +350,7 @@ requires-dist = [
     { name = "playwright" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
 ]
-provides-extras = ["dev", "playwright-prompt"]
+provides-extras = ["dev", "browser-prompt"]
 
 [[package]]
 name = "jsonpatch"

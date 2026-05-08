@@ -1,4 +1,4 @@
-"""Tutorial journey showing manual interruption with resumable Playwright state."""
+"""Tutorial journey showing manual interruption with resumable browser state."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from pathlib import Path
 
 from journeysdk import journey, step
 from journeysdk.logger import get_logger
-from journeysdk.touchpoints.playwright import (
-    JourneyPlaywrightPage,
+from journeysdk.touchpoints.browser import (
+    JourneyBrowserPage,
     open_page,
 )
 
-from docs.playwright_resume_journey._auth_demo import (
+from docs.browser_resume_journey._auth_demo import (
     ensure_demo_server,
     reset_demo_port,
     shutdown_demo_server,
@@ -30,7 +30,7 @@ def reset_demo_state(*, state_path: str | Path | None = None) -> None:
     reset_demo_port()
 
 
-def login_and_capture_session() -> JourneyPlaywrightPage:
+def login_and_capture_session() -> JourneyBrowserPage:
     """Log in to the demo app and capture resumable page state."""
 
     login_url = f"{ensure_demo_server()}/login"
@@ -42,7 +42,7 @@ def login_and_capture_session() -> JourneyPlaywrightPage:
     )
 
     _tutorial_note(
-        "Signed in and returned JourneyPlaywrightPage for "
+        "Signed in and returned JourneyBrowserPage for "
         f"{page.url}. The next step can reopen this authenticated dashboard from "
         "saved state without logging in again."
     )
@@ -50,7 +50,7 @@ def login_and_capture_session() -> JourneyPlaywrightPage:
 
 
 def continue_authenticated_dashboard(
-    session: JourneyPlaywrightPage,
+    session: JourneyBrowserPage,
     pause_seconds: float,
 ) -> dict[str, str]:
     """Resume the authenticated dashboard and complete the protected action."""
@@ -66,7 +66,7 @@ def continue_authenticated_dashboard(
         _tutorial_note(
             "continue_authenticated_dashboard() reopened the saved dashboard at "
             f"{session.url}. journey resumes at the step boundary, so this step "
-            "restarts from the top on resume with the same saved JourneyPlaywrightPage."
+            "restarts from the top on resume with the same saved JourneyBrowserPage."
         )
         _tutorial_note(
             f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
@@ -104,13 +104,13 @@ def assert_protected_action_complete(result: dict[str, str]) -> bool:
     _tutorial_note(
         "The protected action completed. If this run resumed from saved state, "
         "continue_authenticated_dashboard() restarted with the same saved "
-        "JourneyPlaywrightPage instead of logging in again."
+        "JourneyBrowserPage instead of logging in again."
     )
     return True
 
 
 @journey
-def playwright_resume_journey() -> None:
+def browser_resume_journey() -> None:
     pause_seconds = 2.0
     session = step(login_and_capture_session)
     result = step(continue_authenticated_dashboard, session, pause_seconds)

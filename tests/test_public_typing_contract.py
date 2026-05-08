@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SDK = ROOT / "journeysdk"
-TOUCHPOINT_MODULES = ("docker", "email", "playwright", "webhook")
+TOUCHPOINT_MODULES = ("browser", "docker", "email", "webhook")
 EXTRA_PUBLIC_NAMES = {
     SDK / "api.py": {"is_journey_callable"},
 }

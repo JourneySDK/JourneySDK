@@ -1,4 +1,4 @@
-"""Private helpers for Journey Playwright prompting."""
+"""Private helpers for Journey browser prompting."""
 
 from __future__ import annotations
 
@@ -46,13 +46,13 @@ from journeysdk._prompt_engine import (
 )
 from playwright.sync_api import Page as PlaywrightPage
 
-JOURNEY_PLAYWRIGHT_PROMPT_MODEL_ENV = "JOURNEY_PLAYWRIGHT_PROMPT_MODEL"
+JOURNEY_BROWSER_PROMPT_MODEL_ENV = "JOURNEY_BROWSER_PROMPT_MODEL"
 
 _PROMPT_RUN_CODE_ACTION_NAME = "journey_run_code"
 _PROMPT_FAIL_SESSION_ACTION_NAME = "journey_fail_session"
-_PLAYWRIGHT_REPLAY_SECTION = "Replay code"
-_PLAYWRIGHT_SUCCESS_CHECK_SECTION = "Success check code"
-_PLAYWRIGHT_NOTES_SECTION = "Notes"
+_BROWSER_REPLAY_SECTION = "Replay code"
+_BROWSER_SUCCESS_CHECK_SECTION = "Success check code"
+_BROWSER_NOTES_SECTION = "Notes"
 
 _PROMPT_SYSTEM_MESSAGE = """You control a Playwright sync browser page with available actions.
 
@@ -89,7 +89,7 @@ screenshot contains a matching message.
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
-_PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE = """Create replayable Journey Playwright prompt memory.
+_PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE = """Create replayable Journey browser prompt memory.
 
 Return Markdown with exactly these sections:
 
@@ -117,7 +117,7 @@ Rules:
 
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
 _VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
-_PROMPT_LOGGER = get_logger("playwright-prompt")
+_PROMPT_LOGGER = get_logger("browser-prompt")
 _PROMPT_DETAIL_INDENT = 10
 _PROMPT_LABEL_WIDTH = 25
 _MEMORY_DRAFT_FENCE_PATTERN = re.compile(
@@ -177,8 +177,8 @@ class _PromptSession:
     def run(self) -> str | dict[str, object]:
         self._log_start()
         return PromptEngineSession(
-            component="playwright",
-            owner="JourneyPlaywrightPage.prompt(...)",
+            component="browser",
+            owner="JourneyBrowserPage.prompt(...)",
             instruction=self._instruction,
             model=self._model,
             max_steps=self._max_steps,
@@ -193,7 +193,7 @@ class _PromptSession:
             before_final_observation=self._settle_active_page_for_final_output,
             replay_memory=self._replay_memory,
             compile_memory=self._compile_memory,
-            format_memory=_format_playwright_memory_for_prompt,
+            format_memory=_format_browser_memory_for_prompt,
         ).run()
 
     def _log_start(self) -> None:
@@ -367,21 +367,21 @@ class _PromptSession:
             ),
         )
         try:
-            replay_code = _playwright_memory_code(
+            replay_code = _browser_memory_code(
                 entry,
-                _PLAYWRIGHT_REPLAY_SECTION,
+                _BROWSER_REPLAY_SECTION,
             )
-            success_check_code = _playwright_memory_code(
+            success_check_code = _browser_memory_code(
                 entry,
-                _PLAYWRIGHT_SUCCESS_CHECK_SECTION,
+                _BROWSER_SUCCESS_CHECK_SECTION,
             )
             self._execute_python_code(
                 replay_code,
-                filename="<journey-playwright-memory-replay>",
+                filename="<journey-browser-memory-replay>",
             )
             self._execute_python_code(
                 success_check_code,
-                filename="<journey-playwright-memory-check>",
+                filename="<journey-browser-memory-check>",
             )
         except Exception as exc:
             detail = _format_python_error(exc)
@@ -419,7 +419,7 @@ class _PromptSession:
             )
             response_text = _extract_langchain_text(
                 response,
-                owner="JourneyPlaywrightPage.prompt(...) memory compiler",
+                owner="JourneyBrowserPage.prompt(...) memory compiler",
             )
             return _parse_memory_draft(response_text)
         except Exception as exc:
@@ -446,7 +446,7 @@ class _PromptSession:
             normalized_code = _strip_code_fences(
                 _require_text_value(
                     code,
-                    "JourneyPlaywrightPage.prompt(...) "
+                    "JourneyBrowserPage.prompt(...) "
                     "journey_run_code expects a non-blank code string.",
                 )
             )
@@ -525,7 +525,7 @@ class _PromptSession:
         try:
             normalized_reason = _require_text_value(
                 reason,
-                "JourneyPlaywrightPage.prompt(...) "
+                "JourneyBrowserPage.prompt(...) "
                 "journey_fail_session expects a non-blank reason string.",
             )
         except Exception as exc:
@@ -598,11 +598,11 @@ class _PromptSession:
         normalized_code = code.strip()
         if not normalized_code:
             raise ValueError(
-                "JourneyPlaywrightPage.prompt(...) expected the model to return Python code."
+                "JourneyBrowserPage.prompt(...) expected the model to return Python code."
             )
         self._execute_python_code(
             normalized_code,
-            filename="<journey-playwright-prompt>",
+            filename="<journey-browser-prompt>",
         )
         return _prompt_action_record(
             step_index=step_index,
@@ -617,7 +617,7 @@ class _PromptSession:
     def _execute_python_code(self, code: str, *, filename: str) -> None:
         normalized_code = code.strip()
         if not normalized_code:
-            raise ValueError("JourneyPlaywrightPage.prompt(...) expected Python code.")
+            raise ValueError("JourneyBrowserPage.prompt(...) expected Python code.")
         self._discover_pages()
         namespace: dict[str, object] = {
             "__builtins__": {},
@@ -714,7 +714,7 @@ def _parse_memory_draft(text: str) -> PromptMemoryDraft:
     success_check_code = _memory_draft_code_section(text, "Success check code")
     notes = _memory_draft_text_section(text, "Notes")
     return PromptMemoryDraft(
-        sections=_playwright_memory_sections(
+        sections=_browser_memory_sections(
             replay_code=replay_code,
             success_check_code=success_check_code,
             notes=notes,
@@ -722,7 +722,7 @@ def _parse_memory_draft(text: str) -> PromptMemoryDraft:
     )
 
 
-def _playwright_memory_sections(
+def _browser_memory_sections(
     *,
     replay_code: str,
     success_check_code: str,
@@ -730,12 +730,12 @@ def _playwright_memory_sections(
 ) -> tuple[PromptMemorySection, ...]:
     sections = [
         PromptMemorySection(
-            heading=_PLAYWRIGHT_REPLAY_SECTION,
+            heading=_BROWSER_REPLAY_SECTION,
             body=replay_code,
             language="python",
         ),
         PromptMemorySection(
-            heading=_PLAYWRIGHT_SUCCESS_CHECK_SECTION,
+            heading=_BROWSER_SUCCESS_CHECK_SECTION,
             body=success_check_code,
             language="python",
         ),
@@ -743,51 +743,51 @@ def _playwright_memory_sections(
     if notes.strip():
         sections.append(
             PromptMemorySection(
-                heading=_PLAYWRIGHT_NOTES_SECTION,
+                heading=_BROWSER_NOTES_SECTION,
                 body=notes.strip(),
             )
         )
     return tuple(sections)
 
 
-def _playwright_memory_code(entry: PromptMemoryEntry, heading: str) -> str:
-    section = _playwright_memory_section(entry, heading)
+def _browser_memory_code(entry: PromptMemoryEntry, heading: str) -> str:
+    section = _browser_memory_section(entry, heading)
     if section.language != "python":
         raise RuntimeError(
-            f"Playwright prompt memory section {heading!r} must use a python code fence."
+            f"Browser prompt memory section {heading!r} must use a python code fence."
         )
     code = section.body.strip()
     if not code:
         raise RuntimeError(
-            f"Playwright prompt memory section {heading!r} must not be blank."
+            f"Browser prompt memory section {heading!r} must not be blank."
         )
     return code
 
 
-def _playwright_memory_section(
+def _browser_memory_section(
     entry: PromptMemoryEntry,
     heading: str,
 ) -> PromptMemorySection:
     for section in entry.sections:
         if section.heading == heading:
             return section
-    raise RuntimeError(f"Playwright prompt memory is missing section {heading!r}.")
+    raise RuntimeError(f"Browser prompt memory is missing section {heading!r}.")
 
 
-def _format_playwright_memory_for_prompt(
+def _format_browser_memory_for_prompt(
     entry: PromptMemoryEntry,
     replay_error: str | None = None,
 ) -> str:
     lines = [
         "Prompt memory:",
-        "Use this prior successful Playwright fast path as a hint, but trust the current page.",
+        "Use this prior successful browser fast path as a hint, but trust the current page.",
     ]
     if replay_error:
         lines.extend(["", "Replay failed before fallback:", replay_error.strip()])
     for heading in (
-        _PLAYWRIGHT_REPLAY_SECTION,
-        _PLAYWRIGHT_SUCCESS_CHECK_SECTION,
-        _PLAYWRIGHT_NOTES_SECTION,
+        _BROWSER_REPLAY_SECTION,
+        _BROWSER_SUCCESS_CHECK_SECTION,
+        _BROWSER_NOTES_SECTION,
     ):
         section = next(
             (item for item in entry.sections if item.heading == heading),
@@ -849,18 +849,18 @@ def prompt_page(
 ) -> str | dict[str, object]:
     normalized_instruction = _require_text_value(
         instruction,
-        "JourneyPlaywrightPage.prompt(...) expects a non-blank instruction.",
+        "JourneyBrowserPage.prompt(...) expects a non-blank instruction.",
     )
     resolved_model = _resolve_model(model)
     normalized_max_steps = _validate_max_steps(max_steps)
     normalized_timeout = _validate_timeout(action_timeout_seconds)
     memory_path = resolve_prompt_memory_path(
         memory,
-        owner="JourneyPlaywrightPage.prompt(...)",
+        owner="JourneyBrowserPage.prompt(...)",
     )
     output_schema = normalize_prompt_output_spec(
         output,
-        owner="JourneyPlaywrightPage.prompt(...)",
+        owner="JourneyBrowserPage.prompt(...)",
     )
     session = _PromptSession(
         page=page,
@@ -968,7 +968,7 @@ def _page_summary(page: dict[str, object]) -> str:
 
 def _page_record(page: dict[str, object]) -> JourneyLogRecord:
     return make_log_record(
-        "playwright",
+        "browser",
         "page",
         _page_summary(page),
         page_index=page.get("index"),
@@ -990,7 +990,7 @@ def _prompt_action_record(
     detail: str,
 ) -> JourneyLogRecord:
     return make_log_record(
-        "playwright",
+        "browser",
         "action",
         detail,
         step=step_index,
@@ -1136,7 +1136,7 @@ def _load_langchain_model(model: str) -> object:
         return _load_prompt_engine_model(model)
     except Exception as exc:
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) failed to initialize LangChain "
+            "JourneyBrowserPage.prompt(...) failed to initialize LangChain "
             f"model {model!r}: {exc}"
         ) from exc
 
@@ -1157,15 +1157,15 @@ def _create_langchain_agent(
 def _resolve_model(model: str | None) -> str:
     return resolve_prompt_model(
         model,
-        env_var=JOURNEY_PLAYWRIGHT_PROMPT_MODEL_ENV,
-        owner="JourneyPlaywrightPage.prompt(...)",
+        env_var=JOURNEY_BROWSER_PROMPT_MODEL_ENV,
+        owner="JourneyBrowserPage.prompt(...)",
     )
 
 
 def _validate_max_steps(max_steps: int) -> int:
     if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0:
         raise ValueError(
-            "JourneyPlaywrightPage.prompt(..., max_steps=...) expects a positive integer."
+            "JourneyBrowserPage.prompt(..., max_steps=...) expects a positive integer."
         )
     return max_steps
 
@@ -1176,13 +1176,13 @@ def _validate_timeout(action_timeout_seconds: float) -> float:
         int | float,
     ):
         raise ValueError(
-            "JourneyPlaywrightPage.prompt(..., action_timeout_seconds=...) "
+            "JourneyBrowserPage.prompt(..., action_timeout_seconds=...) "
             "expects a positive number."
         )
     normalized = float(action_timeout_seconds)
     if normalized <= 0:
         raise ValueError(
-            "JourneyPlaywrightPage.prompt(..., action_timeout_seconds=...) "
+            "JourneyBrowserPage.prompt(..., action_timeout_seconds=...) "
             "expects a positive number."
         )
     return normalized
@@ -1199,7 +1199,7 @@ def _context_pages(context: object) -> list[PlaywrightPage]:
     pages = getattr(context, "pages", None)
     if not isinstance(pages, list):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected Playwright context.pages to be a list."
+            "JourneyBrowserPage.prompt(...) expected Playwright context.pages to be a list."
         )
     return [cast(PlaywrightPage, page) for page in pages]
 
@@ -1208,7 +1208,7 @@ def _png_data_url(page: PlaywrightPage) -> str:
     png_bytes = page.screenshot(type="png")
     if not isinstance(png_bytes, bytes):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected screenshot(type='png') to return bytes."
+            "JourneyBrowserPage.prompt(...) expected screenshot(type='png') to return bytes."
         )
     encoded = base64.b64encode(png_bytes).decode("ascii")
     return f"data:image/png;base64,{encoded}"
@@ -1218,7 +1218,7 @@ def _rendered_html(page: PlaywrightPage) -> str:
     html = page.evaluate(_RENDERED_HTML_SCRIPT)
     if not isinstance(html, str):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected rendered HTML to be a string."
+            "JourneyBrowserPage.prompt(...) expected rendered HTML to be a string."
         )
     return html
 
@@ -1227,7 +1227,7 @@ def _visible_text(page: PlaywrightPage) -> str:
     text = page.evaluate(_VISIBLE_TEXT_SCRIPT)
     if not isinstance(text, str):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) expected visible text to be a string."
+            "JourneyBrowserPage.prompt(...) expected visible text to be a string."
         )
     return text
 
@@ -1262,28 +1262,28 @@ def _format_python_error(exc: BaseException) -> str:
 def _parse_page_index(raw_index: object, *, page_count: int) -> int:
     if isinstance(raw_index, bool):
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) switch_page index must be an integer."
+            "JourneyBrowserPage.prompt(...) switch_page index must be an integer."
         )
     if isinstance(raw_index, int):
         parsed = raw_index
     elif isinstance(raw_index, str):
         text = _require_text_value(
             raw_index,
-            "JourneyPlaywrightPage.prompt(...) switch_page index must be a non-empty string or integer.",
+            "JourneyBrowserPage.prompt(...) switch_page index must be a non-empty string or integer.",
         )
         try:
             parsed = int(text)
         except ValueError as exc:
             raise RuntimeError(
-                "JourneyPlaywrightPage.prompt(...) switch_page index must be an integer."
+                "JourneyBrowserPage.prompt(...) switch_page index must be an integer."
             ) from exc
     else:
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) switch_page index must be an integer."
+            "JourneyBrowserPage.prompt(...) switch_page index must be an integer."
         )
     if parsed < 0 or parsed >= page_count:
         raise RuntimeError(
-            "JourneyPlaywrightPage.prompt(...) switch_page target "
+            "JourneyBrowserPage.prompt(...) switch_page target "
             f"{parsed} is outside the known page range 0..{page_count - 1}."
         )
     return parsed

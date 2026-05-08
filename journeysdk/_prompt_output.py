@@ -45,7 +45,7 @@ def normalize_prompt_output_spec(
 
     json_schema = {
         "title": "journey_prompt_output",
-        "description": "Structured output for JourneyPlaywrightPage.prompt(...).",
+        "description": "Structured output for JourneyBrowserPage.prompt(...).",
         "type": "object",
         "properties": properties,
         "required": list(properties),

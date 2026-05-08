@@ -1,4 +1,4 @@
-"""Quick-start journey showing Playwright steps, branching, and webhook waiting."""
+"""Quick-start journey showing browser steps, branching, and webhook waiting."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ _STORED_FILE = Path(tempfile.gettempdir()) / "journey-demo-downloads" / _STORED_
 
 def assert_demo_homepage() -> bool:
     from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.playwright import ensure_browser_installed
+    from journeysdk.touchpoints.browser import ensure_browser_installed
 
     ensure_browser_installed()
     with sync_playwright() as playwright:
@@ -40,7 +40,7 @@ def assert_demo_homepage() -> bool:
 
 def click_trigger_endpoint_a(endpoint_url: str) -> bool:
     from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.playwright import ensure_browser_installed
+    from journeysdk.touchpoints.browser import ensure_browser_installed
 
     ensure_browser_installed()
     page_url = f"{_DEMO_PAGE_URL}?webhookUrl={quote(endpoint_url, safe='')}"
@@ -65,7 +65,7 @@ def click_store_local_file() -> bool:
         _STORED_FILE.unlink()
 
     from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.playwright import ensure_browser_installed
+    from journeysdk.touchpoints.browser import ensure_browser_installed
 
     ensure_browser_installed()
     with sync_playwright() as playwright:

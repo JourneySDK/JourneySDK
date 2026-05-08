@@ -289,15 +289,15 @@ def test_cloud_webhook_readme_commands(
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
 
-def test_playwright_resume_readme_commands_interrupt_then_resume(
+def test_browser_resume_readme_commands_interrupt_then_resume(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ):
     sync_api = pytest.importorskip("playwright.sync_api")
-    playwright_resume_example = __import__(
-        "docs.playwright_resume_journey.playwright_resume_journey",
-        fromlist=["playwright_resume_journey"],
+    browser_resume_example = __import__(
+        "docs.browser_resume_journey.browser_resume_journey",
+        fromlist=["browser_resume_journey"],
     )
     try:
         with sync_api.sync_playwright() as playwright:
@@ -307,13 +307,13 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         pytest.skip(f"Playwright browser unavailable: {exc}")
 
     monkeypatch.chdir(_repo_root())
-    state_file = tmp_path / "playwright-resume.state"
+    state_file = tmp_path / "browser-resume.state"
     pause_seconds = configured_pause_seconds(
-        playwright_resume_example.playwright_resume_journey,
+        browser_resume_example.browser_resume_journey,
         step_label="continue_authenticated_dashboard",
     )
     live_stderr = install_live_stderr(monkeypatch)
-    playwright_resume_example.reset_demo_state(state_path=state_file)
+    browser_resume_example.reset_demo_state(state_path=state_file)
     stop_event, interrupt_thread = start_interrupt_on_prompt(
         live_stderr,
         pause_seconds=pause_seconds,
@@ -324,7 +324,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
             first_exit = main(
                 [
                     "--file",
-                    "docs/playwright_resume_journey/playwright_resume_journey.py",
+                    "docs/browser_resume_journey/browser_resume_journey.py",
                     "--state",
                     str(state_file),
                 ]
@@ -343,13 +343,13 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         assert "interrupt requested; waiting for the active step to reach post-exit" in first_error
         assert "continue_authenticated_dashboard" in first_error
         assert "ok attempt=1 duration=" in first_error
-        assert "Signed in and returned JourneyPlaywrightPage" in first_error
+        assert "Signed in and returned JourneyBrowserPage" in first_error
         assert INTERRUPT_PROMPT_PREFIX in first_error
 
         second_exit = main(
             [
                 "--file",
-                "docs/playwright_resume_journey/playwright_resume_journey.py",
+                "docs/browser_resume_journey/browser_resume_journey.py",
                 "--state",
                 str(state_file),
             ]
@@ -358,7 +358,7 @@ def test_playwright_resume_readme_commands_interrupt_then_resume(
         second_output = second_capture.out
         second_error = second_capture.out
     finally:
-        playwright_resume_example.reset_demo_state(state_path=state_file)
+        browser_resume_example.reset_demo_state(state_path=state_file)
 
     assert second_exit == 0
     assert "case_1 resume" in second_error

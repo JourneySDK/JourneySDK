@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-playwright-prompt = []
+browser-prompt = []
 
 [project.scripts]
 journey = "journeysdk.cli:main"

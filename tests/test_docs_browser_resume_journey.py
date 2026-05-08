@@ -9,8 +9,8 @@ from journeysdk.models import StepNode
 
 pytest.importorskip("playwright.sync_api")
 
-playwright_resume_module = importlib.import_module(
-    "docs.playwright_resume_journey.playwright_resume_journey"
+browser_resume_module = importlib.import_module(
+    "docs.browser_resume_journey.browser_resume_journey"
 )
 
 from tests._resume_tutorial_helpers import (
@@ -32,7 +32,7 @@ def _case_labels(plan: journey.JourneyPlan) -> list[list[str]]:
     ]
 
 
-def _require_playwright_browser() -> None:
+def _require_browser_runtime() -> None:
     sync_api = pytest.importorskip("playwright.sync_api")
     try:
         with sync_api.sync_playwright() as playwright:
@@ -42,11 +42,11 @@ def _require_playwright_browser() -> None:
         pytest.skip(f"Playwright browser unavailable: {exc}")
 
 
-def test_playwright_resume_example_compiles_with_explicit_playwright_dependency():
-    reloaded = importlib.reload(playwright_resume_module)
+def test_browser_resume_example_compiles_with_explicit_browser_dependency():
+    reloaded = importlib.reload(browser_resume_module)
     source = Path(reloaded.__file__).read_text(encoding="utf-8")
-    first_plan = journey.compile_journey(reloaded.playwright_resume_journey)
-    second_plan = journey.compile_journey(reloaded.playwright_resume_journey)
+    first_plan = journey.compile_journey(reloaded.browser_resume_journey)
+    second_plan = journey.compile_journey(reloaded.browser_resume_journey)
 
     assert "Playwright" + "PageState" not in source
     assert "capture" + "_page_state" not in source
@@ -66,20 +66,20 @@ def test_playwright_resume_example_compiles_with_explicit_playwright_dependency(
     ]
 
 
-def test_playwright_resume_example_runs_and_resumes_authenticated_session(
+def test_browser_resume_example_runs_and_resumes_authenticated_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    _require_playwright_browser()
+    _require_browser_runtime()
 
     state_file = tmp_path / "journey.state"
     pause_seconds = configured_pause_seconds(
-        playwright_resume_module.playwright_resume_journey,
+        browser_resume_module.browser_resume_journey,
         step_label="continue_authenticated_dashboard",
     )
     live_stderr = install_live_stderr(monkeypatch)
-    playwright_resume_module.reset_demo_state(state_path=state_file)
+    browser_resume_module.reset_demo_state(state_path=state_file)
     stop_event, interrupt_thread = start_interrupt_on_prompt(
         live_stderr,
         pause_seconds=pause_seconds,
@@ -89,7 +89,7 @@ def test_playwright_resume_example_runs_and_resumes_authenticated_session(
         try:
             with pytest.raises(KeyboardInterrupt):
                 journey.execute(
-                    playwright_resume_module.playwright_resume_journey,
+                    browser_resume_module.browser_resume_journey,
                     state=state_file,
                 )
         finally:
@@ -100,16 +100,16 @@ def test_playwright_resume_example_runs_and_resumes_authenticated_session(
 
         assert state_file.exists()
         assert live_stderr.prompt_seen.is_set()
-        assert "Signed in and returned JourneyPlaywrightPage" in first_capture.out
+        assert "Signed in and returned JourneyBrowserPage" in first_capture.out
         assert INTERRUPT_PROMPT_PREFIX in first_capture.out
 
         report = journey.execute(
-            playwright_resume_module.playwright_resume_journey,
+            browser_resume_module.browser_resume_journey,
             state=state_file,
         )
         second_capture = capsys.readouterr()
     finally:
-        playwright_resume_module.reset_demo_state(state_path=state_file)
+        browser_resume_module.reset_demo_state(state_path=state_file)
 
     assert [record.label for record in report.case_reports[0].records if record.label is not None] == [
         "login_and_capture_session",

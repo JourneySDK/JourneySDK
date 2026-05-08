@@ -1,7 +1,7 @@
 # Journey Prompt Memory
 
 version: 2
-component: playwright
+component: browser
 instruction: Sign in as e2etest@heyalfie.com using password "1212" (or "1111" if not working). Expect no errors.
 instruction_sha256: dd79da60adb655c1d377b005e6be794c59d6af376e0a8976647a5c8878cb65a7
 observation_signature: {"title":"Hey Alfie - AI property manager","url":"https://app.staging-b2c.heyalfie.com/"}

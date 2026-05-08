@@ -289,7 +289,7 @@ def test_prompt_memory_ignores_mismatched_instruction_or_observation(
     write_prompt_memory_entry(
         memory_path,
         PromptMemoryEntry(
-            component="playwright",
+            component="browser",
             instruction="sign in",
             observation_signature="login-page",
             sections=(
@@ -305,7 +305,7 @@ def test_prompt_memory_ignores_mismatched_instruction_or_observation(
     assert (
         load_prompt_memory_entry(
             memory_path,
-            component="playwright",
+            component="browser",
             instruction="sign out",
             observation_signature="login-page",
         )
@@ -314,7 +314,7 @@ def test_prompt_memory_ignores_mismatched_instruction_or_observation(
     assert (
         load_prompt_memory_entry(
             memory_path,
-            component="playwright",
+            component="browser",
             instruction="sign in",
             observation_signature="dashboard-page",
         )
@@ -322,7 +322,7 @@ def test_prompt_memory_ignores_mismatched_instruction_or_observation(
     )
 
 
-def test_prompt_memory_allows_entries_without_playwright_sections(
+def test_prompt_memory_allows_entries_without_browser_sections(
     tmp_path: Path,
 ) -> None:
     memory_path = tmp_path / "generic.memory.md"
@@ -376,7 +376,7 @@ def test_prompt_memory_write_cleans_tmp_file_when_replace_fails(
         write_prompt_memory_entry(
             memory_path,
             PromptMemoryEntry(
-                component="playwright",
+                component="browser",
                 instruction="sign in",
                 observation_signature="login-page",
                 sections=(

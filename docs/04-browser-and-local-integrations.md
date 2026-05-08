@@ -9,7 +9,7 @@ the step boundaries durable while your Python chooses which touchpoint to use.
 
 This chapter shows both sides of that idea:
 
-- one journey that mixes Playwright, a Journey Cloud webhook, and a downloaded file
+- one journey that mixes browser work, a Journey Cloud webhook, and a downloaded file
 - one journey that snapshots a local Docker Compose app behind a step anchor
 - one journey that captures a browser session so a later run can reopen it
 
@@ -25,7 +25,7 @@ The browser helper is still just a normal Python function:
 ```python
 def assert_demo_homepage() -> bool:
     from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.playwright import ensure_browser_installed
+    from journeysdk.touchpoints.browser import ensure_browser_installed
 
     ensure_browser_installed()
     with sync_playwright() as playwright:
@@ -206,12 +206,12 @@ mounts, external volumes, read-only mounts, and multi-container services.
 
 ## Capture and Resume a Browser Session
 
-Read `docs/playwright_resume_journey/playwright_resume_journey.py`.
+Read `docs/browser_resume_journey/browser_resume_journey.py`.
 
 The first helper logs in once and serializes the browser state:
 
 ```python
-def login_and_capture_session() -> JourneyPlaywrightPage:
+def login_and_capture_session() -> JourneyBrowserPage:
     login_url = f"{ensure_demo_server()}/login"
     page = open_page(login_url)
     page.get_by_role("button", name="Sign in").click()
@@ -226,7 +226,7 @@ The second helper reopens that saved state and keeps working from there:
 
 ```python
 def continue_authenticated_dashboard(
-    session: JourneyPlaywrightPage,
+    session: JourneyBrowserPage,
     pause_seconds: float,
 ) -> dict[str, str]:
     page = open_page(session)
@@ -251,7 +251,7 @@ from journeysdk import journey, step
 
 
 @journey
-def playwright_resume_journey() -> None:
+def browser_resume_journey() -> None:
     pause_seconds = 2.0
     session = step(login_and_capture_session)
     result = step(continue_authenticated_dashboard, session, pause_seconds)
@@ -261,13 +261,13 @@ def playwright_resume_journey() -> None:
 ### Reset the Demo
 
 ```bash
-uv run python -c "from docs.playwright_resume_journey import reset_demo_state; reset_demo_state(state_path='/tmp/journey-playwright-resume-tutorial.state')"
+uv run python -c "from docs.browser_resume_journey import reset_demo_state; reset_demo_state(state_path='/tmp/journey-browser-resume-tutorial.state')"
 ```
 
 ### First Run: Interrupt After the Session Is Saved
 
 ```bash
-uv run journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
+uv run journey --file docs/browser_resume_journey/browser_resume_journey.py --state /tmp/journey-browser-resume-tutorial.state
 ```
 
 Press `Ctrl-C` once when the tutorial note tells you to. The command stops after the active step completes; press it a
@@ -277,7 +277,7 @@ Expected pretty stdout:
 
 ```console
 Plan
-  docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey ...
+  docs/browser_resume_journey/browser_resume_journey.py:browser_resume_journey ...
     case_1  labels: login_and_capture_session, continue_authenticated_dashboard, assert_protected_action_complete
   Summary: 1 journey planned, 1 case planned, 0 failed
 
@@ -295,7 +295,7 @@ Hint: Run the same command again with --state ...
 Additional pretty stdout:
 
 ```console
-Signed in and returned JourneyPlaywrightPage for http://127.0.0.1:.../dashboard. ...
+Signed in and returned JourneyBrowserPage for http://127.0.0.1:.../dashboard. ...
 continue_authenticated_dashboard() reopened the saved dashboard at http://127.0.0.1:.../dashboard. ...
 Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step reaches post-exit. ...
 ```
@@ -303,14 +303,14 @@ Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step
 ### Second Run: Reopen the Same Saved Session
 
 ```bash
-uv run journey --file docs/playwright_resume_journey/playwright_resume_journey.py --state /tmp/journey-playwright-resume-tutorial.state
+uv run journey --file docs/browser_resume_journey/browser_resume_journey.py --state /tmp/journey-browser-resume-tutorial.state
 ```
 
 Expected pretty stdout:
 
 ```console
 Plan
-  docs/playwright_resume_journey/playwright_resume_journey.py:playwright_resume_journey ...
+  docs/browser_resume_journey/browser_resume_journey.py:browser_resume_journey ...
     case_1  labels: login_and_capture_session, continue_authenticated_dashboard, assert_protected_action_complete
   Summary: 1 journey planned, 1 case planned, 0 failed
 
@@ -324,20 +324,23 @@ Execution
 Additional pretty stdout:
 
 ```console
-The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved JourneyPlaywrightPage instead of logging in again.
+The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved JourneyBrowserPage instead of logging in again.
 ```
 
 ## Prompt a Live Page with an LLM
 
-Read `docs/playwright_prompt_journey/playwright_prompt_journey.py`.
+Read `docs/browser_prompt_journey/browser_prompt_journey.py`.
 
   SDK already includes Playwright and LangChain. Set your provider credentials with the normal provider ...
 environment variables such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Pick a multimodal model explicitly with
 LangChain's `provider:model` syntax such as `model="anthropic:claude-sonnet-4-5"`, or set
-`JOURNEY_PLAYWRIGHT_PROMPT_MODEL`.
+`JOURNEY_BROWSER_PROMPT_MODEL`.
 
 The helper can stay small. Without `output=...`, `page.prompt(...)` returns a plain string. With `output=...`, Journey
 uses the model provider's structured-output feature and returns a dictionary with those fields:
+
+`JourneyBrowserPage` extends Playwright's sync `Page`, so ordinary Playwright page methods and locators work on the
+returned object. See the [Playwright Page API](https://playwright.dev/python/docs/api/class-page) for reference.
 
 ```python
 def capture_popup_title() -> dict[str, object]:
@@ -367,7 +370,7 @@ If the requested browser task cannot complete because the page shows a blocking 
 invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
 
 The `memory="sign-in-popup"` argument gives this prompt a named memory file. After a successful run, Journey writes
-`docs/playwright_prompt_journey/sign-in-popup.memory.md` beside the journey source. Later runs with the same prompt
+`docs/browser_prompt_journey/sign-in-popup.memory.md` beside the journey source. Later runs with the same prompt
 memory replay the successful fast path first, and fall back to the model with the remembered path as context if replay
 no longer matches the page. Prompt memory stores compact code and checks only; it does not store screenshots, rendered
 HTML, or full model prompts.
@@ -378,11 +381,11 @@ updating prompt memory, or `--no-memory-update` when existing memory should stil
 
 ## What To Notice
 
-- Browser logic stays inside normal Python functions. Journey does not wrap Playwright in a separate DSL.
+- Browser logic stays inside normal Python functions. Journey does not wrap browser automation in a separate DSL.
 - The same journey can branch into a webhook case and a local file case.
-- `JourneyPlaywrightPage` is just another step value. Returning it lets Journey save it at a step boundary, close it,
+- `JourneyBrowserPage` is just another step value. Returning it lets Journey save it at a step boundary, close it,
   rehydrate it, and pass it into later steps.
-- `JourneyPlaywrightPage.prompt(...)` works on a live page handle and returns either plain text or explicit structured
+- `JourneyBrowserPage.prompt(...)` works on a live page handle and returns either plain text or explicit structured
   output instead of mutating the saved-page semantics of the original handle.
 - Steps that open a page but return other data should close the page explicitly, as shown in `continue_authenticated_dashboard()`.
 - Targeted execution is especially useful for UI work because you can rerun only the branch you are debugging.

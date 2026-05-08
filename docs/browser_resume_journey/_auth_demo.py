@@ -1,4 +1,4 @@
-"""Local HTTP auth demo used by the Playwright resume tutorial."""
+"""Local HTTP auth demo used by the browser resume tutorial."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ SESSION_COOKIE_NAME = "journey_session"
 SESSION_COOKIE_VALUE = "demo-session"
 LOCAL_STORAGE_KEY = "journey_session_token"
 LOCAL_STORAGE_VALUE = "demo-token"
-_PORT_FILE = Path(tempfile.gettempdir()) / "journey-playwright-resume.port"
+_PORT_FILE = Path(tempfile.gettempdir()) / "journey-browser-resume.port"
 
 _SERVER: ThreadingHTTPServer | None = None
 _SERVER_THREAD: threading.Thread | None = None
@@ -32,7 +32,7 @@ class _AuthDemoHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "status": "ok",
-                    "service": "journey-playwright-resume-demo",
+                    "service": "journey-browser-resume-demo",
                 }
             )
             return
@@ -101,7 +101,7 @@ def ensure_demo_server() -> str:
             server = _ReusableThreadingHTTPServer(("127.0.0.1", port), _AuthDemoHandler)
         except OSError as exc:
             raise RuntimeError(
-                "Could not start the Playwright resume demo server. "
+                "Could not start the browser resume demo server. "
                 "Run reset_demo_state() to choose a fresh port if needed."
             ) from exc
 
@@ -233,4 +233,3 @@ def _dashboard_page() -> str:
   </body>
 </html>
 """
-

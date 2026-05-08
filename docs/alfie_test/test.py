@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 from journeysdk import journey, step
-from journeysdk.touchpoints.playwright import JourneyPlaywrightPage, open_page
+from journeysdk.touchpoints.browser import JourneyBrowserPage, open_page
 
 
-def sign_in() -> JourneyPlaywrightPage:
+def sign_in() -> JourneyBrowserPage:
     page = open_page("https://app.staging.heyalfie.com/", headless=False)
     page.prompt('Sign in as e2etest@heyalfie.com using password "1212" (or "1111" if not working). Expect no errors.', memory='sign-in')
     return page
 
 
-def start_chatting(saved_page: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
+def start_chatting(saved_page: JourneyBrowserPage) -> JourneyBrowserPage:
     page = open_page(saved_page, headless=False)
     page.prompt('start chatting with Alfie - say you need to fix a toilet')
     return page
 
 
 @journey
-def playwright_resume_journey() -> None:
+def browser_resume_journey() -> None:
     page = step(sign_in)
     # step(start_chatting, page)

@@ -1,4 +1,4 @@
-"""Simple Playwright, Journey Cloud webhook, and file quick-start example package."""
+"""Simple browser, Journey Cloud webhook, and file quick-start example package."""
 
 from .simple_journey import (
     assert_demo_homepage,

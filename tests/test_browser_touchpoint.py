@@ -22,8 +22,8 @@ from journeysdk._prompt_memory import (
     write_prompt_memory_entry,
 )
 from journeysdk import _prompt_engine as journey_prompt_engine
-from journeysdk.touchpoints import _playwright_prompt as journey_playwright_prompt
-from journeysdk.touchpoints import playwright as journey_playwright
+from journeysdk.touchpoints import _browser_prompt as journey_browser_prompt
+from journeysdk.touchpoints import browser as journey_browser
 
 
 def _state_payload(
@@ -45,7 +45,7 @@ class _FakeNativePage:
 
 
 class _FakePageImpl:
-    def __init__(self, page: journey_playwright.JourneyPlaywrightPage) -> None:
+    def __init__(self, page: journey_browser.JourneyBrowserPage) -> None:
         self._page = page
 
     @property
@@ -54,7 +54,7 @@ class _FakePageImpl:
 
 
 def _attach_fake_live_page(
-    page: journey_playwright.JourneyPlaywrightPage,
+    page: journey_browser.JourneyBrowserPage,
     native_page: object,
     *,
     events: list[object],
@@ -92,7 +92,7 @@ def _attach_fake_live_page(
 
     def snapshot_for_storage(self):
         events.append(("capture_state", self._fake_url))
-        self._journey_snapshot = journey_playwright._PageSnapshot.from_payload(
+        self._journey_snapshot = journey_browser._PageSnapshot.from_payload(
             _state_payload(
                 url=self._fake_url,
                 cookies=self._fake_context.cookies(),
@@ -219,7 +219,7 @@ def _install_fake_playwright(
     executable_path: str | None = None,
 ) -> None:
     def attach_live_page(
-        self: journey_playwright.JourneyPlaywrightPage,
+        self: journey_browser.JourneyBrowserPage,
         native_page: object,
         *,
         fallback_snapshot: object,
@@ -232,7 +232,7 @@ def _install_fake_playwright(
         )
 
     monkeypatch.setattr(
-        journey_playwright,
+        journey_browser,
         "sync_playwright",
         lambda: _FakeManager(
             events,
@@ -241,7 +241,7 @@ def _install_fake_playwright(
         ),
     )
     monkeypatch.setattr(
-        journey_playwright.JourneyPlaywrightPage,
+        journey_browser.JourneyBrowserPage,
         "_attach_live_page",
         attach_live_page,
     )
@@ -249,13 +249,13 @@ def _install_fake_playwright(
 
 class _FakePromptContext:
     def __init__(self) -> None:
-        self.pages: list[journey_playwright.JourneyPlaywrightPage] = []
+        self.pages: list[journey_browser.JourneyBrowserPage] = []
 
 
 class _FakePromptLocator:
     def __init__(
         self,
-        page: journey_playwright.JourneyPlaywrightPage,
+        page: journey_browser.JourneyBrowserPage,
         selector: str,
         *,
         events: list[object],
@@ -488,7 +488,7 @@ def _fail_session(reason: str) -> dict[str, object]:
 @pytest.fixture(autouse=True)
 def _install_fake_langchain_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_create_langchain_agent",
         _fake_create_langchain_agent,
     )
@@ -578,11 +578,11 @@ def _make_prompt_page(
     visible_texts: set[str] | None = None,
     click_handlers: dict[str, Callable[[], None]] | None = None,
     html: str | None = None,
-) -> journey_playwright.JourneyPlaywrightPage:
-    page = journey_playwright.JourneyPlaywrightPage._from_snapshot(
-        journey_playwright._PageSnapshot.from_payload(_state_payload(url=url))
+) -> journey_browser.JourneyBrowserPage:
+    page = journey_browser.JourneyBrowserPage._from_snapshot(
+        journey_browser._PageSnapshot.from_payload(_state_payload(url=url))
     )
-    page._journey_snapshot = journey_playwright._PageSnapshot.from_payload(_state_payload(url=url))
+    page._journey_snapshot = journey_browser._PageSnapshot.from_payload(_state_payload(url=url))
     page._journey_step_closed = False
     page._impl_obj = _FakePageImpl(page)
     page._journey_prompt_context = context
@@ -648,8 +648,8 @@ def _make_prompt_page(
     return page
 
 
-def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path):
-    assert issubclass(journey_playwright.JourneyPlaywrightPage, PlaywrightPage)
+def test_journey_browser_page_round_trips_rehydration_payload(tmp_path: Path):
+    assert issubclass(journey_browser.JourneyBrowserPage, PlaywrightPage)
 
     state = _state_payload(
         cookies=[
@@ -664,7 +664,7 @@ def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path)
             "journey_session_token": "demo-token",
         },
     )
-    page = journey_playwright.JourneyPlaywrightPage.__restore__(
+    page = journey_browser.JourneyBrowserPage.__restore__(
         state,
         journey_sdk.JourneyRestoreContext(
             artifact_root=tmp_path,
@@ -680,7 +680,7 @@ def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path)
             boundary_id="step:n_1",
         )
     )
-    restored = journey_playwright.JourneyPlaywrightPage.__restore__(
+    restored = journey_browser.JourneyBrowserPage.__restore__(
         payload,
         journey_sdk.JourneyRestoreContext(
             artifact_root=tmp_path,
@@ -690,7 +690,7 @@ def test_journey_playwright_page_round_trips_rehydration_payload(tmp_path: Path)
     )
 
     assert isinstance(payload, dict)
-    assert isinstance(restored, journey_playwright.JourneyPlaywrightPage)
+    assert isinstance(restored, journey_browser.JourneyBrowserPage)
     assert restored.url == "http://example.test/dashboard"
     assert restored.__store__(
         journey_sdk.JourneyStoreContext(
@@ -708,9 +708,9 @@ def test_open_page_opens_url_string_and_cleans_returned_page(
     events: list[object] = []
     _install_fake_playwright(monkeypatch, events)
 
-    def open_login() -> journey_playwright.JourneyPlaywrightPage:
-        page = journey_playwright.open_page("http://example.test/login")
-        assert isinstance(page, journey_playwright.JourneyPlaywrightPage)
+    def open_login() -> journey_browser.JourneyBrowserPage:
+        page = journey_browser.open_page("http://example.test/login")
+        assert isinstance(page, journey_browser.JourneyBrowserPage)
         events.append("inside")
         return page
 
@@ -741,7 +741,7 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypat
     events: list[object] = []
     _install_fake_playwright(monkeypatch, events)
 
-    saved_page = journey_playwright.JourneyPlaywrightPage.__restore__(
+    saved_page = journey_browser.JourneyBrowserPage.__restore__(
         _state_payload(
             cookies=[
                 {
@@ -761,8 +761,8 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypat
     )
 
     def open_dashboard() -> dict[str, object]:
-        page = journey_playwright.open_page(saved_page, headless=False)
-        assert isinstance(page, journey_playwright.JourneyPlaywrightPage)
+        page = journey_browser.open_page(saved_page, headless=False)
+        assert isinstance(page, journey_browser.JourneyBrowserPage)
         events.append("inside")
         return {"page": page}
 
@@ -815,10 +815,10 @@ def test_open_page_installs_missing_browser_automatically(monkeypatch, tmp_path:
         executable_path.write_text("installed", encoding="utf-8")
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(journey_playwright.subprocess, "run", fake_run)
+    monkeypatch.setattr(journey_browser.subprocess, "run", fake_run)
 
-    def open_login() -> journey_playwright.JourneyPlaywrightPage:
-        return journey_playwright.open_page("http://example.test/login")
+    def open_login() -> journey_browser.JourneyBrowserPage:
+        return journey_browser.open_page("http://example.test/login")
 
     def journey():
         journey_sdk.step(open_login)
@@ -846,7 +846,7 @@ def test_open_page_cleans_partial_allocations_on_failure(monkeypatch):
     _install_fake_playwright(monkeypatch, events, fail_new_page=True)
 
     def open_fails() -> bool:
-        journey_playwright.open_page("http://example.test/login")
+        journey_browser.open_page("http://example.test/login")
         return True
 
     def journey():
@@ -883,10 +883,10 @@ def test_ensure_browser_installed_reports_automatic_install_failure(
         assert check is False
         return subprocess.CompletedProcess(command, 1)
 
-    monkeypatch.setattr(journey_playwright.subprocess, "run", fake_run)
+    monkeypatch.setattr(journey_browser.subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError, match="could not automatically install"):
-        journey_playwright.ensure_browser_installed()
+        journey_browser.ensure_browser_installed()
 
     assert events == [
         "playwright_enter",
@@ -896,17 +896,17 @@ def test_ensure_browser_installed_reports_automatic_install_failure(
 
 def test_open_page_rejects_outside_step():
     with pytest.raises(InvalidBranchUsageError):
-        journey_playwright.open_page("http://example.test/login")
+        journey_browser.open_page("http://example.test/login")
 
 
 def test_open_page_rejects_unsupported_input_type():
-    with pytest.raises(TypeError, match="URL string or JourneyPlaywrightPage"):
-        journey_playwright.open_page(object())
+    with pytest.raises(TypeError, match="URL string or JourneyBrowserPage"):
+        journey_browser.open_page(object())
 
 
-def test_journey_playwright_page_rejects_legacy_json_payload(tmp_path: Path):
+def test_journey_browser_page_rejects_legacy_json_payload(tmp_path: Path):
     with pytest.raises(TypeError, match="dictionary payload"):
-        journey_playwright.JourneyPlaywrightPage.__restore__(
+        journey_browser.JourneyBrowserPage.__restore__(
             '{"url":"http://example.test"}',
             journey_sdk.JourneyRestoreContext(
                 artifact_root=tmp_path,
@@ -916,30 +916,30 @@ def test_journey_playwright_page_rejects_legacy_json_payload(tmp_path: Path):
         )
 
 
-def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monkeypatch):
+def test_execute_resume_rehydrates_saved_journey_browser_page(tmp_path, monkeypatch):
     state_file = tmp_path / "journey.state"
     attempts = {"count": 0}
     events: list[object] = []
     _install_fake_playwright(monkeypatch, events)
 
-    def login() -> journey_playwright.JourneyPlaywrightPage:
-        page = journey_playwright.open_page("http://example.test/login")
+    def login() -> journey_browser.JourneyBrowserPage:
+        page = journey_browser.open_page("http://example.test/login")
         page.goto("http://example.test/dashboard", wait_until="load")
         return page
 
     def continue_from_page(
-        saved_page: journey_playwright.JourneyPlaywrightPage,
-    ) -> journey_playwright.JourneyPlaywrightPage:
+        saved_page: journey_browser.JourneyBrowserPage,
+    ) -> journey_browser.JourneyBrowserPage:
         attempts["count"] += 1
         events.append(f"continue:{attempts['count']}:{saved_page.url}")
         if attempts["count"] == 1:
             raise KeyboardInterrupt()
-        return journey_playwright.open_page(saved_page)
+        return journey_browser.open_page(saved_page)
 
     def assert_page(
-        saved_page: journey_playwright.JourneyPlaywrightPage,
-    ) -> journey_playwright.JourneyPlaywrightPage:
-        page = journey_playwright.open_page(saved_page)
+        saved_page: journey_browser.JourneyBrowserPage,
+    ) -> journey_browser.JourneyBrowserPage:
+        page = journey_browser.open_page(saved_page)
         events.append(f"assert:{page.url}")
         return page
 
@@ -967,7 +967,7 @@ def test_execute_resume_rehydrates_saved_journey_playwright_page(tmp_path, monke
     assert "assert:http://example.test/dashboard" in events
 
 
-def test_journey_playwright_prompt_rejects_blank_instruction(monkeypatch):
+def test_journey_browser_prompt_rejects_blank_instruction(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -979,7 +979,7 @@ def test_journey_playwright_prompt_rejects_blank_instruction(monkeypatch):
     context.pages.append(page)
 
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: _FakeLangChainPromptModel(["finish()", "done"]),
     )
@@ -988,8 +988,8 @@ def test_journey_playwright_prompt_rejects_blank_instruction(monkeypatch):
         page.prompt("   ", model="openai:gpt-4.1-mini")
 
 
-def test_journey_playwright_prompt_rejects_saved_page(tmp_path: Path):
-    saved_page = journey_playwright.JourneyPlaywrightPage.__restore__(
+def test_journey_browser_prompt_rejects_saved_page(tmp_path: Path):
+    saved_page = journey_browser.JourneyBrowserPage.__restore__(
         _state_payload(url="http://example.test/login"),
         journey_sdk.JourneyRestoreContext(
             artifact_root=tmp_path,
@@ -1002,7 +1002,7 @@ def test_journey_playwright_prompt_rejects_saved_page(tmp_path: Path):
         saved_page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
 
-def test_journey_playwright_prompt_requires_model_or_env(monkeypatch):
+def test_journey_browser_prompt_requires_model_or_env(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1012,13 +1012,13 @@ def test_journey_playwright_prompt_requires_model_or_env(monkeypatch):
         events=events,
     )
     context.pages.append(page)
-    monkeypatch.delenv(journey_playwright_prompt.JOURNEY_PLAYWRIGHT_PROMPT_MODEL_ENV, raising=False)
+    monkeypatch.delenv(journey_browser_prompt.JOURNEY_BROWSER_PROMPT_MODEL_ENV, raising=False)
 
     with pytest.raises(RuntimeError, match="requires model=..."):
         page.prompt("click sign in")
 
 
-def test_journey_playwright_prompt_reports_langchain_model_initialization_failure(
+def test_journey_browser_prompt_reports_langchain_model_initialization_failure(
     monkeypatch,
 ):
     events: list[object] = []
@@ -1046,8 +1046,8 @@ def test_journey_playwright_prompt_reports_langchain_model_initialization_failur
     assert "missing provider package" in str(exc_info.value)
 
 
-def test_journey_playwright_prompt_delegates_action_execution_to_langchain_agent():
-    source = Path(journey_playwright_prompt.__file__).read_text(encoding="utf-8")
+def test_journey_browser_prompt_delegates_action_execution_to_langchain_agent():
+    source = Path(journey_browser_prompt.__file__).read_text(encoding="utf-8")
     engine_source = Path(journey_prompt_engine.__file__).read_text(encoding="utf-8")
 
     assert "PromptEngineSession" in source
@@ -1063,13 +1063,13 @@ def test_journey_playwright_prompt_delegates_action_execution_to_langchain_agent
     assert "_tool_result_message" not in source
 
 
-def test_journey_playwright_prompt_clicks_popup_and_returns_text(
+def test_journey_browser_prompt_clicks_popup_and_returns_text(
     monkeypatch,
     capsys: pytest.CaptureFixture[str],
 ):
     events: list[object] = []
     context = _FakePromptContext()
-    popup_page: journey_playwright.JourneyPlaywrightPage | None = None
+    popup_page: journey_browser.JourneyBrowserPage | None = None
 
     def open_popup() -> None:
         nonlocal popup_page
@@ -1103,7 +1103,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         ]
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: fake_model,
     )
@@ -1122,7 +1122,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
         for call in fake_model.calls
     )
     assert not fake_model.structured_calls
-    assert not hasattr(journey_playwright_prompt, "_COLLECT_ELEMENTS_SCRIPT")
+    assert not hasattr(journey_browser_prompt, "_COLLECT_ELEMENTS_SCRIPT")
     first_prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-rendered-html>" in first_prompt_text
     assert "Observation records JSON:" in first_prompt_text
@@ -1177,7 +1177,7 @@ def test_journey_playwright_prompt_clicks_popup_and_returns_text(
     )
 
 
-def test_journey_playwright_prompt_runs_action_work_on_prompt_thread(monkeypatch):
+def test_journey_browser_prompt_runs_action_work_on_prompt_thread(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     prompt_thread_id = threading.get_ident()
@@ -1205,7 +1205,7 @@ def test_journey_playwright_prompt_runs_action_work_on_prompt_thread(monkeypatch
         ]
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: fake_model,
     )
@@ -1215,7 +1215,7 @@ def test_journey_playwright_prompt_runs_action_work_on_prompt_thread(monkeypatch
     assert click_thread_ids == [prompt_thread_id]
 
 
-def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
+def test_journey_browser_prompt_returns_structured_output(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1233,7 +1233,7 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: fake_model,
     )
@@ -1260,7 +1260,7 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
     assert fake_model.structured_calls[0]["method"] == "json_schema"
     assert fake_model.structured_calls[0]["schema"] == {
         "title": "journey_prompt_output",
-        "description": "Structured output for JourneyPlaywrightPage.prompt(...).",
+        "description": "Structured output for JourneyBrowserPage.prompt(...).",
         "type": "object",
         "properties": {
             "popup_title": {
@@ -1281,7 +1281,7 @@ def test_journey_playwright_prompt_returns_structured_output(monkeypatch):
     assert "has_welcome_text" in final_prompt_text
 
 
-def test_journey_playwright_prompt_final_output_includes_visible_error_text(monkeypatch):
+def test_journey_browser_prompt_final_output_includes_visible_error_text(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1301,7 +1301,7 @@ def test_journey_playwright_prompt_final_output_includes_visible_error_text(monk
         ],
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: fake_model,
     )
@@ -1328,7 +1328,7 @@ def test_journey_playwright_prompt_final_output_includes_visible_error_text(monk
     assert ("prompt_wait_for_timeout", "Login", 500) in events
 
 
-def test_journey_playwright_prompt_finish_with_blocking_error_raises(
+def test_journey_browser_prompt_finish_with_blocking_error_raises(
     monkeypatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1354,7 +1354,7 @@ def test_journey_playwright_prompt_finish_with_blocking_error_raises(
         ]
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: fake_model,
     )
@@ -1376,7 +1376,7 @@ def test_journey_playwright_prompt_finish_with_blocking_error_raises(
     assert not (tmp_path / "sign-in.memory.md").exists()
 
 
-def test_journey_playwright_prompt_fail_action_raises_without_final_output(
+def test_journey_browser_prompt_fail_action_raises_without_final_output(
     monkeypatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1395,7 +1395,7 @@ def test_journey_playwright_prompt_fail_action_raises_without_final_output(
     context.pages.append(page)
     fake_model = _FakeLangChainPromptModel([_fail_session(reason)])
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: fake_model,
     )
@@ -1415,7 +1415,7 @@ def test_journey_playwright_prompt_fail_action_raises_without_final_output(
     assert not (tmp_path / "sign-in.memory.md").exists()
 
 
-def test_journey_playwright_prompt_rejects_invalid_output_specs(monkeypatch):
+def test_journey_browser_prompt_rejects_invalid_output_specs(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1430,7 +1430,7 @@ def test_journey_playwright_prompt_rejects_invalid_output_specs(monkeypatch):
         raise AssertionError("output validation should happen before model calls")
 
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         fail_load_completion,
     )
@@ -1447,7 +1447,7 @@ def test_journey_playwright_prompt_rejects_invalid_output_specs(monkeypatch):
         )
 
 
-def test_journey_playwright_prompt_rejects_malformed_structured_output(monkeypatch):
+def test_journey_browser_prompt_rejects_malformed_structured_output(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1458,7 +1458,7 @@ def test_journey_playwright_prompt_rejects_malformed_structured_output(monkeypat
     )
     context.pages.append(page)
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: _FakeLangChainPromptModel(
             ["The popup summary is ready."],
@@ -1474,7 +1474,7 @@ def test_journey_playwright_prompt_rejects_malformed_structured_output(monkeypat
         )
 
 
-def test_journey_playwright_prompt_retries_rejected_python(
+def test_journey_browser_prompt_retries_rejected_python(
     monkeypatch,
     capsys: pytest.CaptureFixture[str],
 ):
@@ -1508,7 +1508,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
         ]
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: fake_model,
     )
@@ -1550,7 +1550,7 @@ def test_journey_playwright_prompt_retries_rejected_python(
     ) in log_output
 
 
-def test_journey_playwright_prompt_compiles_and_replays_named_memory(
+def test_journey_browser_prompt_compiles_and_replays_named_memory(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -1631,7 +1631,7 @@ def test_journey_playwright_prompt_compiles_and_replays_named_memory(
         ]
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: first_model,
     )
@@ -1674,7 +1674,7 @@ def test_journey_playwright_prompt_compiles_and_replays_named_memory(
         raise AssertionError("replay should not load or call a model")
 
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         fail_model_load,
     )
@@ -1694,7 +1694,7 @@ def test_journey_playwright_prompt_compiles_and_replays_named_memory(
 
     third_model = _FakeLangChainPromptModel(["Done without memory."])
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: third_model,
     )
@@ -1707,7 +1707,7 @@ def test_journey_playwright_prompt_compiles_and_replays_named_memory(
     assert "Prompt memory:" not in third_prompt_text
 
 
-def test_journey_playwright_prompt_falls_back_when_memory_replay_fails(
+def test_journey_browser_prompt_falls_back_when_memory_replay_fails(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -1715,7 +1715,7 @@ def test_journey_playwright_prompt_falls_back_when_memory_replay_fails(
     write_prompt_memory_entry(
         tmp_path / "sign-in.memory.md",
         PromptMemoryEntry(
-            component="playwright",
+            component="browser",
             instruction="sign in",
             observation_signature='{"title":"Login","url":"http://example.test/login"}',
             sections=(
@@ -1751,7 +1751,7 @@ def test_journey_playwright_prompt_falls_back_when_memory_replay_fails(
     context.pages.append(page)
     model = _FakeLangChainPromptModel(["Recovered after fallback."])
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model_name: model,
     )
@@ -1798,7 +1798,7 @@ def test_journey_playwright_prompt_falls_back_when_memory_replay_fails(
         ),
     ],
 )
-def test_journey_playwright_prompt_validates_memory_sections_at_playwright_boundary(
+def test_journey_browser_prompt_validates_memory_sections_at_browser_boundary(
     monkeypatch,
     tmp_path: Path,
     sections: tuple[PromptMemorySection, ...],
@@ -1808,7 +1808,7 @@ def test_journey_playwright_prompt_validates_memory_sections_at_playwright_bound
     write_prompt_memory_entry(
         tmp_path / "sign-in.memory.md",
         PromptMemoryEntry(
-            component="playwright",
+            component="browser",
             instruction="sign in",
             observation_signature='{"title":"Login","url":"http://example.test/login"}',
             sections=sections,
@@ -1826,7 +1826,7 @@ def test_journey_playwright_prompt_validates_memory_sections_at_playwright_bound
     context.pages.append(page)
     model = _FakeLangChainPromptModel(["Recovered after invalid memory."])
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model_name: model,
     )
@@ -1842,7 +1842,7 @@ def test_journey_playwright_prompt_validates_memory_sections_at_playwright_bound
     assert expected_detail in prompt_text
 
 
-def test_journey_playwright_prompt_does_not_reuse_legacy_memory_shape(
+def test_journey_browser_prompt_does_not_reuse_legacy_memory_shape(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -1879,7 +1879,7 @@ def test_journey_playwright_prompt_does_not_reuse_legacy_memory_shape(
     context.pages.append(page)
     model = _FakeLangChainPromptModel(["Done."])
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model_name: model,
     )
@@ -1891,7 +1891,7 @@ def test_journey_playwright_prompt_does_not_reuse_legacy_memory_shape(
     assert "#legacy" not in prompt_text
 
 
-def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
+def test_journey_browser_prompt_respects_execute_no_memory(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1902,7 +1902,7 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
     )
     context.pages.append(page)
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: _FakeLangChainPromptModel(["Done."]),
     )
@@ -1931,7 +1931,7 @@ def test_journey_playwright_prompt_respects_execute_no_memory(monkeypatch):
     journey_sdk.execute(memory_journey, no_memory=True)
 
 
-def test_journey_playwright_prompt_respects_execute_no_memory_update(
+def test_journey_browser_prompt_respects_execute_no_memory_update(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -2001,7 +2001,7 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(
         del model_name
         raise AssertionError("readonly replay should not require a model")
 
-    monkeypatch.setattr(journey_playwright_prompt, "_load_langchain_model", fail_model_load)
+    monkeypatch.setattr(journey_browser_prompt, "_load_langchain_model", fail_model_load)
 
     def run_prompt() -> str | dict[str, object]:
         return page.prompt("finish", model="openai:gpt-4.1-mini", memory="readonly")
@@ -2016,7 +2016,7 @@ def test_journey_playwright_prompt_respects_execute_no_memory_update(
     assert ("prompt_click", "Login", "#cached", 5000) in events
 
 
-def test_journey_playwright_prompt_enforces_max_steps(
+def test_journey_browser_prompt_enforces_max_steps(
     monkeypatch,
     capsys: pytest.CaptureFixture[str],
 ):
@@ -2034,7 +2034,7 @@ def test_journey_playwright_prompt_enforces_max_steps(
     )
     context.pages.append(page)
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: _FakeLangChainPromptModel(
             [_run_code('page.locator("#sign-in").click(timeout=timeout_ms)')]
@@ -2049,10 +2049,10 @@ def test_journey_playwright_prompt_enforces_max_steps(
     assert "click selector '#sign-in'" in log_output
     assert "1/1 ok" in log_output
     assert "page 0 'Login'" in log_output
-    assert "AI prompt                   JourneyPlaywrightPage.prompt(...) reached max_steps=1" in log_output
+    assert "AI prompt                   JourneyBrowserPage.prompt(...) reached max_steps=1" in log_output
 
 
-def test_journey_playwright_prompt_retries_invalid_action_arguments(monkeypatch):
+def test_journey_browser_prompt_retries_invalid_action_arguments(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -2064,7 +2064,7 @@ def test_journey_playwright_prompt_retries_invalid_action_arguments(monkeypatch)
     context.pages.append(page)
     model = _FakeLangChainPromptModel([_run_code("   "), "Recovered."])
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model_name: model,
     )
@@ -2077,7 +2077,7 @@ def test_journey_playwright_prompt_retries_invalid_action_arguments(monkeypatch)
     assert '"status": "rejected"' in second_prompt_text
 
 
-def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):
+def test_journey_browser_prompt_retries_invalid_python(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -2091,7 +2091,7 @@ def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):
         [_run_code('page.locator("#sign-in"'), "Recovered."]
     )
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model_name: model,
     )
@@ -2105,7 +2105,7 @@ def test_journey_playwright_prompt_retries_invalid_python(monkeypatch):
     assert "SyntaxError:" in second_prompt_text
 
 
-def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
+def test_journey_browser_prompt_rejects_json_as_python_failure(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -2116,7 +2116,7 @@ def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
     )
     context.pages.append(page)
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: _FakeLangChainPromptModel(
             [
@@ -2131,7 +2131,7 @@ def test_journey_playwright_prompt_rejects_json_as_python_failure(monkeypatch):
     assert result == "Recovered."
 
 
-def test_journey_playwright_prompt_rejects_blank_finish_then_recovers(monkeypatch):
+def test_journey_browser_prompt_rejects_blank_finish_then_recovers(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -2142,7 +2142,7 @@ def test_journey_playwright_prompt_rejects_blank_finish_then_recovers(monkeypatc
     )
     context.pages.append(page)
     monkeypatch.setattr(
-        journey_playwright_prompt,
+        journey_browser_prompt,
         "_load_langchain_model",
         lambda model: _FakeLangChainPromptModel([_run_code('finish("")'), "Done."]),
     )

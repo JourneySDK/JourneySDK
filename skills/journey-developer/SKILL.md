@@ -26,7 +26,7 @@ for retry, branch, or `--state` behavior.
 - `journeysdk.touchpoints.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
 - `journeysdk.touchpoints.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
 - `journeysdk.touchpoints.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
-- `journeysdk.touchpoints.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
+- `journeysdk.touchpoints.browser`: open browser pages and return resumable `JourneyBrowserPage` values that later steps can reopen.
 
 Prompt-capable official touchpoints use named prompt memory and optional structured output. Pass a literal, unique
 `memory="name"` to a touchpoint's `prompt(...)` method when prior successful runs should teach later runs replayable fast
@@ -102,13 +102,13 @@ uv run journey --file docs/resume_journey/resume_journey.py --state .journey/run
 Use `--no-memory` when a journey contains AI-driven prompts but the run should not read or update prompt-memory files:
 
 ```bash
-uv run journey --file docs/playwright_prompt_journey/playwright_prompt_journey.py --no-memory
+uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py --no-memory
 ```
 
 Use `--no-memory-update` when the run should read existing prompt memory but skip writing updates:
 
 ```bash
-uv run journey --file docs/playwright_prompt_journey/playwright_prompt_journey.py --no-memory-update
+uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py --no-memory-update
 ```
 
 ## Develop One Step

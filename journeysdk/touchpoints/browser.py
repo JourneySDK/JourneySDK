@@ -1,4 +1,4 @@
-"""Official Playwright page-state touchpoint."""
+"""Official browser page-state touchpoint."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ from journeysdk.session import _require_executing_step
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
 
-from ._playwright_prompt import (
+from ._browser_prompt import (
     prompt_page,
 )
 
 
-class PlaywrightCookie(TypedDict, total=False):
+class BrowserCookie(TypedDict, total=False):
     name: str
     value: str
     domain: str
@@ -56,8 +56,8 @@ _REHYDRATE_STORAGE_SCRIPT = """
 """
 
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
-_PLAYWRIGHT_INSTALL_LOCK = Lock()
-_LOGGER = get_logger("playwright")
+_BROWSER_INSTALL_LOCK = Lock()
+_LOGGER = get_logger("browser")
 
 
 def _browser_row(detail: object, *, style: PrettyStyle = "touchpoint") -> PrettyLine:
@@ -67,7 +67,7 @@ def _browser_row(detail: object, *, style: PrettyStyle = "touchpoint") -> Pretty
 @dataclass(frozen=True)
 class _PageSnapshot:
     url: str
-    cookies: tuple[PlaywrightCookie, ...]
+    cookies: tuple[BrowserCookie, ...]
     local_storage: tuple[tuple[str, str], ...]
 
     @classmethod
@@ -93,46 +93,46 @@ class _PageSnapshot:
     @classmethod
     def from_payload(cls, payload: object) -> _PageSnapshot:
         if not isinstance(payload, dict):
-            raise TypeError("JourneyPlaywrightPage state expects a dictionary payload.")
+            raise TypeError("JourneyBrowserPage state expects a dictionary payload.")
         if set(payload) != {"url", "cookies", "local_storage"}:
             raise ValueError(
-                "JourneyPlaywrightPage state expects exactly 'url', 'cookies', and 'local_storage'."
+                "JourneyBrowserPage state expects exactly 'url', 'cookies', and 'local_storage'."
             )
 
         url = payload["url"]
         if not isinstance(url, str) or not url:
-            raise TypeError("JourneyPlaywrightPage state url must be a non-empty string.")
+            raise TypeError("JourneyBrowserPage state url must be a non-empty string.")
 
         cookies = payload["cookies"]
         if not isinstance(cookies, (list, tuple)):
             raise TypeError(
-                "JourneyPlaywrightPage state cookies must be a list of cookie objects."
+                "JourneyBrowserPage state cookies must be a list of cookie objects."
             )
-        normalized_cookies: list[PlaywrightCookie] = []
+        normalized_cookies: list[BrowserCookie] = []
         for cookie in cookies:
             if not isinstance(cookie, dict):
                 raise TypeError(
-                    "JourneyPlaywrightPage state cookies must contain only cookie dictionaries."
+                    "JourneyBrowserPage state cookies must contain only cookie dictionaries."
                 )
             normalized_cookie: dict[str, object] = {}
             for key, value in cookie.items():
                 if not isinstance(key, str):
                     raise TypeError(
-                        "JourneyPlaywrightPage state cookie keys must be strings."
+                        "JourneyBrowserPage state cookie keys must be strings."
                     )
                 normalized_cookie[key] = value
-            normalized_cookies.append(cast(PlaywrightCookie, normalized_cookie))
+            normalized_cookies.append(cast(BrowserCookie, normalized_cookie))
 
         local_storage = payload["local_storage"]
         if not isinstance(local_storage, dict):
             raise TypeError(
-                "JourneyPlaywrightPage state local_storage must be a dictionary of strings."
+                "JourneyBrowserPage state local_storage must be a dictionary of strings."
             )
         normalized_local_storage: dict[str, str] = {}
         for key, value in local_storage.items():
             if not isinstance(key, str) or not isinstance(value, str):
                 raise TypeError(
-                    "JourneyPlaywrightPage state local_storage must contain only string keys and values."
+                    "JourneyBrowserPage state local_storage must contain only string keys and values."
                 )
             normalized_local_storage[key] = value
 
@@ -153,8 +153,8 @@ class _PageSnapshot:
         return dict(self.local_storage)
 
 
-class JourneyPlaywrightPage(PlaywrightPage):
-    """Playwright page wrapper that can be saved and reopened by Journey."""
+class JourneyBrowserPage(PlaywrightPage):
+    """Browser page wrapper that can be saved and reopened by Journey."""
 
     def __init__(
         self,
@@ -165,7 +165,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         if impl_obj is None:
             if snapshot is None:
                 raise TypeError(
-                    "JourneyPlaywrightPage needs either a live Playwright page or saved state."
+                    "JourneyBrowserPage needs either a live browser page or saved state."
                 )
             self._impl_obj = None
             self._loop = None
@@ -181,11 +181,11 @@ class JourneyPlaywrightPage(PlaywrightPage):
         self._journey_exit_started = False
 
     @classmethod
-    def _from_snapshot(cls, snapshot: _PageSnapshot) -> JourneyPlaywrightPage:
+    def _from_snapshot(cls, snapshot: _PageSnapshot) -> JourneyBrowserPage:
         return cls(snapshot=snapshot)
 
     @classmethod
-    def _restore_pickle(cls, payload: object) -> JourneyPlaywrightPage:
+    def _restore_pickle(cls, payload: object) -> JourneyBrowserPage:
         return cls._from_snapshot(_PageSnapshot.from_payload(payload))
 
     @property
@@ -203,7 +203,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
 
     def __repr__(self) -> str:
         live = "live" if self._is_live else "saved"
-        return f"JourneyPlaywrightPage(url={self.url!r}, state={live})"
+        return f"JourneyBrowserPage(url={self.url!r}, state={live})"
 
     def _attach_live_page(
         self,
@@ -236,7 +236,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         if self._is_live:
             self._journey_snapshot = _PageSnapshot.from_live_page(self)
         if self._journey_snapshot is None:
-            raise RuntimeError("JourneyPlaywrightPage has no saved page state.")
+            raise RuntimeError("JourneyBrowserPage has no saved page state.")
         return self._journey_snapshot
 
     def _mark_step_closed(self) -> None:
@@ -248,7 +248,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Close Playwright resources owned by this step-scoped page."""
+        """Close browser resources owned by this step-scoped page."""
 
         if self._journey_exit_started:
             return
@@ -257,7 +257,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         was_live = self._is_live
         _LOGGER.debug(
             "page_cleanup_start",
-            "cleaning up Playwright page resources",
+            "cleaning up browser page resources",
             url=cleanup_url,
             live=was_live,
         )
@@ -292,14 +292,14 @@ class JourneyPlaywrightPage(PlaywrightPage):
         if failures:
             _LOGGER.error(
                 "page_cleanup_failure",
-                "Playwright page cleanup failed",
+                "browser page cleanup failed",
                 url=cleanup_url,
                 failures=len(failures),
             )
             raise RuntimeError(_cleanup_failure_message(failures))
         _LOGGER.debug(
             "page_cleanup_success",
-            "Playwright page resources cleaned up",
+            "browser page resources cleaned up",
             url=cleanup_url,
         )
 
@@ -314,7 +314,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
         cls,
         payload: object,
         context: JourneyRestoreContext,
-    ) -> JourneyPlaywrightPage:
+    ) -> JourneyBrowserPage:
         """Restore a saved page handle for explicit reopening in a later step."""
 
         del context
@@ -350,7 +350,7 @@ class JourneyPlaywrightPage(PlaywrightPage):
 
         if not self._is_live:
             raise RuntimeError(
-                "JourneyPlaywrightPage.prompt(...) requires a live Playwright page. "
+                "JourneyBrowserPage.prompt(...) requires a live browser page. "
                 "Call open_page(saved_page) first."
             )
         return prompt_page(
@@ -365,15 +365,15 @@ class JourneyPlaywrightPage(PlaywrightPage):
 
 
 def open_page(
-    page_or_url: JourneyPlaywrightPage | str,
+    page_or_url: JourneyBrowserPage | str,
     *,
     browser: Literal["chromium", "firefox", "webkit"] = "chromium",
     headless: bool = True,
-) -> JourneyPlaywrightPage:
-    """Open a fresh Playwright page from a URL or saved Journey page."""
+) -> JourneyBrowserPage:
+    """Open a fresh browser page from a URL or saved Journey page."""
 
-    if not isinstance(page_or_url, (JourneyPlaywrightPage, str)):
-        raise TypeError("open_page(...) expects a URL string or JourneyPlaywrightPage.")
+    if not isinstance(page_or_url, (JourneyBrowserPage, str)):
+        raise TypeError("open_page(...) expects a URL string or JourneyBrowserPage.")
     _require_executing_step("open_page")
     if browser not in _SUPPORTED_BROWSERS:
         raise ValueError(
@@ -382,10 +382,10 @@ def open_page(
 
     snapshot = _snapshot_from_open_page_input(page_or_url)
     local_storage = snapshot.local_storage_dict()
-    page = JourneyPlaywrightPage._from_snapshot(snapshot)
+    page = JourneyBrowserPage._from_snapshot(snapshot)
     _LOGGER.info(
         "open_page_start",
-        "opening Playwright page",
+        "opening browser page",
         pretty=_browser_row(
             f"opening {browser} {snapshot.url}"
             + (" headless=false" if headless is False else "")
@@ -421,7 +421,7 @@ def open_page(
             page.reload(wait_until="load")
         _LOGGER.info(
             "open_page_success",
-            "Playwright page opened",
+            "browser page opened",
             pretty=_browser_row(f"opened {browser} {page.url}"),
             url=page.url,
             browser=browser,
@@ -430,7 +430,7 @@ def open_page(
     except BaseException as exc:
         _LOGGER.error(
             "open_page_failure",
-            "failed to open Playwright page",
+            "failed to open browser page",
             pretty=f"Browser failed to open {browser} {snapshot.url}: {_format_exception(exc)}",
             url=snapshot.url,
             browser=browser,
@@ -446,9 +446,9 @@ def open_page(
 
 
 def _snapshot_from_open_page_input(
-    page_or_url: JourneyPlaywrightPage | str,
+    page_or_url: JourneyBrowserPage | str,
 ) -> _PageSnapshot:
-    if isinstance(page_or_url, JourneyPlaywrightPage):
+    if isinstance(page_or_url, JourneyBrowserPage):
         return page_or_url._snapshot_for_storage()
     return _PageSnapshot.from_url(page_or_url)
 
@@ -456,7 +456,7 @@ def _snapshot_from_open_page_input(
 def ensure_browser_installed(
     browser: Literal["chromium", "firefox", "webkit"] = "chromium",
 ) -> None:
-    """Install the requested Playwright browser in the current environment if needed."""
+    """Install the requested browser runtime in the current environment if needed."""
 
     if browser not in _SUPPORTED_BROWSERS:
         raise ValueError(
@@ -466,7 +466,7 @@ def ensure_browser_installed(
 
     _LOGGER.info(
         "browser_install_check_start",
-        "checking Playwright browser installation",
+        "checking browser installation",
         pretty=_browser_row(f"checking {browser} installation"),
         browser=browser,
     )
@@ -477,7 +477,7 @@ def ensure_browser_installed(
         )
     _LOGGER.info(
         "browser_install_check_success",
-        "Playwright browser installation is available",
+        "browser installation is available",
         pretty=_browser_row(f"{browser} installation available"),
         browser=browser,
     )
@@ -512,7 +512,7 @@ def _ensure_browser_type_installed(
     if executable_path is None or executable_path.exists():
         _LOGGER.debug(
             "browser_install_check_skip",
-            "Playwright browser executable is already available",
+            "browser executable is already available",
             browser=browser,
             executable_path=executable_path,
         )
@@ -537,12 +537,12 @@ def _install_playwright_browser(
     executable_path: Path | None = None,
 ) -> None:
     command = [sys.executable, "-m", "playwright", "install", browser]
-    with _PLAYWRIGHT_INSTALL_LOCK:
+    with _BROWSER_INSTALL_LOCK:
         if executable_path is not None and executable_path.exists():
             return
         _LOGGER.info(
             "browser_install_start",
-            "installing Playwright browser",
+            "installing browser runtime",
             pretty=_browser_row(f"installing {browser}"),
             browser=browser,
             command=" ".join(command),
@@ -552,7 +552,7 @@ def _install_playwright_browser(
         if result.returncode != 0:
             _LOGGER.error(
                 "browser_install_failure",
-                "Playwright browser installation failed",
+                "browser installation failed",
                 pretty=f"Browser failed to install {browser}",
                 browser=browser,
                 returncode=result.returncode,
@@ -565,7 +565,7 @@ def _install_playwright_browser(
         if executable_path is not None and not executable_path.exists():
             _LOGGER.error(
                 "browser_install_missing_executable",
-                "Playwright browser install completed but executable is missing",
+                "browser install completed but executable is missing",
                 pretty=f"Browser installed {browser}, but the executable is missing",
                 browser=browser,
                 executable_path=executable_path,
@@ -576,7 +576,7 @@ def _install_playwright_browser(
             )
         _LOGGER.info(
             "browser_install_success",
-            "Playwright browser installed",
+            "browser installed",
             pretty=_browser_row(f"installed {browser}"),
             browser=browser,
             executable_path=executable_path,
@@ -602,19 +602,19 @@ def _cleanup_failure_message(failures: list[BaseException]) -> str:
     if len(failures) == 1:
         failure = failures[0]
         return (
-            "Playwright page cleanup failed: "
+            "browser page cleanup failed: "
             f"{type(failure).__name__}: {failure}"
         )
     joined = "; ".join(
         f"{type(failure).__name__}: {failure}"
         for failure in failures
     )
-    return f"{len(failures)} Playwright cleanup actions failed: {joined}"
+    return f"{len(failures)} browser cleanup actions failed: {joined}"
 
 
 __all__ = [
-    "PlaywrightCookie",
-    "JourneyPlaywrightPage",
+    "BrowserCookie",
+    "JourneyBrowserPage",
     "ensure_browser_installed",
     "open_page",
 ]

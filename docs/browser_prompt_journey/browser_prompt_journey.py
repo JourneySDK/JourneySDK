@@ -1,11 +1,11 @@
-"""Tutorial journey showing agentic prompting against a live Playwright page."""
+"""Tutorial journey showing agentic prompting against a live browser page."""
 
 from __future__ import annotations
 
 from journeysdk import journey, step
-from journeysdk.touchpoints.playwright import open_page
+from journeysdk.touchpoints.browser import open_page
 
-from docs.playwright_resume_journey._auth_demo import ensure_demo_server
+from docs.browser_resume_journey._auth_demo import ensure_demo_server
 
 
 def capture_popup_title() -> dict[str, object]:
@@ -34,6 +34,6 @@ def assert_prompt_result(result: dict[str, object]) -> bool:
 
 
 @journey
-def playwright_prompt_journey() -> None:
+def browser_prompt_journey() -> None:
     prompt_result = step(capture_popup_title)
     step(assert_prompt_result, prompt_result)
