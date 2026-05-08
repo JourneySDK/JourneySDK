@@ -16,9 +16,9 @@ The core value is:
   cases users can take, without copying shared setup into separate tests.
 - **Replay from a step**: use `branch(start_from=...)` so later branch cases start from a known durable step boundary
   instead of replaying expensive browser, account, cart, or service setup.
-- **Touchpoints for tests outside the browser**: use helpers under `journeysdk.touchpoints` for the systems,
-  services, and channels that participate in a journey, such as browser pages, hosted inboxes, webhook endpoints,
-  Docker snapshots, and future payment, CRM, support, email, SMS, or back-office surfaces.
+- **Touchpoints for every system in the journey**: drive or verify each system, service, and channel involved in the
+  user flow. A journey might act through the browser touchpoint, then check email, webhooks, payment providers, CRM
+  records, support/Ops queues, SMS, or back-office systems through other touchpoints.
 - **Interrupt long waits, resume later**: run with `--state` so a test can stop while waiting on async work or a
   third-party service and continue later from saved step state.
 - **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory for
@@ -128,10 +128,26 @@ steps or resumed runs must reuse. The step boundary is the durable unit: success
 or retried steps restart from the top with saved inputs, and `branch(start_from=...)` creates a replay anchor that
 lets each branch reuse the same saved setup.
 
-A **Touchpoint** is any system, service, or communication channel that participates in the tested journey. A journey
-may drive the user-facing browser touchpoint, then verify side effects in other touchpoints such as email, webhooks,
-payment providers, CRM records, support/Ops queues, SMS, or back-office workflows. Official touchpoints live under
-`journeysdk.touchpoints`; app-specific touchpoints should stay as ordinary Python integration code beside the journey.
+## Touchpoints
+
+A **Touchpoint** is any system, service, or communication channel that participates in the journey being tested. Think
+of the tested service as the center of the story, and touchpoints as the places where the journey crosses system
+boundaries:
+
+- the browser or client where a user performs actions
+- email, SMS, WhatsApp, voice, or push channels where the user receives messages
+- payment gateways, webhook receivers, CRMs, support/Ops queues, and back-office systems where side effects appear
+- local infrastructure, such as a Docker Compose app, that must be started, inspected, or restored during a run
+
+Touchpoints are not a separate DSL. They are Python helpers used from ordinary Journey steps. Some touchpoints drive
+the journey forward, such as opening a browser page or sending an email. Others observe or verify effects, such as
+waiting for a webhook request or checking an inbox. A single step can use one touchpoint, and a single journey can move
+through many touchpoints as the user flow crosses systems.
+
+Official touchpoints live under `journeysdk.touchpoints`. Use them when the SDK provides a general-purpose helper,
+such as Playwright pages, hosted email inboxes, hosted webhook endpoints, or Docker snapshots. App-specific
+touchpoints, such as a Stripe assertion, HubSpot ticket lookup, internal admin API, or custom back-office check, should
+stay as normal Python code beside your journey until the SDK documents an official helper for that surface.
 
 For example, one checkout journey can create a cart once, exercise card and wallet payment paths from that cart, use
 `page.prompt(...)` to drive the browser, wait for email and SMS, then verify the returned order id:

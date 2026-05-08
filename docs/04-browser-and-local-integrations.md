@@ -3,6 +3,10 @@
 Journey does not care whether a step talks to a browser, a file on disk, a Docker Compose app, or a hosted webhook
 touchpoint. If it is ordinary Python, it can live inside the same authored journey.
 
+This is the practical meaning of touchpoints: the journey can cross from one system to another without changing shape.
+One step may drive a browser page, another may wait for a webhook, and another may inspect local state. Journey keeps
+the step boundaries durable while your Python chooses which touchpoint to use.
+
 This chapter shows both sides of that idea:
 
 - one journey that mixes Playwright, a Journey Cloud webhook, and a downloaded file

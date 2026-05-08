@@ -12,12 +12,18 @@ one journey when you need script-friendly JSONL output.
 - Add steps with `step(...)`.
 - Pass step results explicitly into later steps.
 - Treat every step as a boundary where Journey can save progress, stop, retry, or resume.
+- Use touchpoints when a step needs to interact with another system, such as a browser, inbox, webhook endpoint, CRM,
+  payment provider, or back-office process.
 - Use `journey` to compile and run the authored flow as linear executable cases.
 - Use selection flags when you want one file, one journey, or one target case.
 
 If you remember only one thing, remember this: Journey does not ask you to stop writing Python. It compiles ordinary
 Python step calls into a runnable plan, and long-running work stays manageable because resume and replay happen at step
 boundaries.
+
+A touchpoint is not a special kind of step. It is the external surface a step talks to. For example, a step might use
+the browser touchpoint to click through checkout, then a later step might use an email or webhook touchpoint to confirm
+the service produced the expected side effect.
 
 ## The Smallest Useful Journey
 

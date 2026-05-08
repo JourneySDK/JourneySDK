@@ -6,6 +6,11 @@ That is where Journey Cloud touchpoints fit. A touchpoint is a system, service, 
 tested journey; these hosted touchpoints let one Journey spec drive the app and verify side effects outside the
 browser.
 
+Use a cloud touchpoint when the service under test needs to communicate with something real enough to behave like an
+external system, but disposable enough for tests. Instead of building a temporary webhook server or borrowing a real
+mailbox, the journey asks Journey Cloud for a handle, passes that handle to the service under test, then waits for the
+effect at a later step.
+
 Two rules matter before anything else:
 
 - cloud resources are acquired while journey steps execute
@@ -45,10 +50,10 @@ def cloud_webhook_journey() -> None:
 
 The shape is familiar:
 
-- first get a resource handle
-- then trigger the system under test
-- then wait until the external effect arrives
-- finally assert on the payload
+- first get a touchpoint handle, such as a webhook endpoint
+- then give the handle to the system under test or trigger work that uses it
+- then wait until the external effect reaches that touchpoint
+- finally assert on the payload the touchpoint observed
 
 ### Execute It Against Journey Cloud
 
@@ -103,9 +108,9 @@ def cloud_email_journey() -> None:
 
 This flow uses the same pattern as the webhook example:
 
-- get a cloud-owned handle
+- get a cloud-owned touchpoint handle
 - trigger the external side effect
-- wait for the result
+- wait for the result at that touchpoint
 - assert on the received payload
 
 ### Execute It Against Journey Cloud
@@ -134,7 +139,7 @@ Execution
 ## Ownership and Execution Semantics
 
 - Journey Cloud authentication happens while the journey runs.
-- The same API key is used consistently across cloud helpers in one run.
+- The same API key is used consistently across cloud touchpoints in one run.
 - The first API key that claims a cloud resource should own it from then on. Treat webhook paths, inboxes, and similar identifiers as cloud-managed resources, not anonymous shared names.
 - The SDK side of the code stays small because Journey Cloud owns the hosted endpoint or inbox details.
 

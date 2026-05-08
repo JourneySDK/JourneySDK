@@ -31,6 +31,22 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
   after that completed step. Press Ctrl-C again to interrupt the dirty step immediately; that step restarts later with
   saved inputs.
 
+## Touchpoints in One Minute
+
+A journey often leaves the browser. It may create a checkout in the web app, receive a payment callback, send a receipt
+email, open a support ticket, update a CRM record, or wait for an Ops workflow. In Journey, each of those systems,
+services, or channels is a **touchpoint**.
+
+Touchpoints are how a test talks to the world around the service under test:
+
+- use a browser touchpoint to act like the user
+- use email, webhook, SMS, payment, CRM, or support touchpoints to verify side effects
+- use local infrastructure touchpoints, such as Docker Compose, to set up or restore systems needed by the journey
+
+A touchpoint is different from a step. A step is the durable unit Journey can save, retry, resume, or replay. A
+touchpoint is what that step talks to. Official SDK touchpoints are imported from `journeysdk.touchpoints`; anything
+specific to your app can be a plain Python helper in the same journey file or your own test support module.
+
 ## Reading Order
 
 1. [00 Installation and CLI](00-installation-and-cli.md)
