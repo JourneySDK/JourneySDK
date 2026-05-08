@@ -29,6 +29,12 @@ class _ValidationIssue:
 
 BranchSiteKey = tuple[int, int]
 BranchTemplateKey = tuple[int, int]
+BranchHandleGroupKey = tuple[BranchSiteKey, ...]
+
+
+@dataclass(frozen=True)
+class BranchHandleDefinitionSpec:
+    name: str
 
 
 @dataclass(frozen=True)
@@ -37,11 +43,15 @@ class BranchConditionSpec:
     branch_key: str
     condition_index: int
     total_conditions: int
+    handle_site: BranchSiteKey | None = None
+    handle_name: str | None = None
+    handle_group_key: BranchHandleGroupKey | None = None
 
 
 @dataclass(frozen=True)
 class JourneyValidation:
     branch_conditions: dict[BranchSiteKey, BranchConditionSpec]
+    branch_handle_definitions: dict[BranchSiteKey, BranchHandleDefinitionSpec]
 
 
 @lru_cache(maxsize=None)
@@ -78,6 +88,8 @@ class _JourneyValidator(ast.NodeVisitor):
         self.issues: list[_ValidationIssue] = []
         self.parents: dict[int, ast.AST] = {}
         self.branch_conditions: dict[BranchSiteKey, BranchConditionSpec] = {}
+        self.branch_handle_definitions: dict[BranchSiteKey, BranchHandleDefinitionSpec] = {}
+        self.branch_handles_by_name: dict[str, BranchSiteKey] = {}
         self._source_line_offset = source_line_offset
         self._source_col_offset = source_col_offset
 
@@ -143,6 +155,18 @@ class _JourneyValidator(ast.NodeVisitor):
     def _has_branch_call(self, node: ast.AST) -> bool:
         return bool(self._find_branch_calls(node))
 
+    def _find_branch_handle_names(self, node: ast.AST) -> list[ast.Name]:
+        found: list[ast.Name] = []
+        for subnode in ast.walk(node):
+            if isinstance(subnode, ast.Name) and subnode.id in self.branch_handles_by_name:
+                found.append(subnode)
+        return found
+
+    def _forget_assigned_branch_handles(self, targets: list[ast.expr]) -> None:
+        for target in targets:
+            if isinstance(target, ast.Name):
+                self.branch_handles_by_name.pop(target.id, None)
+
     def _is_supported_for_iter(self, node: ast.AST) -> bool:
         if isinstance(node, (ast.List, ast.Tuple)):
             return True
@@ -162,11 +186,22 @@ class _JourneyValidator(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> Any:
         if isinstance(node.value, ast.Call):
             if self._is_branch_call(node.value):
-                self._add_issue(
-                    InvalidBranchUsageError,
-                    "journey.branch(...) is only valid as a direct if/elif condition.",
-                    hint="Use journey.branch(...) directly as `if journey.branch(...):` or `elif journey.branch(...):`.",
-                )
+                if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                    self._add_issue(
+                        InvalidBranchUsageError,
+                        "Assigned journey.branch(...) handles must use one simple variable target.",
+                        hint="Use `branch_a = journey.branch(...)`, then check that variable directly in an if/elif chain.",
+                    )
+                else:
+                    target = node.targets[0]
+                    site = self._absolute_site(node.value)
+                    self.allowed_branch_call_ids.add(id(node.value))
+                    self.branch_handle_definitions[site] = BranchHandleDefinitionSpec(
+                        name=target.id,
+                    )
+                    self.branch_handles_by_name[target.id] = site
+        else:
+            self._forget_assigned_branch_handles(node.targets)
         self.generic_visit(node)
 
     def visit_While(self, node: ast.While) -> Any:
@@ -200,7 +235,14 @@ class _JourneyValidator(ast.NodeVisitor):
 
         tests = [if_node.test for if_node in chain]
         branch_calls_per_test = [self._find_branch_calls(test) for test in tests]
-        has_branch_flags = [bool(branch_calls) for branch_calls in branch_calls_per_test]
+        branch_handles_per_test = [self._find_branch_handle_names(test) for test in tests]
+        has_branch_flags = [
+            bool(branch_calls) or bool(branch_handles)
+            for branch_calls, branch_handles in zip(
+                branch_calls_per_test,
+                branch_handles_per_test,
+            )
+        ]
 
         if any(has_branch_flags) and not all(has_branch_flags):
             self._add_issue(
@@ -209,14 +251,18 @@ class _JourneyValidator(ast.NodeVisitor):
                 hint="Do not mix branch selection checks with plain `if` conditions in the same chain.",
             )
 
-        direct_branch_calls: list[ast.Call] = []
-        for if_node in chain:
-            branch_calls = self._find_branch_calls(if_node.test)
+        branch_conditions: list[tuple[ast.AST, BranchSiteKey | None, str | None]] = []
+        for if_node, branch_calls, branch_handles in zip(
+            chain,
+            branch_calls_per_test,
+            branch_handles_per_test,
+        ):
             if branch_calls:
                 if (
                     not isinstance(if_node.test, ast.Call)
                     or len(branch_calls) != 1
                     or branch_calls[0] is not if_node.test
+                    or branch_handles
                 ):
                     self._add_issue(
                         InvalidBranchUsageError,
@@ -225,8 +271,22 @@ class _JourneyValidator(ast.NodeVisitor):
                     )
                 else:
                     call_node = branch_calls[0]
-                    direct_branch_calls.append(call_node)
+                    branch_conditions.append((call_node, None, None))
                     self.allowed_branch_call_ids.add(id(call_node))
+            elif branch_handles:
+                if (
+                    not isinstance(if_node.test, ast.Name)
+                    or len(branch_handles) != 1
+                    or branch_handles[0] is not if_node.test
+                ):
+                    self._add_issue(
+                        InvalidBranchUsageError,
+                        "Use an assigned journey.branch(...) handle as the whole condition in each if/elif branch.",
+                        hint="Do not combine branch handles with `and`, `or`, `not`, or other comparisons.",
+                    )
+                else:
+                    handle_site = self.branch_handles_by_name[if_node.test.id]
+                    branch_conditions.append((if_node.test, handle_site, if_node.test.id))
             else:
                 if self._contains_ok_attribute(if_node.test):
                     self._add_issue(
@@ -235,15 +295,31 @@ class _JourneyValidator(ast.NodeVisitor):
                         hint="Move that decision into separate steps or explicit branch() cases instead.",
                     )
 
-        if len(direct_branch_calls) == len(chain):
-            template_key = self._absolute_site(direct_branch_calls[0])
-            total_conditions = len(direct_branch_calls)
-            for index, call_node in enumerate(direct_branch_calls, start=1):
-                self.branch_conditions[self._absolute_site(call_node)] = BranchConditionSpec(
+        if len(branch_conditions) == len(chain):
+            template_key = self._absolute_site(branch_conditions[0][0])
+            total_conditions = len(branch_conditions)
+            handle_sites = tuple(
+                handle_site
+                for _, handle_site, _ in branch_conditions
+                if handle_site is not None
+            )
+            handle_group_key = (
+                handle_sites
+                if len(handle_sites) == len(branch_conditions)
+                else None
+            )
+            for index, (condition_node, handle_site, handle_name) in enumerate(
+                branch_conditions,
+                start=1,
+            ):
+                self.branch_conditions[self._absolute_site(condition_node)] = BranchConditionSpec(
                     template_key=template_key,
                     branch_key=f"branch_{index}",
                     condition_index=index,
                     total_conditions=total_conditions,
+                    handle_site=handle_site,
+                    handle_name=handle_name,
+                    handle_group_key=handle_group_key,
                 )
 
         for if_node in chain:
@@ -354,4 +430,7 @@ def validate_journey(journey_fn: JourneyEntrypoint) -> JourneyValidation:
             raise issue.exc_type(issue.message, hint=issue.hint)
         raise issue.exc_type(issue.message)
 
-    return JourneyValidation(branch_conditions=dict(validator.branch_conditions))
+    return JourneyValidation(
+        branch_conditions=dict(validator.branch_conditions),
+        branch_handle_definitions=dict(validator.branch_handle_definitions),
+    )

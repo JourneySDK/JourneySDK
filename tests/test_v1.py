@@ -715,6 +715,77 @@ def test_branch_call_outside_inline_if_chain_is_rejected():
     assert exc_info.value.hint is not None
 
 
+def test_assigned_branch_handles_can_be_reused_without_new_cases():
+    events: list[str] = []
+
+    def step_1():
+        events.append("step_1")
+
+    def step_2():
+        events.append("step_2")
+
+    def step_3():
+        events.append("step_3")
+
+    def step_4():
+        events.append("step_4")
+
+    def step_5():
+        events.append("step_5")
+
+    def step_6():
+        events.append("step_6")
+
+    def step_7():
+        events.append("step_7")
+
+    def step_8():
+        events.append("step_8")
+
+    def journey():
+        s1 = journey_sdk.step(step_1)
+        s2 = journey_sdk.step(step_2)
+
+        b1 = journey_sdk.branch(start_from=s1)
+        b2 = journey_sdk.branch(start_from=s2)
+
+        if b1:
+            journey_sdk.step(step_3)
+        elif b2:
+            journey_sdk.step(step_4)
+
+        s5 = journey_sdk.step(step_5)
+        s6 = journey_sdk.step(step_6)
+
+        b3 = journey_sdk.branch(start_from=s5)
+        b4 = journey_sdk.branch(start_from=s6)
+
+        if b1:
+            journey_sdk.step(step_7)
+        elif b2:
+            journey_sdk.step(step_8)
+
+    report = journey_sdk.execute(journey)
+
+    assert events == [
+        "step_1",
+        "step_2",
+        "step_3",
+        "step_5",
+        "step_6",
+        "step_7",
+        "step_4",
+        "step_5",
+        "step_6",
+        "step_8",
+    ]
+    assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
+    assert [_record_labels(case) for case in report.case_reports] == [
+        ["step_1", "step_2", "step_3", "step_5", "step_6", "step_7"],
+        ["step_1", "step_2", "step_4", "step_5", "step_6", "step_8"],
+    ]
+
+
 def test_labels_default_to_function_names_when_missing():
     def run_step():
         return "ok"
@@ -2716,6 +2787,59 @@ def test_execute_rehydrates_step_started_branch_cases_from_anchor_post_exit():
         "prepare",
         "shared_after_anchor",
         "finish_branch_b",
+    ]
+
+
+def test_execute_rehydrates_later_branch_anchor_reached_before_first_case_branch():
+    events: list[str] = []
+
+    def step_1():
+        events.append("step_1")
+        return "s1"
+
+    def step_2():
+        events.append("step_2")
+        return "s2"
+
+    def step_3():
+        events.append("step_3")
+        return True
+
+    def step_4():
+        events.append("step_4")
+        return True
+
+    def step_5():
+        events.append("step_5")
+        return True
+
+    def journey():
+        s1 = journey_sdk.step(step_1)
+        s2 = journey_sdk.step(step_2)
+
+        if journey_sdk.branch(start_from=s1):
+            journey_sdk.step(step_3)
+        elif journey_sdk.branch(start_from=s2):
+            journey_sdk.step(step_4)
+
+        journey_sdk.step(step_5)
+
+    report = journey_sdk.execute(journey)
+
+    assert events == [
+        "step_1",
+        "step_2",
+        "step_3",
+        "step_5",
+        "step_4",
+        "step_5",
+    ]
+    assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
+    assert _record_labels(report.case_reports[1]) == [
+        "step_1",
+        "step_2",
+        "step_4",
+        "step_5",
     ]
 
 

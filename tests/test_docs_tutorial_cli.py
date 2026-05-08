@@ -9,7 +9,7 @@ from journeysdk.cli import main
 
 import docs.cloud_webhook_journey as cloud_webhook_docs
 import docs.resume_journey as resume_docs
-from journeysdk.tools._webhook_cloud import (
+from journeysdk.touchpoints._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )

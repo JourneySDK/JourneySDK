@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from typing import ParamSpec, TypeGuard, TypeVar, cast
 
+from ._branch_handle import BranchHandle
 from .errors import InvalidBranchUsageError
 from .models import (
     PlannedValue,
@@ -15,6 +16,7 @@ from .session import get_session
 from .types import JourneyEntrypoint, JourneyFunction, StepFunction
 
 _JOURNEY_MARKER_ATTR = "__journey_marker__"
+_START_FROM_UNSET = object()
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -63,9 +65,9 @@ def is_journey_callable(obj: object) -> TypeGuard[JourneyEntrypoint]:
 
 def branch(
     *,
-    start_from: object | None = None,
-) -> bool:
-    """Select one inline branch inside a direct ``if`` / ``elif`` chain.
+    start_from: object = _START_FROM_UNSET,
+) -> BranchHandle:
+    """Select one inline branch inside an ``if`` / ``elif`` chain.
 
     ``start_from`` points at an earlier ``step(...)`` result. In a full
     multi-case run, later branch cases can restore to that step's completed
@@ -76,9 +78,12 @@ def branch(
 
     Args:
         start_from: Optional result from an earlier full ``step(...)`` call.
+            Omit this argument to start a branch case from scratch.
 
     Returns:
-        ``True`` only for the selected branch on the active journey path.
+        A branch handle. When used directly as an ``if`` / ``elif`` condition,
+        or assigned to a variable and checked later, the handle's truthiness
+        selects the active branch for the current journey case.
 
     Raises:
         TypeError: If ``start_from`` is not an earlier step result during
@@ -94,6 +99,13 @@ def branch(
             step(finish_fast_path)
         elif branch(start_from=account):
             step(finish_review_path, account)
+
+        fast = branch()
+        review = branch(start_from=account)
+        if fast:
+            step(check_fast_path)
+        elif review:
+            step(check_review_path)
         ```
     """
     session = get_session()
@@ -101,13 +113,13 @@ def branch(
         raise InvalidBranchUsageError(
             "branch() can only be used while a journey is being planned or executed.",
             hint=(
-                "Call branch() directly as the whole condition in an if/elif chain "
-                "inside a function decorated with @journey."
+                "Call branch() directly as the whole condition in an if/elif chain, "
+                "or assign it to a variable and check that variable directly."
             ),
         )
 
     if getattr(session, "mode", None) == "plan":
-        if start_from is None:
+        if start_from is _START_FROM_UNSET:
             start_from_node_id = None
         elif isinstance(start_from, PlannedValue):
             if start_from.access_path:
@@ -123,16 +135,16 @@ def branch(
             start_from_node_id = start_from.node_id
         else:
             raise TypeError(
-                "branch(start_from=...) accepts an earlier step() result or None."
+                "branch(start_from=...) accepts an earlier step() result. Omit start_from to start from scratch."
             )
     else:
-        if start_from is None:
+        if start_from is _START_FROM_UNSET:
             start_from_node_id = None
         else:
             resolver = getattr(session, "step_anchor_for_value", None)
             if not callable(resolver):
                 raise TypeError(
-                    "branch(start_from=...) accepts an earlier step() result or None."
+                    "branch(start_from=...) accepts an earlier step() result. Omit start_from to start from scratch."
                 )
             start_from_node_id = resolver(start_from)
 
@@ -141,9 +153,12 @@ def branch(
     if caller_frame is None:
         raise InvalidBranchUsageError(
             "branch() could not determine where it was called from.",
-            hint="Call branch() directly as the whole condition in an if/elif chain.",
+            hint="Call branch() directly as the whole condition in an if/elif chain, or assign it to a variable and check that variable directly.",
         )
-    return cast(bool, session.branch(start_from=start_from_node_id, frame=caller_frame))
+    return cast(
+        BranchHandle,
+        session.branch(start_from=start_from_node_id, frame=caller_frame),
+    )
 
 
 def step(
@@ -161,7 +176,7 @@ def step(
     explicit inputs to later steps. When a prior step returns an object with
     plain Python attributes, later step arguments can also read those
     attributes directly, such as ``endpoint.url``. Use ``step()`` for arbitrary
-    testing logic such as browser checks, API calls, tool-backed validations,
+    testing logic such as browser checks, API calls, touchpoint-backed validations,
     or polling steps configured with retry settings. Retries apply when a step
     raises an exception and ``retry`` is greater than 0.
 

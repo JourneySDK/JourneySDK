@@ -1,6 +1,7 @@
-# 04 Browser and Local Integrations
+# 04 Browser and Local Touchpoints
 
-  does not care whether a step talks to a browser, a file on disk, or a hosted webhook. If it is ordinary Python, it can live inside the same authored journey. ...
+Journey does not care whether a step talks to a browser, a file on disk, a Docker Compose app, or a hosted webhook
+touchpoint. If it is ordinary Python, it can live inside the same authored journey.
 
 This chapter shows both sides of that idea:
 
@@ -20,7 +21,7 @@ The browser helper is still just a normal Python function:
 ```python
 def assert_demo_homepage() -> bool:
     from playwright.sync_api import sync_playwright
-    from journeysdk.tools.playwright import ensure_browser_installed
+    from journeysdk.touchpoints.playwright import ensure_browser_installed
 
     ensure_browser_installed()
     with sync_playwright() as playwright:
@@ -50,7 +51,7 @@ And the journey that ties them together still reads like sequential Python:
 
 ```python
 from journeysdk import branch, journey, step
-from journeysdk.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
+from journeysdk.touchpoints.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 
 @journey

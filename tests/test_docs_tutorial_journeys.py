@@ -14,7 +14,7 @@ import docs.first_journey as first_docs
 import docs.resume_journey as resume_docs
 import docs.retry_journey as retry_docs
 import docs.selection_journeys as selection_docs
-from journeysdk.tools._webhook_cloud import (
+from journeysdk.touchpoints._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )

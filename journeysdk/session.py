@@ -19,7 +19,7 @@ def get_session() -> Any | None:
 def _require_executing_step(owner: str) -> None:
     """Raise unless code is running inside a step function body.
 
-    Official tools use this guard before opening live resources that Journey
+    Official touchpoints use this guard before opening live resources that Journey
     can only clean up from a returned step value.
     """
 
@@ -29,7 +29,7 @@ def _require_executing_step(owner: str) -> None:
         raise InvalidBranchUsageError(
             f"{owner}(...) can only be called while a journey step is running.",
             hint=(
-                "Call lifecycle-aware tools from inside a function passed to "
+                "Call lifecycle-aware touchpoints from inside a function passed to "
                 "step(...), not during planning, module import, or between steps."
             ),
         )

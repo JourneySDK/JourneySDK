@@ -1,4 +1,4 @@
-"""Shared prompt-output helpers for AI-driven Journey tools."""
+"""Shared prompt-output helpers for AI-driven Journey touchpoints."""
 
 from __future__ import annotations
 

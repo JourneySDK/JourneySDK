@@ -1,6 +1,6 @@
 ---
 name: journey-developer
-description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives or official journeysdk.tools integrations, running Journey CLI full or targeted step executions, iterating with --develop-step and --state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
+description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives or official journeysdk.touchpoints integrations, running Journey CLI full or targeted step executions, iterating with --develop-step and --state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
 ---
 
 # Journey Developer
@@ -16,20 +16,20 @@ rehydratable value.
 
 Do not use this skill for generic Python scripts, generic unit tests, or unrelated workflow automation that is not authored as a Journey SDK journey.
 
-## Official Tools
+## Official Touchpoints
 
-Official tools live under `journeysdk.tools`. They are ordinary Python helpers that return step callables or
+Official touchpoints live under `journeysdk.touchpoints`. They are ordinary Python helpers that return step callables or
 serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted
 resources while steps execute, and make returned values serializable or rehydratable when they cross replay boundaries
 for retry, branch, or `--state` behavior.
 
-- `journeysdk.tools.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
-- `journeysdk.tools.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
-- `journeysdk.tools.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
-- `journeysdk.tools.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
+- `journeysdk.touchpoints.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
+- `journeysdk.touchpoints.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
+- `journeysdk.touchpoints.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
+- `journeysdk.touchpoints.playwright`: open browser pages and return resumable `JourneyPlaywrightPage` values that later steps can reopen.
 
-Prompt-capable official tools use named prompt memory and optional structured output. Pass a literal, unique
-`memory="name"` to a tool's `prompt(...)` method when prior successful runs should teach later runs replayable fast
+Prompt-capable official touchpoints use named prompt memory and optional structured output. Pass a literal, unique
+`memory="name"` to a touchpoint's `prompt(...)` method when prior successful runs should teach later runs replayable fast
 paths. Journey stores `name.memory.md` beside the journey source. Use `--no-memory` for runs that should ignore and avoid
 updating those files. Prompt methods return a result object with `result.output`. Omit `output` when that field should
 contain plain text; pass `output={"field": "description"}` or JSON-schema field fragments when it should contain a
@@ -40,7 +40,7 @@ app state, the prompt method raises instead of returning a successful prompt res
 
 Use this workflow when developing Journey SDK journeys:
 
-1. Inspect nearby journeys and docs before editing. Prefer the existing file's imports, labels, helper style, and tool setup. Check `docs/` examples and `journeysdk/api.py` when behavior is unclear.
+1. Inspect nearby journeys and docs before editing. Prefer the existing file's imports, labels, helper style, and touchpoint setup. Check `docs/` examples and `journeysdk/api.py` when behavior is unclear.
 2. Define explicit top-level step functions. Decorate one or more module-level entrypoints with `@journey` or `@journey.journey`, then call `step(...)` and `branch(...)` inside the entrypoint.
 3. Pass concrete dependencies and prior step results as explicit arguments. Do not pass `None` or empty placeholders into constructors just to satisfy signatures.
 4. Run the narrowest useful Journey CLI command, then broaden validation before finishing.
@@ -139,10 +139,10 @@ in-process continue/retry prompt.
 - Keep journey labels, examples, docs, and tests aligned with CLI behavior.
 - Prefer explicit step functions over anonymous lambdas or deeply nested closures.
 - Store external resource handles as serializable descriptors or rehydratable top-level classes, not as live sockets, browsers, sessions, or clients.
-- Keep official tool usage side-effect free during planning; acquire live resources inside step execution.
+- Keep official touchpoint usage side-effect free during planning; acquire live resources inside step execution.
 - Use literal, unique prompt-memory names for AI-driven `prompt(...)` calls, and keep generated `*.memory.md` files
   reviewable if they are committed.
-- Use `journeysdk.logger.get_logger("component")` for SDK/tool/tutorial diagnostics instead of printing directly.
+- Use `journeysdk.logger.get_logger("component")` for SDK/touchpoint/tutorial diagnostics instead of printing directly.
 - When adding logger calls, keep machine-readable fields in `message` and keyword fields, and pass `pretty=` only for
   human output. Do not add component- or event-specific pretty formatting to `journeysdk/logger.py`; put it beside the
   module that emits the event.

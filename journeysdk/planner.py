@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from types import FrameType
 from typing import ParamSpec, TypeVar, cast
 
+from ._branch_handle import BranchHandle
 from .errors import (
     InvalidBranchUsageError,
 )
@@ -27,7 +28,12 @@ from .models import (
 from .session import use_session
 from .types import JourneyEntrypoint, StepFunction
 from .utils import callable_ref, callable_source_fingerprint
-from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
+from .validator import (
+    BranchConditionSpec,
+    JourneyValidation,
+    resolve_branch_call_site,
+    validate_journey,
+)
 
 BranchEnv = dict[str, str]
 P = ParamSpec("P")
@@ -75,6 +81,7 @@ class _PlanSession:
         self._node_counter = 0
         self._group_counter = 0
         self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
+        self._branch_handle_group_ids: dict[tuple[tuple[int, int], ...], str] = {}
         self._steps_seen: set[str] = set()
         self._journey_webhook_epoch = 0
 
@@ -127,15 +134,78 @@ class _PlanSession:
         self._steps_seen.add(node.node_id)
         return PlannedValue(node_id=node.node_id, kind="step")
 
-    def branch(self, *, start_from: str | None, frame: FrameType) -> bool:
+    def branch(self, *, start_from: str | None, frame: FrameType) -> BranchHandle:
+        site = resolve_branch_call_site(frame)
+        handle_def = self.validation.branch_handle_definitions.get(site)
+        if handle_def is not None:
+            if start_from is not None and start_from not in self._steps_seen:
+                raise InvalidBranchUsageError(
+                    f"Branch handle '{handle_def.name}' starts from step '{start_from}', but that step was never created earlier in the journey.",
+                    hint="Pass the result of an earlier step(...) call to branch(start_from=...).",
+                )
+            return BranchHandle(
+                definition_site=site,
+                name=handle_def.name,
+                start_from=start_from,
+            )
+
+        spec = self.validation.branch_conditions.get(site)
+        if spec is None or spec.handle_site is not None:
+            raise InvalidBranchUsageError(
+                "journey.branch(...) is only valid as a direct if/elif condition.",
+                hint="Use journey.branch(...) directly as `if journey.branch(...):`, or assign it to a variable and check that variable directly in an if/elif chain.",
+            )
+
+        if start_from is not None and start_from not in self._steps_seen:
+            raise InvalidBranchUsageError(
+                f"Branch '{spec.branch_key}' starts from step '{start_from}', but that step was never created earlier in the journey.",
+                hint="Pass the result of an earlier step(...) call to branch(start_from=...).",
+            )
+        return BranchHandle(
+            definition_site=site,
+            name=spec.branch_key,
+            start_from=start_from,
+        )
+
+    def branch_handle(self, *, handle: BranchHandle, frame: FrameType) -> bool:
         site = resolve_branch_call_site(frame)
         spec = self.validation.branch_conditions.get(site)
         if spec is None:
             raise InvalidBranchUsageError(
-                "journey.branch(...) is only valid as a direct if/elif condition.",
-                hint="Use journey.branch(...) directly as `if journey.branch(...):` or `elif journey.branch(...):`.",
+                "Branch handles are only valid as direct if/elif conditions.",
+                hint="Use the branch handle directly as `if branch_a:` or `elif branch_b:`.",
             )
 
+        expected_definition_site = spec.handle_site or site
+        if expected_definition_site != handle.definition_site:
+            raise InvalidBranchUsageError(
+                "Branch handle condition does not match the branch() call that created it.",
+                hint="Use the same branch handle variable directly in the if/elif chain where it was declared.",
+            )
+        return self._select_branch(
+            spec=spec,
+            start_from=cast(str | None, handle.start_from),
+        )
+
+    def _group_id_for_branch_condition(
+        self,
+        spec: BranchConditionSpec,
+    ) -> str:
+        handle_group_key = spec.handle_group_key
+        if handle_group_key is None:
+            return self._next_group_id()
+        group_id = self._branch_handle_group_ids.get(handle_group_key)
+        if group_id is None:
+            group_id = self._next_group_id()
+            self._branch_handle_group_ids[handle_group_key] = group_id
+        return group_id
+
+    def _select_branch(
+        self,
+        *,
+        spec: BranchConditionSpec,
+        start_from: str | None,
+    ) -> bool:
         if start_from is not None and start_from not in self._steps_seen:
             raise InvalidBranchUsageError(
                 f"Branch '{spec.branch_key}' starts from step '{start_from}', but that step was never created earlier in the journey.",
@@ -150,7 +220,7 @@ class _PlanSession:
                     hint="Keep journey.branch(...) in one direct if/elif chain without reusing it in helper callbacks.",
                 )
             state = _ActiveBranchChain(
-                group_id=self._next_group_id(),
+                group_id=self._group_id_for_branch_condition(spec),
                 cases=[],
             )
             self._active_branch_chains[spec.template_key] = state

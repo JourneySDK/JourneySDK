@@ -7,7 +7,7 @@ from pathlib import Path
 
 from journeysdk import journey, step
 from journeysdk.logger import get_logger
-from journeysdk.tools.playwright import (
+from journeysdk.touchpoints.playwright import (
     JourneyPlaywrightPage,
     open_page,
 )

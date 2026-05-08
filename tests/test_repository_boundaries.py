@@ -82,24 +82,35 @@ def test_core_orchestration_modules_do_not_import_feature_helpers() -> None:
         "._prompt_memory",
         "._prompt_engine",
         "._prompt_output",
-        ".tools",
+        ".touchpoints",
         "journeysdk._prompt_memory",
         "journeysdk._prompt_engine",
         "journeysdk._prompt_output",
-        "journeysdk.tools",
+        "journeysdk.touchpoints",
     }
 
     for module in core_modules:
         imported = _imported_module_names(sdk / module)
         for item in imported:
             assert item not in forbidden_imports
-            assert not item.startswith(".tools.")
-            assert not item.startswith("journeysdk.tools.")
+            assert not item.startswith(".touchpoints.")
+            assert not item.startswith("journeysdk.touchpoints.")
+
+
+def test_public_tree_does_not_reference_legacy_namespace() -> None:
+    root = _public_root()
+    legacy_segment = bytes((116, 111, 111, 108, 115)).decode()
+    forbidden_tokens = (f"journeysdk.{legacy_segment}", f"journeysdk/{legacy_segment}")
+
+    for path in _tracked_text_files(root):
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden_tokens:
+            assert token not in text, f"Found legacy SDK namespace {token!r} in {path}"
 
 
 def test_root_agents_stays_workspace_level() -> None:
     text = (_workspace_root() / "AGENTS.md").read_text(encoding="utf-8")
-    for token in ("planner.py", "executor.py", "_prompt_memory.py", "tool modules"):
+    for token in ("planner.py", "executor.py", "_prompt_memory.py", "touchpoint modules"):
         assert token not in text
 
 

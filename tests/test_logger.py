@@ -168,9 +168,9 @@ def test_logger_styles_pretty_output_for_tty_streams() -> None:
     logger = get_logger("component")
     logger.info("heading_event", "machine", pretty=pretty_line("Plan", style="heading"))
     logger.info(
-        "tool_event",
+        "touchpoint_event",
         "machine",
-        pretty=pretty_row("Browser", "opening chromium", indent=8, label_width=27, style="tool"),
+        pretty=pretty_row("Browser", "opening chromium", indent=8, label_width=27, style="touchpoint"),
     )
     logger.info(
         "success_event",

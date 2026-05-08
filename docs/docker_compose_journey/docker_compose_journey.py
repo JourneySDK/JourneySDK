@@ -9,7 +9,7 @@ from pathlib import Path
 import urllib.request
 
 from journeysdk import branch, journey, step
-from journeysdk.tools.docker import (
+from journeysdk.touchpoints.docker import (
     DockerComposeStack,
     DockerContainerStatus,
     run_docker,

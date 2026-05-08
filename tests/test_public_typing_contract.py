@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SDK = ROOT / "journeysdk"
-TOOL_MODULES = ("docker", "email", "playwright", "webhook")
+TOUCHPOINT_MODULES = ("docker", "email", "playwright", "webhook")
 EXTRA_PUBLIC_NAMES = {
     SDK / "api.py": {"is_journey_callable"},
 }
@@ -217,9 +217,9 @@ def test_public_sdk_exports_do_not_expose_any_or_anonymous_callable() -> None:
             _check_public_definition(definition_path, node)
 
 
-def test_official_tool_exports_do_not_expose_any_or_anonymous_callable() -> None:
-    for module in TOOL_MODULES:
-        path = SDK / "tools" / f"{module}.py"
+def test_official_touchpoint_exports_do_not_expose_any_or_anonymous_callable() -> None:
+    for module in TOUCHPOINT_MODULES:
+        path = SDK / "touchpoints" / f"{module}.py"
         for name in sorted(_module_all(path)):
             definition = _public_definition(path, name)
             assert definition is not None, (

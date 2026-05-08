@@ -8,7 +8,7 @@ Journey SDK is an AI-assisted workflow-as-code toolkit for testing long user jou
 third-party services, and channels. Those journeys have always been painful to automate: teams duplicate similar test
 cases, rerun slow setup, babysit long waits, wire throwaway inboxes and callbacks, and hand-maintain browser selectors.
 Journey turns that into one Python journey that compiles paths, replays from durable steps, resumes long waits, uses
-Journey Cloud tools, and integrates natively with AI coding assistants.
+Journey Cloud touchpoints, and integrates natively with AI coding assistants.
 
 The core value is:
 
@@ -16,9 +16,9 @@ The core value is:
   cases users can take, without copying shared setup into separate tests.
 - **Replay from a step**: use `branch(start_from=...)` so later branch cases start from a known durable step boundary
   instead of replaying expensive browser, account, cart, or service setup.
-- **Cloud tools for tests outside the browser**: use helpers under `journeysdk.tools` for hosted inboxes, webhook
-  endpoints, browser prompting, Docker snapshots, and other documented tool surfaces while app-specific integrations
-  keep their own code.
+- **Touchpoints for tests outside the browser**: use helpers under `journeysdk.touchpoints` for the systems,
+  services, and channels that participate in a journey, such as browser pages, hosted inboxes, webhook endpoints,
+  Docker snapshots, and future payment, CRM, support, email, SMS, or back-office surfaces.
 - **Interrupt long waits, resume later**: run with `--state` so a test can stop while waiting on async work or a
   third-party service and continue later from saved step state.
 - **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory for
@@ -128,13 +128,18 @@ steps or resumed runs must reuse. The step boundary is the durable unit: success
 or retried steps restart from the top with saved inputs, and `branch(start_from=...)` creates a replay anchor that
 lets each branch reuse the same saved setup.
 
+A **Touchpoint** is any system, service, or communication channel that participates in the tested journey. A journey
+may drive the user-facing browser touchpoint, then verify side effects in other touchpoints such as email, webhooks,
+payment providers, CRM records, support/Ops queues, SMS, or back-office workflows. Official touchpoints live under
+`journeysdk.touchpoints`; app-specific touchpoints should stay as ordinary Python integration code beside the journey.
+
 For example, one checkout journey can create a cart once, exercise card and wallet payment paths from that cart, use
 `page.prompt(...)` to drive the browser, wait for email and SMS, then verify the returned order id:
 
 ```python
 from journeysdk import branch, journey, step
-from journeysdk.tools.email import get_email_inbox
-from journeysdk.tools.playwright import open_page
+from journeysdk.touchpoints.email import get_email_inbox
+from journeysdk.touchpoints.playwright import open_page
 
 
 def checkout(cart, inbox, method) -> dict[str, object]:
@@ -163,7 +168,7 @@ def checkout_journey() -> None:
     step(mark_order_ready, order["order_id"], messages)
 ```
 
-`get_email_inbox()` and `open_page()` are documented SDK tools. Functions such as `create_cart`,
+`get_email_inbox()` and `open_page()` are documented SDK touchpoints. Functions such as `create_cart`,
 `wait_for_email_and_sms`, and `mark_order_ready` are app-specific integration code. Voice agents, SMS, WhatsApp,
 payments, and third-party APIs should stay app-specific unless the docs describe an official helper.
 
@@ -179,6 +184,8 @@ retried.
   `elif branch()` choice where the journey can split.
 - **Step**: one `step(...)` call and the plain Python function it runs.
 - **Step boundary**: the boundary before and after a step where Journey can save progress, stop, retry, or resume.
+- **Touchpoint**: a system, service, or channel that participates in the tested journey, such as a browser, email,
+  webhook, payment gateway, CRM, support/Ops system, SMS provider, or back-office process.
 - **State file**: the `--state` file that stores selected cases, completed case reports, active progress, saved step
   bindings, and branch-anchor snapshots.
 - **Saved step binding**: stored step inputs, metadata, and optional result that Journey can use when replaying or
@@ -230,13 +237,13 @@ behavior for active state, step bindings, or branch-anchor snapshots.
 
 Restored values should be usable as later step inputs. For values backed by live
 external resources, store enough data to reopen the resource explicitly in the
-next step instead of trying to pickle the live resource itself. Official tools
+next step instead of trying to pickle the live resource itself. Official touchpoints
 follow this pattern: `JourneyPlaywrightPage` stores browser state, and later
 steps reopen it with `open_page(saved_page)`.
 
 ## Step Lifecycle
 
-Official tools that open live resources inside a step should return an object
+Official touchpoints that open live resources inside a step should return an object
 with the standard context-manager `__exit__(exc_type, exc, traceback)` method.
 Each step attempt has six phases:
 
@@ -259,7 +266,7 @@ pauses at pre-exit, then closes returned handles before the command exits. With
 those handles are still live, then closes them after the user chooses
 `continue` or `retry`, or cancels the prompt.
 
-Use this pattern when a tool owns a resource that should not outlive the step
+Use this pattern when a touchpoint owns a resource that should not outlive the step
 attempt:
 
 ```python
@@ -296,7 +303,7 @@ see in the returned value graph. A live local resource that is not returned is
 outside this protocol. Either return the handle, return a container that
 contains it, or close it explicitly with local `try` / `finally` code.
 
-Keep lifecycle methods idempotent, and close only resources owned by that tool
+Keep lifecycle methods idempotent, and close only resources owned by that touchpoint
 call. If the step returns a value that must survive retries, `--state`, or
 branch replay, that value should also implement the Journey rehydration
 protocol above; do not rely on pickling live resources. `JourneyPlaywrightPage`
@@ -304,12 +311,12 @@ is the canonical example because it implements both protocols: `__exit__`
 closes the live browser objects at step exit, while `__store__` / `__restore__`
 save enough browser state for a later step to reopen the page explicitly.
 
-Official tools are ordinary Python helpers that return step callables or serializable helper values. For example, the
-webhook tool can acquire a Journey Cloud-hosted endpoint before the app under test sends to it:
+Official touchpoints are ordinary Python helpers that return step callables or serializable helper values. For example, the
+webhook touchpoint can acquire a Journey Cloud-hosted endpoint before the app under test sends to it:
 
 ```python
 from journeysdk import step
-from journeysdk.tools.webhook import get_webhook_endpoint, wait_for_webhook_request
+from journeysdk.touchpoints.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 endpoint = step(get_webhook_endpoint(path="/invoice-paid"))
 step(send_invoice_paid_callback, endpoint.url)
@@ -321,12 +328,12 @@ request_payload = step(
 )
 ```
 
-The official email tool follows the same step-oriented model and uses the default hosted inbox assigned to the active
+The official email touchpoint follows the same step-oriented model and uses the default hosted inbox assigned to the active
 Journey Cloud API key:
 
 ```python
 from journeysdk import step
-from journeysdk.tools.email import get_email_inbox, send_email, wait_for_email
+from journeysdk.touchpoints.email import get_email_inbox, send_email, wait_for_email
 
 inbox = step(get_email_inbox())
 step(send_email(subject="Welcome", text_body="Hello from Journey"))
@@ -336,12 +343,12 @@ message = step(
 )
 ```
 
-The Docker tool can start a local Compose app as a step value and pair a step anchor with exact rollback of container
+The Docker touchpoint can start a local Compose app as a step value and pair a step anchor with exact rollback of container
 filesystems plus Docker-managed volume contents. `DockerComposeStack` already implements the rehydration protocol:
 
 ```python
 from journeysdk import branch, step
-from journeysdk.tools.docker import run_docker
+from journeysdk.touchpoints.docker import run_docker
 
 stack = step(run_docker(compose_file="docker-compose.yml"))
 baseline = step(capture_baseline_state, stack)
@@ -367,10 +374,10 @@ step(
 )
 ```
 
-The Playwright tool packages one page into a resumable step value:
+The Playwright touchpoint packages one page into a resumable step value:
 
 ```python
-from journeysdk.tools.playwright import (
+from journeysdk.touchpoints.playwright import (
     JourneyPlaywrightPage,
     open_page,
 )
@@ -391,7 +398,7 @@ The same live page can also run a bounded LLM action loop. By default, `page.pro
 Pass `output=...` when you want LangChain structured output as a dictionary:
 
 ```python
-from journeysdk.tools.playwright import open_page
+from journeysdk.touchpoints.playwright import open_page
 
 def capture_popup_title() -> dict[str, object]:
     page = open_page("https://app.example/login")
@@ -430,7 +437,7 @@ command can reuse that saved progress; delete the file when you want to start fr
 ## How it works
 
 1. Write one journey spec in Python using `journey`, `step`, `branch`, and documented helpers from
-   `journeysdk.tools`.
+   `journeysdk.touchpoints`.
 2. Run `journey`, which compiles branch choices into linear executable cases and executes them.
 3. Use `branch(start_from=...)`, retries, and state files to replay from durable step boundaries instead of rerunning
    every expensive setup step.
@@ -471,7 +478,7 @@ selected case changed, Journey starts that case over so the reused prefix is not
   step boundaries.
 - **Interrupt long waits, resume later**: keep long journeys restartable by saving progress between steps with
   `--state`.
-- **Cloud tools for external tests**: integrate hosted inboxes, webhooks, browser pages, Docker snapshots, and
+- **Touchpoints for external tests**: integrate hosted inboxes, webhooks, browser pages, Docker snapshots, and
   app-specific channel or service code without forcing them into a custom DSL.
 - **AI-generated steps with `page.prompt(...)`**: describe browser work in natural language and let prompt memory make
   repeat runs faster.
@@ -523,11 +530,11 @@ export JOURNEY_CLOUD_API_KEY=journey-demo-key
 export JOURNEY_CLOUD_BASE_URL=https://journey-cloud.example.test
 ```
 
-The official webhook and email SDK tools require Journey Cloud; the SDK no longer hosts local webhooks or talks
+The official webhook and email SDK touchpoints require Journey Cloud; the SDK no longer hosts local webhooks or talks
 directly to SMTP/IMAP servers.
 
 Journey Cloud authenticates SDK control-plane calls with `Authorization: Bearer $JOURNEY_CLOUD_API_KEY`. The same
-pattern should apply to all Journey cloud tools: the first API key that reserves a cloud-managed handle becomes its
+pattern should apply to all Journey cloud touchpoints: the first API key that reserves a cloud-managed handle becomes its
 owner. That means a webhook path, mail inbox, or similar cloud-managed identifier belongs to the API key that claimed
 it first, and other API keys should not be able to reserve or manage that same handle afterward.
 
@@ -547,4 +554,4 @@ Smoke test the built package and CLI locally:
 
 See [`docs/README.md`](docs/README.md) for the runnable handbook. It starts with one journey spec for all paths, then
 walks through replay from a step, retries, interrupting long waits and resuming later, browser automation with
-`page.prompt(...)`, Journey Cloud tools, and debugging failure modes with code, commands, and expected CLI output.
+`page.prompt(...)`, Journey Cloud touchpoints, and debugging failure modes with code, commands, and expected CLI output.

@@ -16,7 +16,7 @@ from journeysdk._prompt_engine import (
     PromptEngineSession,
     PromptObservation,
     PromptTextSection,
-    PromptToolContext,
+    PromptActionContext,
 )
 from journeysdk.logger import JourneyLogRecord, get_logger, make_log_record
 
@@ -109,7 +109,7 @@ def _fake_create_agent(
     return _FakeAgent(model, tools=tools, system_prompt=system_prompt)
 
 
-def _tool_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
+def _action_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
     return {
         "content": "",
         "tool_calls": [
@@ -121,10 +121,10 @@ def _tool_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
     }
 
 
-def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
+def test_prompt_engine_runs_action_adapter_and_persists_action_records(
     tmp_path: Path,
 ) -> None:
-    model = _FakePromptModel([_tool_call("fake_echo", {"text": "hello"}), "done"])
+    model = _FakePromptModel([_action_call("fake_echo", {"text": "hello"}), "done"])
     action_records: list[JourneyLogRecord] = []
 
     def build_observation() -> PromptObservation:
@@ -132,9 +132,9 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
             signature="fake://ready",
             records=(
                 make_log_record(
-                    "fake-tool",
+                    "fake-action",
                     "state",
-                    "fake tool ready",
+                    "fake action ready",
                     status="ready",
                 ),
             ),
@@ -147,15 +147,15 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
             ),
         )
 
-    def build_tools(context: PromptToolContext) -> list[object]:
+    def build_actions(context: PromptActionContext) -> list[object]:
         @tool("fake_echo")
         def fake_echo(text: str) -> list[dict[str, object]]:
-            """Echo text into the fake tool."""
+            """Echo text into the fake action."""
 
             def run() -> list[dict[str, object]]:
                 step = context.next_step_index()
                 record = make_log_record(
-                    "fake-tool",
+                    "fake-action",
                     "action",
                     f"echoed {text}",
                     step=step,
@@ -171,7 +171,7 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
         return [fake_echo]
 
     result = PromptEngineSession(
-        component="fake-tool",
+        component="fake-action",
         owner="fake.prompt(...)",
         instruction="echo hello",
         model="fake:model",
@@ -181,7 +181,7 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
         system_prompt="Use fake_echo when more work is needed.",
         logger=get_logger("fake-prompt"),
         build_observation=build_observation,
-        build_tools=build_tools,
+        build_actions=build_actions,
         load_model=lambda model_name: model,
         create_agent=_fake_create_agent,
         compile_memory=lambda context: PromptMemoryDraft(
@@ -210,12 +210,12 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
 
     entry = load_prompt_memory_entry(
         tmp_path / "fake.memory.md",
-        component="fake-tool",
+        component="fake-action",
         instruction="echo hello",
         observation_signature="fake://ready",
     )
     assert entry is not None
-    assert entry.component == "fake-tool"
+    assert entry.component == "fake-action"
     assert entry.observation_signature == "fake://ready"
     assert entry.final_output == "done"
     assert entry.sections == (
@@ -234,13 +234,13 @@ def test_prompt_engine_runs_tool_agnostic_adapter_and_persists_action_records(
 def test_prompt_memory_round_trips_markdown_entry(tmp_path: Path) -> None:
     memory_path = tmp_path / "fake.memory.md"
     entry = PromptMemoryEntry(
-        component="fake-tool",
+        component="fake-action",
         instruction="remember this",
         observation_signature="fake://ready",
         sections=(
             PromptMemorySection(
                 heading="Recipe",
-                body="Reuse the cached fake-tool handle.",
+                body="Reuse the cached fake-action handle.",
             ),
             PromptMemorySection(
                 heading="Fixture data",
@@ -257,18 +257,18 @@ def test_prompt_memory_round_trips_markdown_entry(tmp_path: Path) -> None:
     assert memory_path.read_text(encoding="utf-8").startswith("# Journey Prompt Memory\n")
     loaded = load_prompt_memory_entry(
         memory_path,
-        component="fake-tool",
+        component="fake-action",
         instruction="remember this",
         observation_signature="fake://ready",
     )
     assert loaded == PromptMemoryEntry(
-        component="fake-tool",
+        component="fake-action",
         instruction="remember this",
         observation_signature="fake://ready",
         sections=(
             PromptMemorySection(
                 heading="Recipe",
-                body="Reuse the cached fake-tool handle.",
+                body="Reuse the cached fake-action handle.",
             ),
             PromptMemorySection(
                 heading="Fixture data",
@@ -294,8 +294,8 @@ def test_prompt_memory_ignores_mismatched_instruction_or_observation(
             observation_signature="login-page",
             sections=(
                 PromptMemorySection(
-                    heading="Tool state",
-                    body="This section belongs to the tool.",
+                    heading="Action state",
+                    body="This section belongs to the action.",
                 ),
             ),
             final_output="Signed in.",
@@ -329,12 +329,12 @@ def test_prompt_memory_allows_entries_without_playwright_sections(
     write_prompt_memory_entry(
         memory_path,
         PromptMemoryEntry(
-            component="fake-tool",
+            component="fake-action",
             instruction="cache generic state",
             observation_signature="fake://ready",
             sections=(
                 PromptMemorySection(
-                    heading="Tool-specific state",
+                    heading="Action-specific state",
                     body="not executable code",
                 ),
             ),
@@ -344,7 +344,7 @@ def test_prompt_memory_allows_entries_without_playwright_sections(
 
     loaded = load_prompt_memory_entry(
         memory_path,
-        component="fake-tool",
+        component="fake-action",
         instruction="cache generic state",
         observation_signature="fake://ready",
     )
@@ -352,7 +352,7 @@ def test_prompt_memory_allows_entries_without_playwright_sections(
     assert loaded is not None
     assert loaded.sections == (
         PromptMemorySection(
-            heading="Tool-specific state",
+            heading="Action-specific state",
             body="not executable code",
         ),
     )
@@ -381,7 +381,7 @@ def test_prompt_memory_write_cleans_tmp_file_when_replace_fails(
                 observation_signature="login-page",
                 sections=(
                     PromptMemorySection(
-                        heading="Tool-specific state",
+                        heading="Action-specific state",
                         body="replay details are not shared-memory concepts",
                     ),
                 ),

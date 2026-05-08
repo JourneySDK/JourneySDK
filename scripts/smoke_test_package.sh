@@ -32,20 +32,20 @@ python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -c "import journeysdk"
 "$VENV_DIR/bin/journey" --help >/dev/null
 
-echo "Smoke testing uv tool install from the wheel..."
-TOOL_HOME="$TMP_DIR/tool-home"
-mkdir -p "$TOOL_HOME"
-HOME="$TOOL_HOME" uv tool install "$WHEEL_PATH"
-TOOL_BIN="$(find "$TOOL_HOME" -type f -path '*/bin/journey' -print -quit)"
+echo "Smoke testing persistent uv CLI install from the wheel..."
+CLI_HOME="$TMP_DIR/cli-home"
+mkdir -p "$CLI_HOME"
+HOME="$CLI_HOME" uv tool install "$WHEEL_PATH"
+JOURNEY_BIN="$(find "$CLI_HOME" -type f -path '*/bin/journey' -print -quit)"
 
-if [ -z "$TOOL_BIN" ]; then
-  echo "Installed uv tool binary was not found." >&2
+if [ -z "$JOURNEY_BIN" ]; then
+  echo "Installed journey binary was not found." >&2
   exit 1
 fi
 
-PATH="$(dirname "$TOOL_BIN"):$PATH" journey --help >/dev/null
+PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --help >/dev/null
 
-echo "Smoke testing one-off uv tool run from the wheel..."
-HOME="$TOOL_HOME" uv tool run --from "$WHEEL_PATH" journey --help >/dev/null
+echo "Smoke testing one-off uv CLI run from the wheel..."
+HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --help >/dev/null
 
 echo "Package smoke tests passed."

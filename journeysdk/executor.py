@@ -14,6 +14,7 @@ from pathlib import Path
 from types import FrameType, TracebackType
 from typing import Any, NoReturn, ParamSpec, Protocol, TypeVar, cast
 
+from ._branch_handle import BranchHandle
 from .errors import (
     AmbiguousStepSelectionError,
     CallableExecutionError,
@@ -62,7 +63,12 @@ from .rehydration import (
 )
 from .types import JourneyEntrypoint, StepFunction
 from .utils import callable_ref
-from .validator import JourneyValidation, resolve_branch_call_site, validate_journey
+from .validator import (
+    BranchConditionSpec,
+    JourneyValidation,
+    resolve_branch_call_site,
+    validate_journey,
+)
 
 
 @dataclass
@@ -757,6 +763,15 @@ def _case_rehydration_maps(
     return step_keys
 
 
+def _branch_anchor_step_ids_for(*, plan: JourneyPlan) -> set[str]:
+    return {
+        node.start_from
+        for case_plan in plan.case_plans
+        for node in case_plan.nodes
+        if isinstance(node, BranchMarkerNode) and node.start_from is not None
+    }
+
+
 def _callable_execution_error_for_step(
     node: StepNode,
     exc: Exception,
@@ -1316,6 +1331,7 @@ class _RunSession:
         self.cursor = 0
         self._group_counter = 0
         self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
+        self._branch_handle_group_ids: dict[tuple[tuple[int, int], ...], str] = {}
         self.records: list[NodeExecutionRecord] = []
         self._record_indices: list[int] = []
         self._step_bindings: dict[str, StepBindingState] = {}
@@ -1339,11 +1355,7 @@ class _RunSession:
             for index, node in enumerate(case_plan.nodes)
             if isinstance(node, StepNode)
         }
-        self._branch_anchor_step_ids = {
-            node.start_from
-            for node in case_plan.nodes
-            if isinstance(node, BranchMarkerNode) and node.start_from is not None
-        }
+        self._branch_anchor_step_ids = _branch_anchor_step_ids_for(plan=journey_plan)
         self._runtime_step_result_ids: dict[int, set[str]] = {}
 
         if branch_anchor_seed is not None:
@@ -1553,6 +1565,7 @@ class _RunSession:
         self.cursor = 0
         self._group_counter = 0
         self._active_branch_chains.clear()
+        self._branch_handle_group_ids.clear()
         self._resume_dirty_step()
 
     def _has_record_for(self, node_index: int) -> bool:
@@ -1790,7 +1803,7 @@ class _RunSession:
         node_ids = self._runtime_step_result_ids.get(id(value))
         if not node_ids:
             raise TypeError(
-                "branch(start_from=...) accepts a value returned by an earlier step() call or None."
+                "branch(start_from=...) accepts a value returned by an earlier step() call. Omit start_from to start from scratch."
             )
         return _RuntimeStepAnchor(frozenset(node_ids))
 
@@ -2322,15 +2335,68 @@ class _RunSession:
         *,
         start_from: _RuntimeStepAnchor | None,
         frame: FrameType,
-    ) -> bool:
+    ) -> BranchHandle:
+        site = resolve_branch_call_site(frame)
+        handle_def = self.validation.branch_handle_definitions.get(site)
+        if handle_def is not None:
+            return BranchHandle(
+                definition_site=site,
+                name=handle_def.name,
+                start_from=start_from,
+            )
+
+        spec = self.validation.branch_conditions.get(site)
+        if spec is None or spec.handle_site is not None:
+            raise InvalidBranchUsageError(
+                "journey.branch(...) is only valid as a direct if/elif condition.",
+                hint="Use journey.branch(...) directly as `if journey.branch(...):`, or assign it to a variable and check that variable directly in an if/elif chain.",
+            )
+
+        return BranchHandle(
+            definition_site=site,
+            name=spec.branch_key,
+            start_from=start_from,
+        )
+
+    def branch_handle(self, *, handle: BranchHandle, frame: FrameType) -> bool:
         site = resolve_branch_call_site(frame)
         spec = self.validation.branch_conditions.get(site)
         if spec is None:
             raise InvalidBranchUsageError(
-                "journey.branch(...) is only valid as a direct if/elif condition.",
-                hint="Use journey.branch(...) directly as `if journey.branch(...):` or `elif journey.branch(...):`.",
+                "Branch handles are only valid as direct if/elif conditions.",
+                hint="Use the branch handle directly as `if branch_a:` or `elif branch_b:`.",
             )
 
+        expected_definition_site = spec.handle_site or site
+        if expected_definition_site != handle.definition_site:
+            raise InvalidBranchUsageError(
+                "Branch handle condition does not match the branch() call that created it.",
+                hint="Use the same branch handle variable directly in the if/elif chain where it was declared.",
+            )
+        return self._select_branch(
+            spec=spec,
+            start_from=cast(_RuntimeStepAnchor | None, handle.start_from),
+        )
+
+    def _group_id_for_branch_condition(
+        self,
+        spec: BranchConditionSpec,
+    ) -> str:
+        handle_group_key = spec.handle_group_key
+        if handle_group_key is None:
+            return self._next_group_id()
+        group_id = self._branch_handle_group_ids.get(handle_group_key)
+        if group_id is None:
+            group_id = self._next_group_id()
+            self._branch_handle_group_ids[handle_group_key] = group_id
+        return group_id
+
+    def _select_branch(
+        self,
+        *,
+        spec: BranchConditionSpec,
+        start_from: _RuntimeStepAnchor | None,
+    ) -> bool:
         state = self._active_branch_chains.get(spec.template_key)
         if spec.condition_index == 1:
             if state is not None:
@@ -2339,7 +2405,7 @@ class _RunSession:
                     hint="Keep journey.branch(...) in one direct if/elif chain without reusing it in helper callbacks.",
                 )
             state = _ActiveBranchChain(
-                group_id=self._next_group_id(),
+                group_id=self._group_id_for_branch_condition(spec),
                 seen_keys=[],
             )
             self._active_branch_chains[spec.template_key] = state

@@ -1,9 +1,9 @@
-"""Tutorial journey showing how to use the cloud-hosted email tool."""
+"""Tutorial journey showing how to use the cloud-hosted email touchpoint."""
 
 from __future__ import annotations
 
 from journeysdk import journey, step
-from journeysdk.tools.email import get_email_inbox, send_email, wait_for_email
+from journeysdk.touchpoints.email import get_email_inbox, send_email, wait_for_email
 
 EVENTS: list[str] = []
 

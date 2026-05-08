@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from journeysdk import journey, step
-from journeysdk.tools.playwright import open_page
+from journeysdk.touchpoints.playwright import open_page
 
 from docs.playwright_resume_journey._auth_demo import ensure_demo_server
 

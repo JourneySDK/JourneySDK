@@ -8,7 +8,7 @@ import urllib.request
 import journeysdk as journey
 import pytest
 from journeysdk.models import StepNode
-from journeysdk.tools import docker as journey_docker
+from journeysdk.touchpoints import docker as journey_docker
 
 docker_compose_module = importlib.import_module(
     "docs.docker_compose_journey.docker_compose_journey"

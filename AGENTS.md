@@ -4,8 +4,8 @@
 
 Journey SDK is an AI-assisted workflow-as-code QA toolkit for long, branching, async, cross-system user journeys.
 Authors write one journey spec in ordinary Python, compile user paths with `branch()`, replay from saved step
-boundaries with `branch(start_from=...)`, interrupt long waits with `--state`, use cloud tools from
-`journeysdk.tools`, and describe browser work with `page.prompt(...)`.
+boundaries with `branch(start_from=...)`, interrupt long waits with `--state`, use cloud touchpoints from
+`journeysdk.touchpoints`, and describe browser work with `page.prompt(...)`.
 
 See `README.md` for the deeper product description, use cases, tutorial context, and glossary. Keep the
 public-facing landing page, `README.md`, and `docs/` aligned when product messaging or SDK surfaces change; docs and
@@ -16,8 +16,8 @@ branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydr
 ## Key files
 
 - `journeysdk/api.py`: SDK API that QA can use to write journeys
-- `journeysdk/tools/email.py`: official email tool entrypoint
-- `journeysdk/tools/webhook.py`: official webhook tool entrypoint
+- `journeysdk/touchpoints/email.py`: official email touchpoint entrypoint
+- `journeysdk/touchpoints/webhook.py`: official webhook touchpoint entrypoint
 - `journeysdk/planner.py`: journey compilation (aka planning)
 - `journeysdk/executor.py`: execution of a compiled journey
 - `journeysdk/cli.py`: CLI implementation
@@ -46,29 +46,29 @@ controls visibility with `--log-level debug|info|warning|error|off`.
 - **Developer-centric**: The developer-facing interfaces (API and CLI) must be straightforward and intuitive.
 - **Resumable tests**: With CLI `--state`, first Ctrl-C lets the active step finish and resume after it; second Ctrl-C
   interrupts the dirty step, which later restarts from the top with saved inputs.
-- **Extensible design**: There are official tools, and everyone is welcome to add their own. Adding new tools must be
+- **Extensible design**: There are official touchpoints, and everyone is welcome to add their own. Adding new touchpoints must be
   straightforward and intuitive.
 - **Clear documentation**: To make it developer-friendly, all docs must be written in plain English, with enough
   context to understand it, even by non-senior engineers.
-- **Consistent cloud semantics**: Official cloud tools should share the same auth and ownership rules across resource
+- **Consistent cloud semantics**: Official cloud touchpoints should share the same auth and ownership rules across resource
   types.
 
-## Cloud tool pattern
+## Cloud touchpoint pattern
 
-- Journey SDK cloud tools authenticate control-plane calls with `JOURNEY_CLOUD_API_KEY` against a Journey Cloud base
+- Journey SDK cloud touchpoints authenticate control-plane calls with `JOURNEY_CLOUD_API_KEY` against a Journey Cloud base
   URL.
 - Compilation should stay side-effect free; authentication happens only at execution time.
 - The first API key to reserve a cloud-managed handle should own it from then on.
-- That first-key-wins rule should be consistent across cloud tools, whether the reserved identifier is a webhook path,
+- That first-key-wins rule should be consistent across cloud touchpoints, whether the reserved identifier is a webhook path,
   a mail inbox, or another cloud-managed handle.
 - Callback URLs may remain unauthenticated when the generated URL itself is the capability used by the system
   under test.
 
 ## Prompt memory pattern
 
-- Official tools with AI-driven `prompt(...)` methods should accept `memory: str | None = None` and use the shared
+- Official touchpoints with AI-driven `prompt(...)` methods should accept `memory: str | None = None` and use the shared
   helpers in `journeysdk._prompt_memory`.
-- Official tools with AI-driven `prompt(...)` methods should accept `output=...` for optional structured output and
+- Official touchpoints with AI-driven `prompt(...)` methods should accept `output=...` for optional structured output and
   use the shared helpers in `journeysdk._prompt_output`. Omitted `output` stores plain text on `result.output`;
   explicit `output` uses native model structured-output support and stores a dictionary on `result.output`.
 - If an AI-driven `prompt(...)` cannot complete the requested task because the observed app state blocks it, the prompt
@@ -90,10 +90,10 @@ Keep dependency direction one-way so high-level orchestration does not depend on
 - Core orchestration modules: `journeysdk/api.py`, `journeysdk/validator.py`, `journeysdk/planner.py`,
   `journeysdk/executor.py`, `journeysdk/state.py`, `journeysdk/discovery.py`, and `journeysdk/cli.py`.
 - Feature/helper modules: `journeysdk/_prompt_memory.py`, `journeysdk/_prompt_engine.py`,
-  `journeysdk/_prompt_output.py`, and everything under `journeysdk/tools/`.
+  `journeysdk/_prompt_output.py`, and everything under `journeysdk/touchpoints/`.
 
 Core orchestration modules may import foundational modules and other core orchestration modules. They must not import
-feature/helper modules or tool modules. Feature/helper modules may import foundational modules and narrow hooks exposed
+feature/helper modules or touchpoint modules. Feature/helper modules may import foundational modules and narrow hooks exposed
 by core modules when they need to plug into planning or execution. `journeysdk/__init__.py` is the composition/export
 root and may import modules to assemble the public package.
 
@@ -112,7 +112,7 @@ _LOGGER = get_logger("component")
 _LOGGER.info(
     "event_name",
     "machine-readable message",
-    pretty=pretty_row("Component", "human readable detail", indent=8, label_width=27, style="tool"),
+    pretty=pretty_row("Component", "human readable detail", indent=8, label_width=27, style="touchpoint"),
     useful_field="value",
 )
 ```
@@ -125,7 +125,7 @@ event emitter instead. See `CONTRIBUTING.md` for the full Logger API rules.
 
 - Keep docs (including this `AGENTS.md`, `README.md`, and `docs/`), public-facing landing-page copy, plus tests,
   aligned with behavior changes.
-- Use `journeysdk.logger.get_logger(...)` for SDK, tool, or tutorial diagnostics instead of ad hoc `print(...)`.
+- Use `journeysdk.logger.get_logger(...)` for SDK, touchpoint, or tutorial diagnostics instead of ad hoc `print(...)`.
 - Keep logger dependencies inverted: `journeysdk/logger.py` may know generic concepts like levels, redaction, rows, and
   styles, but it must not branch on component names, Journey event names, or event field semantics. Put human `pretty=`
   formatting beside the module that emits the event.
@@ -134,7 +134,7 @@ event emitter instead. See `CONTRIBUTING.md` for the full Logger API rules.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
 - Whenever Journey CLI behavior, docs, examples, or journey authoring guidance changes, update
   `skills/journey-developer/SKILL.md` in the same change.
-- Keep the shared cloud auth and reservation pattern documented anywhere an official cloud tool is introduced.
+- Keep the shared cloud auth and reservation pattern documented anywhere an official cloud touchpoint is introduced.
 - Keep docstrings in `journeysdk/api.py` up to date (it is the SDK API).
 - Prefer adding or updating tests before changing planner, executor, or validator semantics.
 - When changing step-label behavior, check both full execution and targeted `--step` execution.

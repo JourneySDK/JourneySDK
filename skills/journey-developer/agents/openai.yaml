@@ -1,4 +1,4 @@
 interface:
   display_name: "Journey Developer"
   short_description: "Develop Journey SDK testing journeys."
-  default_prompt: "Use this skill to create, run, debug, and maintain Journey SDK testing journeys with journeysdk primitives, official journeysdk.tools integrations, and the Journey CLI."
+  default_prompt: "Use this skill to create, run, debug, and maintain Journey SDK testing journeys with journeysdk primitives, official journeysdk.touchpoints integrations, and the Journey CLI."

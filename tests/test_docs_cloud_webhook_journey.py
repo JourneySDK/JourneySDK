@@ -7,7 +7,7 @@ import journeysdk as journey
 import pytest
 from journeysdk.models import StepNode
 
-from journeysdk.tools._webhook_cloud import (
+from journeysdk.touchpoints._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
 )

@@ -1,8 +1,10 @@
-# 05 Journey Cloud Integrations
+# 05 Journey Cloud Touchpoints
 
 Some journeys need resources that should exist outside the local test process: a webhook URL the system under test can reach, or an inbox hosted by Journey Cloud.
 
-That is where Journey Cloud integrations fit.
+That is where Journey Cloud touchpoints fit. A touchpoint is a system, service, or channel that participates in the
+tested journey; these hosted touchpoints let one Journey spec drive the app and verify side effects outside the
+browser.
 
 Two rules matter before anything else:
 

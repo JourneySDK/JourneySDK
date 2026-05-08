@@ -55,22 +55,22 @@ That script:
 
 ## Public Typing
 
-Public SDK and official tool APIs should avoid `Any`. Prefer named aliases or protocols for
+Public SDK and official touchpoint APIs should avoid `Any`. Prefer named aliases or protocols for
 callable roles, `TypedDict` for dictionary payloads, and `object` when callers must narrow an
 unknown value themselves. The public typing contract is covered by
 `tests/test_public_typing_contract.py`.
 
-## Tool Lifecycle Protocols
+## Touchpoint Lifecycle Protocols
 
-Official tools that open live resources should follow the Journey rehydration
+Official touchpoints that open live resources should follow the Journey rehydration
 protocol and step lifecycle documented in the README. Lifecycle-aware
-tool tests should cover successful cleanup of returned handles, nested returned
+touchpoint tests should cover successful cleanup of returned handles, nested returned
 handles, cleanup failure, the outside-step guard for resource helpers, explicit
 cleanup for non-returned live resources, and rehydration of returned values.
 
 ## Prompt Memory Pattern
 
-Official tools that add an AI-driven `prompt(...)` method should use the shared helpers in
+Official touchpoints that add an AI-driven `prompt(...)` method should use the shared helpers in
 `journeysdk._prompt_memory` instead of inventing their own storage. The method should accept
 `memory: str | None = None`, respect `--no-memory` / `execute(..., no_memory=True)` and
 `--no-memory-update` / `execute(..., no_memory_update=True)`, and store only compact replay code and checks from
@@ -88,7 +88,7 @@ put that validation in the helper module owned by the feature and register it as
 
 ## Logger API
 
-Journey-owned output must go through `journeysdk.logger`; do not use direct `print(...)` calls for SDK, CLI, tool, or
+Journey-owned output must go through `journeysdk.logger`; do not use direct `print(...)` calls for SDK, CLI, touchpoint, or
 tutorial diagnostics. The logger owns levels, stdout routing, redaction, `pretty` / `structured` / `jsonl` formatting,
 and `--log-level off` suppression.
 
@@ -99,12 +99,12 @@ human-facing `pretty=` text.
 ```python
 from journeysdk.logger import get_logger, pretty_line, pretty_row
 
-_LOGGER = get_logger("my-tool")
+_LOGGER = get_logger("my-touchpoint")
 
 _LOGGER.info(
     "resource_start",
     "starting resource",
-    pretty=pretty_row("My tool", "starting resource", indent=8, label_width=27, style="tool"),
+    pretty=pretty_row("My touchpoint", "starting resource", indent=8, label_width=27, style="touchpoint"),
     resource_id=resource_id,
 )
 ```
@@ -117,7 +117,7 @@ event name, message, and fields, but never the `pretty=` value. Use `pretty=` on
 - `pretty="text"` emits one human line.
 - `pretty_line(...)` and `pretty_row(...)` emit styled, aligned human lines; pass a list for multi-line output.
 
-ANSI color is applied only for TTY streams and only from explicit generic styles such as `heading`, `tool`, `accent`,
+ANSI color is applied only for TTY streams and only from explicit generic styles such as `heading`, `touchpoint`, `accent`,
 `code`, `success`, `warning`, `error`, and `muted`. Captured output and CI stay plain ASCII. Sensitive fields and
 password-like text are redacted in all formats, but callers should still avoid putting secrets in prose.
 

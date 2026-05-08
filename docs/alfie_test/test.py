@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from journeysdk import journey, step
-from journeysdk.tools.playwright import JourneyPlaywrightPage, open_page
+from journeysdk.touchpoints.playwright import JourneyPlaywrightPage, open_page
 
 
-def first() -> JourneyPlaywrightPage:
+def sign_in() -> JourneyPlaywrightPage:
     page = open_page("https://app.staging.heyalfie.com/", headless=False)
     page.prompt('Sign in as e2etest@heyalfie.com using password "1212" (or "1111" if not working). Expect no errors.', memory='sign-in')
     return page
@@ -18,5 +18,5 @@ def start_chatting(saved_page: JourneyPlaywrightPage) -> JourneyPlaywrightPage:
 
 @journey
 def playwright_resume_journey() -> None:
-    page = step(first)
+    page = step(sign_in)
     # step(start_chatting, page)

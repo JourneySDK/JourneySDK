@@ -1,4 +1,4 @@
-"""Generic prompt engine helpers for AI-driven Journey tools."""
+"""Generic prompt engine helpers for AI-driven Journey touchpoints."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ class PromptMaxStepsError(PromptControlError):
     """The prompt exhausted the configured step budget."""
 
 
-class PromptToolContext:
+class PromptActionContext:
     def __init__(self, session: PromptEngineSession) -> None:
         self._session = session
 
@@ -108,7 +108,7 @@ class PromptToolContext:
         self._session.record_memory_log(record)
 
     def observation_or_stop(self, *, step_index: int) -> list[dict[str, object]]:
-        return self._session.tool_observation_or_stop(step_index=step_index)
+        return self._session.action_observation_or_stop(step_index=step_index)
 
     def fail_session(self, *, step_index: int, reason: str) -> None:
         self._session.raise_prompt_failed(step_index=step_index, reason=reason)
@@ -131,7 +131,7 @@ class PromptEngineSession:
         system_prompt: str,
         logger: JourneyLogger,
         build_observation: Callable[[], PromptObservation],
-        build_tools: Callable[[PromptToolContext], list[object]],
+        build_actions: Callable[[PromptActionContext], list[object]],
         load_model: Callable[[str], object] | None = None,
         create_agent: Callable[..., object] | None = None,
         before_final_observation: Callable[[], None] | None = None,
@@ -151,7 +151,7 @@ class PromptEngineSession:
         self._system_prompt = system_prompt
         self._logger = logger
         self._build_observation = build_observation
-        self._build_tools = build_tools
+        self._build_actions = build_actions
         self._load_model = load_model or _load_langchain_model
         self._create_agent = create_agent or _create_langchain_agent
         self._before_final_observation = before_final_observation
@@ -177,7 +177,7 @@ class PromptEngineSession:
         self._prompt_model = self._load_model(self._model)
         agent = self._create_agent(
             self._prompt_model,
-            tools=self._build_tools(PromptToolContext(self)),
+            tools=self._build_actions(PromptActionContext(self)),
             system_prompt=self._system_prompt,
         )
         result = self._request_agent_result(
@@ -200,7 +200,7 @@ class PromptEngineSession:
     def record_memory_log(self, record: JourneyLogRecord) -> None:
         self._memory_log_records.append(record)
 
-    def tool_observation_or_stop(
+    def action_observation_or_stop(
         self,
         *,
         step_index: int,
@@ -299,7 +299,7 @@ class PromptEngineSession:
                 *self._render_text_sections(observation.sections),
                 *output_section,
                 "",
-                "Call a tool to continue work, or return the final answer directly when complete.",
+                "Use an available action to continue work, or return the final answer directly when complete.",
             ]
         )
         content = [
