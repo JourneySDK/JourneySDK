@@ -186,6 +186,21 @@ def _step_exit_objects_from_value(value: Any) -> list[_StepExitObject]:
     return objects
 
 
+def _dedupe_step_exit_objects(
+    *object_groups: tuple[_StepExitObject, ...],
+) -> tuple[_StepExitObject, ...]:
+    objects: list[_StepExitObject] = []
+    seen: set[int] = set()
+    for group in object_groups:
+        for value in group:
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            objects.append(value)
+    return tuple(objects)
+
+
 @dataclass
 class _PausedExecution:
     paused_step: PausedStepState
@@ -2132,6 +2147,18 @@ class _RunSession:
             and lifecycle.phase == _STEP_LIFECYCLE_EXECUTION
         )
 
+    def _register_step_exit_object(self, value: _StepExitObject) -> None:
+        lifecycle = self._active_step_lifecycle
+        if lifecycle is None or lifecycle.phase != _STEP_LIFECYCLE_EXECUTION:
+            raise InvalidBranchUsageError(
+                "Step-exit cleanup objects can only be registered while a step is running.",
+                hint=(
+                    "Call lifecycle-aware touchpoints from inside a function passed to "
+                    "step(...), not during planning, module import, or between steps."
+                ),
+            )
+        lifecycle._register_exit_object(value)
+
     def prompt_memory_root(self) -> Path | None:
         return self._prompt_memory_root
 
@@ -2474,6 +2501,7 @@ class _StepLifecycle:
     phase: str | None = None
     attempt: int = 0
     started_at: float = 0.0
+    registered_exit_objects: list[_StepExitObject] = field(default_factory=list)
     exit_objects: tuple[_StepExitObject, ...] = ()
     _success_committed: bool = False
 
@@ -2530,6 +2558,13 @@ class _StepLifecycle:
         try:
             return fn(*bound_args, **bound_kwargs)
         except KeyboardInterrupt as exc:
+            cleanup_failures = self.session._close_step_exit_objects(
+                tuple(self.registered_exit_objects),
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, cleanup_failures)
             self.session._clear_step_lifecycle(self)
             self.session._observe_step_interrupted(
                 self.node,
@@ -2540,6 +2575,13 @@ class _StepLifecycle:
             )
             raise
         except Exception as exc:  # pragma: no cover - surfaced to caller
+            cleanup_failures = self.session._close_step_exit_objects(
+                tuple(self.registered_exit_objects),
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, cleanup_failures)
             self.session._clear_step_lifecycle(self)
             self.session._handle_step_exception(
                 self.node,
@@ -2548,25 +2590,43 @@ class _StepLifecycle:
                 started_at=self.started_at,
                 exc=exc,
             )
-        except BaseException:
+        except BaseException as exc:
+            cleanup_failures = self.session._close_step_exit_objects(
+                tuple(self.registered_exit_objects),
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, cleanup_failures)
             self.session._clear_step_lifecycle(self)
             raise
         raise AssertionError("unreachable")
 
+    def _register_exit_object(self, value: _StepExitObject) -> None:
+        if all(id(value) != id(existing) for existing in self.registered_exit_objects):
+            self.registered_exit_objects.append(value)
+
+    def _exit_objects_for_output(self, output: Any) -> tuple[_StepExitObject, ...]:
+        return _dedupe_step_exit_objects(
+            tuple(self.registered_exit_objects),
+            tuple(_step_exit_objects_from_value(output)),
+        )
+
     def _store(self, output: Any) -> StepBindingState:
         self._enter(_STEP_LIFECYCLE_STORAGE)
+        exit_objects = self._exit_objects_for_output(output)
         try:
             binding = self.session._set_step_result(self.node, output)
         except Exception as exc:
             cleanup_failures = self.session._close_step_exit_objects(
-                tuple(_step_exit_objects_from_value(output)),
+                exit_objects,
                 type(exc),
                 exc,
                 exc.__traceback__,
             )
             _add_cleanup_failure_notes(exc, cleanup_failures)
             raise
-        self.exit_objects = tuple(_step_exit_objects_from_value(output))
+        self.exit_objects = exit_objects
         return binding
 
     def _pre_exit(self, output: Any, binding: StepBindingState) -> bool:

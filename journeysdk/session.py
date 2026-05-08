@@ -20,7 +20,7 @@ def _require_executing_step(owner: str) -> None:
     """Raise unless code is running inside a step function body.
 
     Official touchpoints use this guard before opening live resources that Journey
-    can only clean up from a returned step value.
+    owns for the duration of the active step.
     """
 
     session = get_session()
@@ -33,6 +33,23 @@ def _require_executing_step(owner: str) -> None:
                 "step(...), not during planning, module import, or between steps."
             ),
         )
+
+
+def _register_step_exit_object(owner: str, value: Any) -> None:
+    """Register a live touchpoint resource for step-exit cleanup."""
+
+    _require_executing_step(owner)
+    session = get_session()
+    register = getattr(session, "_register_step_exit_object", None)
+    if not callable(register):
+        raise InvalidBranchUsageError(
+            f"{owner}(...) could not register its step-exit cleanup.",
+            hint=(
+                "Call lifecycle-aware touchpoints from inside a function passed to "
+                "step(...), not during planning, module import, or between steps."
+            ),
+        )
+    register(value)
 
 
 @contextmanager

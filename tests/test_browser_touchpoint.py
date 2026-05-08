@@ -737,6 +737,63 @@ def test_open_page_opens_url_string_and_cleans_returned_page(
     assert "opened chromium http://example.test/login" in log_output
 
 
+def test_open_page_cleans_unreturned_page_at_step_exit(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(monkeypatch, events)
+
+    def assert_login() -> bool:
+        page = journey_browser.open_page("http://example.test/login")
+        assert isinstance(page, journey_browser.JourneyBrowserPage)
+        events.append("inside")
+        return True
+
+    def journey():
+        journey_sdk.step(assert_login)
+
+    journey_sdk.execute(journey)
+
+    assert events == [
+        "playwright_enter",
+        ("launch", True),
+        "new_context",
+        "new_page",
+        ("goto", "http://example.test/login", "load"),
+        "inside",
+        ("capture_state", "http://example.test/login"),
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
+
+
+def test_open_page_cleans_unreturned_page_when_step_fails(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(monkeypatch, events)
+
+    def assert_login() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        raise RuntimeError("assertion failed")
+
+    def journey():
+        journey_sdk.step(assert_login)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    assert "assertion failed" in str(exc_info.value)
+    assert events == [
+        "playwright_enter",
+        ("launch", True),
+        "new_context",
+        "new_page",
+        ("goto", "http://example.test/login", "load"),
+        ("capture_state", "http://example.test/login"),
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
+
+
 def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypatch):
     events: list[object] = []
     _install_fake_playwright(monkeypatch, events)

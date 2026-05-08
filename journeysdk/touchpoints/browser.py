@@ -13,7 +13,7 @@ from typing import Literal, TypedDict, cast
 
 from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
-from journeysdk.session import _require_executing_step
+from journeysdk.session import _register_step_exit_object, _require_executing_step
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
 
@@ -419,6 +419,7 @@ def open_page(
         if local_storage:
             page.evaluate(_REHYDRATE_STORAGE_SCRIPT, local_storage)
             page.reload(wait_until="load")
+        _register_step_exit_object("open_page", page)
         _LOGGER.info(
             "open_page_success",
             "browser page opened",

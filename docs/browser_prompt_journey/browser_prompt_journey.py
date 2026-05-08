@@ -12,17 +12,14 @@ def capture_popup_title() -> dict[str, object]:
     """Use a multimodal LLM to open the sign-in popup and summarize it."""
 
     page = open_page(f"{ensure_demo_server()}/login")
-    try:
-        return page.prompt(
-            'click on a "Sign in" button and get the title of the opened popup',
-            model="anthropic:claude-sonnet-4-5",
-            memory="sign-in-popup",
-            output={
-                "popup_title": "The title of the opened popup.",
-            },
-        )
-    finally:
-        page.__exit__(None, None, None)
+    return page.prompt(
+        'click on a "Sign in" button and get the title of the opened popup',
+        model="anthropic:claude-sonnet-4-5",
+        memory="sign-in-popup",
+        output={
+            "popup_title": "The title of the opened popup.",
+        },
+    )
 
 
 def assert_prompt_result(result: dict[str, object]) -> bool:

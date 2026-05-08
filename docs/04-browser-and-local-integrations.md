@@ -23,19 +23,14 @@ Read these files together:
 The browser helper is still just a normal Python function:
 
 ```python
-def assert_demo_homepage() -> bool:
-    from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.browser import ensure_browser_installed
+from journeysdk.touchpoints.browser import open_page
 
-    ensure_browser_installed()
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        page = browser.new_page()
-        page.goto(_DEMO_PAGE_URL, wait_until="load")
-        title = page.title()
-        buttons = page.get_by_role("button")
-        ...
-        browser.close()
+
+def assert_demo_homepage() -> bool:
+    page = open_page(_DEMO_PAGE_URL)
+    title = page.title()
+    buttons = page.get_by_role("button")
+    ...
     return True
 ```
 
@@ -73,8 +68,9 @@ def simple_journey() -> None:
         step(assert_local_file_contents, file_info)
 ```
 
-`ensure_browser_installed()` and `open_page()` automatically download Chromium the first time they need it in the
-current environment. That first browser launch needs network access and can take a moment.
+`open_page()` launches the browser, Journey closes it at the step-exit boundary, and Chromium is downloaded
+automatically the first time it is needed in the current environment. That first browser launch needs network access
+and can take a moment.
 
 ### Execute Only the File Branch
 
@@ -230,18 +226,15 @@ def continue_authenticated_dashboard(
     pause_seconds: float,
 ) -> dict[str, str]:
     page = open_page(session)
-    try:
-        auth_state = page.locator("#auth-state").text_content()
-        ...
-        time.sleep(pause_seconds)
-        page.get_by_role("button", name="Complete protected action").click()
-        ...
-        return {
-            "auth_state": auth_state,
-            "status": status_text or "",
-        }
-    finally:
-        page.__exit__(None, None, None)
+    auth_state = page.locator("#auth-state").text_content()
+    ...
+    time.sleep(pause_seconds)
+    page.get_by_role("button", name="Complete protected action").click()
+    ...
+    return {
+        "auth_state": auth_state,
+        "status": status_text or "",
+    }
 ```
 
 The journey is still small:
@@ -345,17 +338,14 @@ returned object. See the [Playwright Page API](https://playwright.dev/python/doc
 ```python
 def capture_popup_title() -> dict[str, object]:
     page = open_page(f"{ensure_demo_server()}/login")
-    try:
-        return page.prompt(
-            'click on a "Sign in" button and get the title of the opened popup',
-            model="anthropic:claude-sonnet-4-5",
-            memory="sign-in-popup",
-            output={
-                "popup_title": "The title of the opened popup.",
-            },
-        )
-    finally:
-        page.__exit__(None, None, None)
+    return page.prompt(
+        'click on a "Sign in" button and get the title of the opened popup',
+        model="anthropic:claude-sonnet-4-5",
+        memory="sign-in-popup",
+        output={
+            "popup_title": "The title of the opened popup.",
+        },
+    )
 ```
 
 The next step can assert against the structured output:

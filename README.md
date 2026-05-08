@@ -160,14 +160,11 @@ from journeysdk.touchpoints.browser import open_page
 
 def checkout(cart, inbox, method) -> dict[str, object]:
     page = open_page(app_checkout_url(cart))
-    try:
-        return page.prompt(
-            f"Check out with {method}. Send receipts to {inbox.address}.",
-            memory="checkout",
-            output={"order_id": "The id of the created order."},
-        )
-    finally:
-        page.__exit__(None, None, None)
+    return page.prompt(
+        f"Check out with {method}. Send receipts to {inbox.address}.",
+        memory="checkout",
+        output={"order_id": "The id of the created order."},
+    )
 
 
 @journey
@@ -421,17 +418,14 @@ from journeysdk.touchpoints.browser import open_page
 
 def capture_popup_title() -> dict[str, object]:
     page = open_page("https://app.example/login")
-    try:
-        return page.prompt(
-            'click on a "Sign in" button and get the title of the opened popup',
-            model="anthropic:claude-sonnet-4-5",
-            memory="sign-in-popup",
-            output={
-                "popup_title": "The title of the opened popup.",
-            },
-        )
-    finally:
-        page.__exit__(None, None, None)
+    return page.prompt(
+        'click on a "Sign in" button and get the title of the opened popup',
+        model="anthropic:claude-sonnet-4-5",
+        memory="sign-in-popup",
+        output={
+            "popup_title": "The title of the opened popup.",
+        },
+    )
 ```
 
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or

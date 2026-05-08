@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from journeysdk import branch, journey, step
+from journeysdk.touchpoints.browser import open_page
 from journeysdk.touchpoints.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 _DEMO_PAGE_URL = Path(__file__).with_name("demo_site.html").resolve().as_uri()
@@ -16,44 +17,28 @@ _STORED_FILE = Path(tempfile.gettempdir()) / "journey-demo-downloads" / _STORED_
 
 
 def assert_demo_homepage() -> bool:
-    from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.browser import ensure_browser_installed
-
-    ensure_browser_installed()
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        page = browser.new_page()
-        page.goto(_DEMO_PAGE_URL, wait_until="load")
-        title = page.title()
-        buttons = page.get_by_role("button")
-        if title != "journey demo":
-            raise AssertionError(f"Expected page title 'journey demo', got '{title}'.")
-        if buttons.count() != 2:
-            raise AssertionError(f"Expected exactly 2 buttons, got {buttons.count()}.")
-        if not page.get_by_role("button", name="Trigger endpoint A").is_visible():
-            raise AssertionError("Missing 'Trigger endpoint A' button.")
-        if not page.get_by_role("button", name="Store a local file").is_visible():
-            raise AssertionError("Missing 'Store a local file' button.")
-        browser.close()
+    page = open_page(_DEMO_PAGE_URL)
+    title = page.title()
+    buttons = page.get_by_role("button")
+    if title != "journey demo":
+        raise AssertionError(f"Expected page title 'journey demo', got '{title}'.")
+    if buttons.count() != 2:
+        raise AssertionError(f"Expected exactly 2 buttons, got {buttons.count()}.")
+    if not page.get_by_role("button", name="Trigger endpoint A").is_visible():
+        raise AssertionError("Missing 'Trigger endpoint A' button.")
+    if not page.get_by_role("button", name="Store a local file").is_visible():
+        raise AssertionError("Missing 'Store a local file' button.")
     return True
 
 
 def click_trigger_endpoint_a(endpoint_url: str) -> bool:
-    from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.browser import ensure_browser_installed
-
-    ensure_browser_installed()
     page_url = f"{_DEMO_PAGE_URL}?webhookUrl={quote(endpoint_url, safe='')}"
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        page = browser.new_page()
-        page.goto(page_url, wait_until="load")
-        page.get_by_role("button", name="Trigger endpoint A").click()
-        page.wait_for_function(
-            "() => document.getElementById('status').textContent === 'Endpoint A sent'"
-        )
-        status_text = page.locator("#status").text_content()
-        browser.close()
+    page = open_page(page_url)
+    page.get_by_role("button", name="Trigger endpoint A").click()
+    page.wait_for_function(
+        "() => document.getElementById('status').textContent === 'Endpoint A sent'"
+    )
+    status_text = page.locator("#status").text_content()
     if status_text != "Endpoint A sent":
         raise AssertionError(f"Expected status 'Endpoint A sent', got '{status_text}'.")
     return True
@@ -64,25 +49,15 @@ def click_store_local_file() -> bool:
     if _STORED_FILE.exists():
         _STORED_FILE.unlink()
 
-    from playwright.sync_api import sync_playwright
-    from journeysdk.touchpoints.browser import ensure_browser_installed
-
-    ensure_browser_installed()
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        context = browser.new_context(accept_downloads=True)
-        page = context.new_page()
-        page.goto(_DEMO_PAGE_URL, wait_until="load")
-        with page.expect_download() as download_info:
-            page.get_by_role("button", name="Store a local file").click()
-        download = download_info.value
-        download.save_as(str(_STORED_FILE))
-        page.wait_for_function(
-            "() => document.getElementById('status').textContent === 'Local file saved'"
-        )
-        status_text = page.locator("#status").text_content()
-        context.close()
-        browser.close()
+    page = open_page(_DEMO_PAGE_URL)
+    with page.expect_download() as download_info:
+        page.get_by_role("button", name="Store a local file").click()
+    download = download_info.value
+    download.save_as(str(_STORED_FILE))
+    page.wait_for_function(
+        "() => document.getElementById('status').textContent === 'Local file saved'"
+    )
+    status_text = page.locator("#status").text_content()
     if status_text != "Local file saved":
         raise AssertionError(f"Expected status 'Local file saved', got '{status_text}'.")
     return True
