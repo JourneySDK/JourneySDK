@@ -99,6 +99,20 @@ class _FakeAgent:
                 )
 
 
+class _FailingAgent:
+    def invoke(
+        self,
+        payload: dict[str, object],
+        *,
+        config: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del payload, config
+        raise RuntimeError(
+            "Could not resolve authentication method. Expected one of api_key, "
+            "auth_token, or credentials to be set."
+        )
+
+
 def _fake_create_agent(
     model: object,
     *,
@@ -107,6 +121,16 @@ def _fake_create_agent(
 ) -> _FakeAgent:
     assert isinstance(model, _FakePromptModel)
     return _FakeAgent(model, tools=tools, system_prompt=system_prompt)
+
+
+def _failing_create_agent(
+    model: object,
+    *,
+    tools: list[object],
+    system_prompt: str,
+) -> _FailingAgent:
+    del model, tools, system_prompt
+    return _FailingAgent()
 
 
 def _action_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
@@ -229,6 +253,41 @@ def test_prompt_engine_runs_action_adapter_and_persists_action_records(
             body="Compiled from 1 log record.",
         ),
     )
+
+
+def test_prompt_engine_model_call_auth_failure_has_actionable_hint() -> None:
+    def build_observation() -> PromptObservation:
+        return PromptObservation(
+            signature="fake://ready",
+            records=(),
+            sections=(
+                PromptTextSection(
+                    heading="Fake visible text",
+                    text="Ready",
+                ),
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match="failed to call model") as exc_info:
+        PromptEngineSession(
+            component="fake-action",
+            owner="fake.prompt(...)",
+            instruction="echo hello",
+            model="anthropic:claude-sonnet-4-6",
+            max_steps=3,
+            memory_path=None,
+            output_schema=None,
+            system_prompt="Use fake_echo when more work is needed.",
+            logger=get_logger("fake-prompt"),
+            build_observation=build_observation,
+            build_actions=lambda context: [],
+            load_model=lambda model_name: object(),
+            create_agent=_failing_create_agent,
+        ).run()
+
+    hint = getattr(exc_info.value, "hint", "")
+    assert "ANTHROPIC_API_KEY" in hint
+    assert "JOURNEY_BROWSER_PROMPT_MODEL=anthropic:claude-sonnet-4-6" in hint
 
 
 def test_prompt_memory_round_trips_markdown_entry(tmp_path: Path) -> None:

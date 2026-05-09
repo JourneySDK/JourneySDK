@@ -1071,8 +1071,11 @@ def test_journey_browser_prompt_requires_model_or_env(monkeypatch):
     context.pages.append(page)
     monkeypatch.delenv(journey_browser_prompt.JOURNEY_BROWSER_PROMPT_MODEL_ENV, raising=False)
 
-    with pytest.raises(RuntimeError, match="requires model=..."):
+    with pytest.raises(RuntimeError, match="requires model=...") as exc_info:
         page.prompt("click sign in")
+    hint = getattr(exc_info.value, "hint", "")
+    assert "export JOURNEY_BROWSER_PROMPT_MODEL" in hint
+    assert "not `export=NAME=value`" in hint
 
 
 def test_journey_browser_prompt_reports_langchain_model_initialization_failure(
@@ -1101,6 +1104,39 @@ def test_journey_browser_prompt_reports_langchain_model_initialization_failure(
     with pytest.raises(RuntimeError, match="failed to initialize LangChain model") as exc_info:
         page.prompt("click sign in", model="openai:gpt-4.1-mini")
     assert "missing provider package" in str(exc_info.value)
+
+
+def test_journey_browser_prompt_model_initialization_auth_failure_has_hint(
+    monkeypatch,
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+
+    def fail_init_chat_model(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RuntimeError(
+            "Could not resolve authentication method. Expected one of api_key, "
+            "auth_token, or credentials to be set."
+        )
+
+    monkeypatch.setattr(
+        journey_prompt_engine,
+        "init_chat_model",
+        fail_init_chat_model,
+    )
+
+    with pytest.raises(RuntimeError, match="failed to initialize LangChain model") as exc_info:
+        page.prompt("click sign in", model="anthropic:claude-sonnet-4-6")
+    hint = getattr(exc_info.value, "hint", "")
+    assert "ANTHROPIC_API_KEY" in hint
+    assert "JOURNEY_BROWSER_PROMPT_MODEL=anthropic:claude-sonnet-4-6" in hint
 
 
 def test_journey_browser_prompt_delegates_action_execution_to_langchain_agent():

@@ -94,6 +94,21 @@ class PromptMaxStepsError(PromptControlError):
     """The prompt exhausted the configured step budget."""
 
 
+_PROMPT_PROVIDER_ENV_VARS = {
+    "anthropic": ("ANTHROPIC_API_KEY", "Anthropic"),
+    "openai": ("OPENAI_API_KEY", "OpenAI"),
+}
+
+_AUTH_FAILURE_TERMS = (
+    "api_key",
+    "auth_token",
+    "authentication",
+    "authorization",
+    "credentials",
+    "x-api-key",
+)
+
+
 class PromptActionContext:
     def __init__(self, session: PromptEngineSession) -> None:
         self._session = session
@@ -363,8 +378,9 @@ class PromptEngineSession:
         except Exception as exc:
             if _is_langchain_recursion_limit_error(exc):
                 self._raise_max_steps()
-            raise RuntimeError(
-                f"{self._owner} failed to call model {self._model!r}: {exc}"
+            raise _runtime_error_with_hint(
+                f"{self._owner} failed to call model {self._model!r}: {exc}",
+                hint=_prompt_model_failure_hint(self._model, exc),
             ) from exc
         return response
 
@@ -512,9 +528,10 @@ class PromptEngineSession:
                 )
             )
         except Exception as exc:
-            raise RuntimeError(
+            raise _runtime_error_with_hint(
                 f"{self._owner} failed to call structured output model "
-                f"{self._model!r}: {exc}"
+                f"{self._model!r}: {exc}",
+                hint=_prompt_model_failure_hint(self._model, exc),
             ) from exc
 
     def _build_structured_output_messages(
@@ -831,8 +848,9 @@ def _load_langchain_model(model: str) -> object:
             max_tokens=1000,
         )
     except Exception as exc:
-        raise RuntimeError(
-            f"prompt failed to initialize LangChain model {model!r}: {exc}"
+        raise _runtime_error_with_hint(
+            f"prompt failed to initialize LangChain model {model!r}: {exc}",
+            hint=_prompt_model_failure_hint(model, exc),
         ) from exc
 
 
@@ -860,6 +878,53 @@ def resolve_prompt_model(
     env_model = os.environ.get(env_var, "").strip()
     if env_model:
         return env_model
-    raise RuntimeError(
-        f"{owner} requires model=... or the {env_var} environment variable."
+    raise _runtime_error_with_hint(
+        f"{owner} requires model=... or the {env_var} environment variable.",
+        hint=(
+            f"Set {env_var} before running the journey, for example "
+            f"`export {env_var}=openai:gpt-4.1-mini`. In shells, use a "
+            "space after `export`: `export NAME=value`, not `export=NAME=value`."
+        ),
     )
+
+
+def _runtime_error_with_hint(message: str, *, hint: str | None = None) -> RuntimeError:
+    error = RuntimeError(message)
+    if hint is not None:
+        setattr(error, "hint", hint)
+    return error
+
+
+def _exception_hint(exc: BaseException) -> str | None:
+    hint = getattr(exc, "hint", None)
+    if isinstance(hint, str) and hint.strip():
+        return hint.strip()
+    return None
+
+
+def _prompt_model_failure_hint(model: str, exc: BaseException) -> str | None:
+    existing_hint = _exception_hint(exc)
+    if existing_hint is not None:
+        return existing_hint
+    provider = _model_provider(model)
+    provider_config = _PROMPT_PROVIDER_ENV_VARS.get(provider)
+    if provider_config is None or not _looks_like_auth_failure(exc):
+        return None
+    env_var, provider_name = provider_config
+    return (
+        f"Set {env_var} for {provider_name} models, then rerun. For example: "
+        f"`export {env_var}=...` and "
+        f"`export JOURNEY_BROWSER_PROMPT_MODEL={model}`."
+    )
+
+
+def _model_provider(model: str) -> str:
+    provider, separator, _ = model.partition(":")
+    if separator:
+        return provider.strip().lower()
+    return ""
+
+
+def _looks_like_auth_failure(exc: BaseException) -> bool:
+    message = f"{type(exc).__name__}: {exc}".lower()
+    return any(term in message for term in _AUTH_FAILURE_TERMS)

@@ -40,8 +40,10 @@ from journeysdk._prompt_engine import (
     PromptActionContext,
     PromptTextSection,
     _create_langchain_agent as _create_prompt_engine_agent,
+    _exception_hint,
     _extract_langchain_text,
     _load_langchain_model as _load_prompt_engine_model,
+    _runtime_error_with_hint,
     resolve_prompt_model,
 )
 from playwright.sync_api import Page as PlaywrightPage
@@ -1135,9 +1137,10 @@ def _load_langchain_model(model: str) -> object:
     try:
         return _load_prompt_engine_model(model)
     except Exception as exc:
-        raise RuntimeError(
+        raise _runtime_error_with_hint(
             "JourneyBrowserPage.prompt(...) failed to initialize LangChain "
-            f"model {model!r}: {exc}"
+            f"model {model!r}: {exc}",
+            hint=_exception_hint(exc),
         ) from exc
 
 

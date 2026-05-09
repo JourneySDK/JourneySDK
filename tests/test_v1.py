@@ -963,6 +963,22 @@ def test_execute_step_without_retry_does_not_retry():
     assert "failed while it was running" in str(exc_info.value)
 
 
+def test_execute_step_preserves_actionable_exception_hint():
+    def poll():
+        error = RuntimeError("missing provider credential")
+        setattr(error, "hint", "Set ANTHROPIC_API_KEY before rerunning.")
+        raise error
+
+    def journey():
+        journey_sdk.step(poll)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    assert "failed while it was running" in str(exc_info.value)
+    assert exc_info.value.hint == "Set ANTHROPIC_API_KEY before rerunning."
+
+
 def test_execute_reports_exhausted_retry_attempts():
     attempts = {"poll": 0}
 

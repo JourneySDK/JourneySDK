@@ -801,17 +801,26 @@ def _callable_execution_error_for_step(
         f"Step '{node.label or node.node_id}' failed while it was running: "
         f"{type(exc).__name__}: {details}"
     )
-    hint = "Inspect the step implementation or rerun after fixing the underlying failure."
+    hint = _exception_hint(exc) or (
+        "Inspect the step implementation or rerun after fixing the underlying failure."
+    )
     if node.retry is not None and retry_attempts_exhausted:
         message = (
             f"Step '{node.label or node.node_id}' failed while it was running "
             f"and its retry attempts were exhausted: {type(exc).__name__}: {details}"
         )
-        hint = (
+        hint = _exception_hint(exc) or (
             "Inspect the step implementation, or increase step(..., retry=...) if "
             "the failure is expected to clear on its own."
         )
     return CallableExecutionError(message, hint=hint)
+
+
+def _exception_hint(exc: Exception) -> str | None:
+    hint = getattr(exc, "hint", None)
+    if isinstance(hint, str) and hint.strip():
+        return hint.strip()
+    return None
 
 
 def _cleanup_failure_message(failures: list[BaseException]) -> str:
