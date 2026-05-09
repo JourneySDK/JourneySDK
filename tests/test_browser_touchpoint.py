@@ -1059,7 +1059,7 @@ def test_journey_browser_prompt_rejects_saved_page(tmp_path: Path):
         saved_page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
 
-def test_journey_browser_prompt_requires_model_or_env(monkeypatch):
+def test_journey_browser_prompt_defaults_model_when_model_and_env_are_missing(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -1070,12 +1070,20 @@ def test_journey_browser_prompt_requires_model_or_env(monkeypatch):
     )
     context.pages.append(page)
     monkeypatch.delenv(journey_browser_prompt.JOURNEY_BROWSER_PROMPT_MODEL_ENV, raising=False)
+    loaded_models: list[str] = []
 
-    with pytest.raises(RuntimeError, match="requires model=...") as exc_info:
-        page.prompt("click sign in")
-    hint = getattr(exc_info.value, "hint", "")
-    assert "export JOURNEY_BROWSER_PROMPT_MODEL" in hint
-    assert "not `export=NAME=value`" in hint
+    def load_model(model: str) -> _FakeLangChainPromptModel:
+        loaded_models.append(model)
+        return _FakeLangChainPromptModel(["done"])
+
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        load_model,
+    )
+
+    assert page.prompt("click sign in") == "done"
+    assert loaded_models == [journey_browser_prompt.DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL]
 
 
 def test_journey_browser_prompt_reports_langchain_model_initialization_failure(

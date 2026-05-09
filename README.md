@@ -420,7 +420,6 @@ def capture_popup_title() -> dict[str, object]:
     page = open_page("https://app.example/login")
     return page.prompt(
         'click on a "Sign in" button and get the title of the opened popup',
-        model="anthropic:claude-sonnet-4-5",
         memory="sign-in-popup",
         output={
             "popup_title": "The title of the opened popup.",
@@ -429,8 +428,8 @@ def capture_popup_title() -> dict[str, object]:
 ```
 
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY`, and either pass a LangChain model identifier like `model="anthropic:claude-sonnet-4-5"` or set
-`JOURNEY_BROWSER_PROMPT_MODEL`.
+`ANTHROPIC_API_KEY`. Browser prompts default to `anthropic:claude-sonnet-4-6`; override that by passing a LangChain
+model identifier like `model="anthropic:claude-sonnet-4-5"` or by setting `JOURNEY_BROWSER_PROMPT_MODEL`.
 The optional `memory="sign-in-popup"` argument stores a replayable fast path from successful runs in
 `sign-in-popup.memory.md` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.

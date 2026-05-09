@@ -12,11 +12,12 @@ from journeysdk._prompt_memory import (
     write_prompt_memory_entry,
 )
 from journeysdk._prompt_engine import (
-    PromptMemoryDraft,
+    PromptActionContext,
     PromptEngineSession,
+    PromptMemoryDraft,
+    PromptMemoryReplayResult,
     PromptObservation,
     PromptTextSection,
-    PromptActionContext,
 )
 from journeysdk.logger import JourneyLogRecord, get_logger, make_log_record
 
@@ -147,6 +148,7 @@ def _action_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
 
 def test_prompt_engine_runs_action_adapter_and_persists_action_records(
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     model = _FakePromptModel([_action_call("fake_echo", {"text": "hello"}), "done"])
     action_records: list[JourneyLogRecord] = []
@@ -253,6 +255,70 @@ def test_prompt_engine_runs_action_adapter_and_persists_action_records(
             body="Compiled from 1 log record.",
         ),
     )
+    log_output = capsys.readouterr().out
+    expected = (
+        f"          prompt memory             wrote to {tmp_path / 'fake.memory.md'}"
+    )
+    assert expected in log_output
+
+
+def test_prompt_engine_logs_loaded_prompt_memory_as_nested_pretty_row(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    memory_path = tmp_path / "long-memory-name-for-sign-in.memory.md"
+    write_prompt_memory_entry(
+        memory_path,
+        PromptMemoryEntry(
+            component="fake-action",
+            instruction="echo hello",
+            observation_signature="fake://ready",
+            sections=(
+                PromptMemorySection(
+                    heading="Fake replay",
+                    body='fake_echo("hello")',
+                    language="python",
+                ),
+            ),
+            final_output="done from memory",
+        ),
+    )
+
+    def build_observation() -> PromptObservation:
+        return PromptObservation(
+            signature="fake://ready",
+            records=(),
+            sections=(
+                PromptTextSection(
+                    heading="Fake visible text",
+                    text="Ready",
+                ),
+            ),
+        )
+
+    result = PromptEngineSession(
+        component="fake-action",
+        owner="fake.prompt(...)",
+        instruction="echo hello",
+        model="fake:model",
+        max_steps=3,
+        memory_path=memory_path,
+        output_schema=None,
+        system_prompt="Use fake_echo when more work is needed.",
+        logger=get_logger("fake-prompt"),
+        build_observation=build_observation,
+        build_actions=lambda context: [],
+        load_model=lambda model_name: object(),
+        create_agent=_fake_create_agent,
+        replay_memory=lambda entry: PromptMemoryReplayResult(
+            final_output=entry.final_output
+        ),
+    ).run()
+
+    assert result == "done from memory"
+    log_output = capsys.readouterr().out
+    assert f"          prompt memory             loaded from {memory_path}" in log_output
+    assert "loaded prompt memory from" not in log_output
 
 
 def test_prompt_engine_model_call_auth_failure_has_actionable_hint() -> None:

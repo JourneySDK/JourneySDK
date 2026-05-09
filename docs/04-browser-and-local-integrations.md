@@ -325,9 +325,9 @@ The protected action completed. If this run resumed from saved state, continue_a
 Read `docs/browser_prompt_journey/browser_prompt_journey.py`.
 
   SDK already includes Playwright and LangChain. Set your provider credentials with the normal provider ...
-environment variables such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Pick a multimodal model explicitly with
-LangChain's `provider:model` syntax such as `model="anthropic:claude-sonnet-4-5"`, or set
-`JOURNEY_BROWSER_PROMPT_MODEL`.
+environment variables such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Browser prompts default to
+`anthropic:claude-sonnet-4-6`; override that with LangChain's `provider:model` syntax such as
+`model="anthropic:claude-sonnet-4-5"`, or set `JOURNEY_BROWSER_PROMPT_MODEL`.
 
 The helper can stay small. Without `output=...`, `page.prompt(...)` returns a plain string. With `output=...`, Journey
 uses the model provider's structured-output feature and returns a dictionary with those fields:
@@ -340,7 +340,6 @@ def capture_popup_title() -> dict[str, object]:
     page = open_page(f"{ensure_demo_server()}/login")
     return page.prompt(
         'click on a "Sign in" button and get the title of the opened popup',
-        model="anthropic:claude-sonnet-4-5",
         memory="sign-in-popup",
         output={
             "popup_title": "The title of the opened popup.",

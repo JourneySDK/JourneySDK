@@ -14,7 +14,6 @@ def capture_popup_title() -> dict[str, object]:
     page = open_page(f"{ensure_demo_server()}/login")
     return page.prompt(
         'click on a "Sign in" button and get the title of the opened popup',
-        model="anthropic:claude-sonnet-4-5",
         memory="sign-in-popup",
         output={
             "popup_title": "The title of the opened popup.",

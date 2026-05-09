@@ -28,9 +28,17 @@ from journeysdk._prompt_output import (
     parse_prompt_structured_output,
     validate_prompt_structured_output,
 )
-from journeysdk.logger import JourneyLogRecord, JourneyLogger, pretty_row
+from journeysdk.logger import (
+    JourneyLogRecord,
+    JourneyLogger,
+    PrettyLine,
+    PrettyStyle,
+    pretty_row,
+)
 
 _T = TypeVar("_T")
+_PROMPT_DETAIL_INDENT = 10
+_PROMPT_LABEL_WIDTH = 25
 
 
 @dataclass(frozen=True)
@@ -613,6 +621,7 @@ class PromptEngineSession:
                 self._logger.info(
                     "prompt_memory_loaded",
                     f"loaded prompt memory from {self._memory_path}",
+                    pretty=_prompt_memory_row(f"loaded from {self._memory_path}"),
                     path=str(self._memory_path),
                 )
         return self._memory_entry
@@ -669,6 +678,10 @@ class PromptEngineSession:
         self._logger.info(
             "prompt_memory_saved",
             f"wrote prompt memory to {self._memory_path}",
+            pretty=_prompt_memory_row(
+                f"wrote to {self._memory_path}",
+                style="success",
+            ),
             path=str(self._memory_path),
             run_count=run_count,
         )
@@ -712,6 +725,16 @@ def _prompt_output_summary(value: str | dict[str, object]) -> str:
     if isinstance(value, str):
         return truncate_prompt_memory_text(value)
     return truncate_prompt_memory_text(json.dumps(value, sort_keys=True))
+
+
+def _prompt_memory_row(detail: object, *, style: PrettyStyle = "accent") -> PrettyLine:
+    return pretty_row(
+        "prompt memory",
+        detail,
+        indent=_PROMPT_DETAIL_INDENT,
+        label_width=_PROMPT_LABEL_WIDTH,
+        style=style,
+    )
 
 
 def _final_agent_message(result: object) -> object:
@@ -872,12 +895,15 @@ def resolve_prompt_model(
     *,
     env_var: str,
     owner: str,
+    default_model: str | None = None,
 ) -> str:
     if model is not None and model.strip():
         return model.strip()
     env_model = os.environ.get(env_var, "").strip()
     if env_model:
         return env_model
+    if default_model is not None and default_model.strip():
+        return default_model.strip()
     raise _runtime_error_with_hint(
         f"{owner} requires model=... or the {env_var} environment variable.",
         hint=(

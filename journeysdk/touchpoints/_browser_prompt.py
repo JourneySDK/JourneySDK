@@ -49,6 +49,7 @@ from journeysdk._prompt_engine import (
 from playwright.sync_api import Page as PlaywrightPage
 
 JOURNEY_BROWSER_PROMPT_MODEL_ENV = "JOURNEY_BROWSER_PROMPT_MODEL"
+DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL = "anthropic:claude-sonnet-4-6"
 
 _PROMPT_RUN_CODE_ACTION_NAME = "journey_run_code"
 _PROMPT_FAIL_SESSION_ACTION_NAME = "journey_fail_session"
@@ -1162,6 +1163,7 @@ def _resolve_model(model: str | None) -> str:
         model,
         env_var=JOURNEY_BROWSER_PROMPT_MODEL_ENV,
         owner="JourneyBrowserPage.prompt(...)",
+        default_model=DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL,
     )
 
 
