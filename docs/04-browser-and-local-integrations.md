@@ -278,9 +278,8 @@ Execution
     case_1
       login_and_capture_session  ok attempt=1 duration=...
       continue_authenticated_dashboard  start attempt=1
-Warning: Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
+Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
       continue_authenticated_dashboard  ok attempt=1 duration=...
-Hint: Run the same command again with --state ... to resume from saved progress.
 Interrupted: Journey execution was interrupted before it finished.
 Hint: Run the same command again with --state ... to resume from saved progress.
 ```
@@ -317,7 +316,19 @@ Execution
 Additional pretty stdout:
 
 ```console
-The protected action completed. If this run resumed from saved state, continue_authenticated_dashboard() restarted with the same saved JourneyBrowserPage instead of logging in again.
+The protected action completed. After a graceful Ctrl-C, saved completed browser steps are reused. After a forceful Ctrl-C, continue_authenticated_dashboard() restarts with the same saved JourneyBrowserPage instead of logging in again.
+```
+
+If you press Ctrl-C a second time, Journey stops the dirty browser step now. Browser cleanup is best-effort and the
+step restarts on the next run with the saved `JourneyBrowserPage` input:
+
+```console
+      continue_authenticated_dashboard  start attempt=1
+Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
+Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.
+Warning: continue_authenticated_dashboard interrupted after ... (KeyboardInterrupt)
+Interrupted: Journey execution was interrupted before it finished.
+Hint: Run the same command again with --state ... to resume from saved progress.
 ```
 
 ## Prompt a Live Page with an LLM

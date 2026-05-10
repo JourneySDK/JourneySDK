@@ -92,8 +92,8 @@ use `--output structured` for `[journey]` logfmt records or `--output jsonl` for
 
 Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step bindings. In CLI
 runs, first Ctrl-C lets the active step finish storage, exit returned handles, and stop at post-exit; rerunning resumes
-after that step. Press Ctrl-C again to interrupt the dirty step immediately; that step later restarts from the top with
-saved inputs:
+after that step. Press Ctrl-C again to stop now; the dirty step later restarts from the top with saved inputs. Without
+`--state`, Ctrl-C cannot resume:
 
 ```bash
 uv run journey --file docs/resume_journey/resume_journey.py --state .journey/run.state

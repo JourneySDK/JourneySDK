@@ -70,7 +70,7 @@ def continue_authenticated_dashboard(
     _tutorial_note(
         f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
         "gracefully after this step reaches post-exit. Press Ctrl-C a second time "
-        "to interrupt inside this step and rerun it later with the same saved "
+        "to stop now; Journey will rerun this step later with the same saved "
         "authenticated browser state."
     )
     time.sleep(pause_seconds)
@@ -99,8 +99,9 @@ def assert_protected_action_complete(result: dict[str, str]) -> bool:
             f"Expected status 'Protected action complete', got {result.get('status')!r}."
         )
     _tutorial_note(
-        "The protected action completed. If this run resumed from saved state, "
-        "continue_authenticated_dashboard() restarted with the same saved "
+        "The protected action completed. After a graceful Ctrl-C, saved completed "
+        "browser steps are reused. After a forceful Ctrl-C, "
+        "continue_authenticated_dashboard() restarts with the same saved "
         "JourneyBrowserPage instead of logging in again."
     )
     return True

@@ -186,7 +186,7 @@ def wait_for_resume_signal(
     _tutorial_note(
         f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
         "gracefully after this step reaches post-exit. Press Ctrl-C a second time "
-        "to interrupt inside this step and rerun it later from saved inputs."
+        "to stop now; Journey will rerun this step later from saved inputs."
     )
     time.sleep(pause_seconds)
     return ticket
@@ -202,8 +202,8 @@ def resume_journey() -> None:
 
 The key rule is that Journey resumes at a step boundary, not in the middle of a function body. In CLI runs with
 `--state`, first Ctrl-C is graceful: Journey lets the active step finish storage, exit returned handles, and stop at
-post-exit. Press Ctrl-C a second time to interrupt inside the dirty step; on the next run Journey restarts that step
-from the top with saved inputs.
+post-exit. Press Ctrl-C a second time to stop now; Journey interrupts the dirty step, and on the next run restarts
+that step from the top with saved inputs. Without `--state`, Ctrl-C stops immediately and cannot resume.
 
 ### Reset the Demo State
 
@@ -211,7 +211,7 @@ from the top with saved inputs.
 uv run python -c "from docs.resume_journey import reset_demo_state; reset_demo_state(state_path='/tmp/journey-resume-tutorial.state')"
 ```
 
-### First Run: Interrupt It
+### First Run: Graceful Ctrl-C
 
 ```bash
 uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
@@ -232,9 +232,8 @@ Execution
     case_1
       load_support_ticket  ok attempt=1 duration=...
       wait_for_resume_signal  start attempt=1
-Warning: Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
+Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
       wait_for_resume_signal  ok attempt=1 duration=...
-Hint: Run the same command again with --state ... to resume from saved progress.
 Interrupted: Journey execution was interrupted before it finished.
 Hint: Run the same command again with --state ... to resume from saved progress.
 ```
@@ -242,12 +241,11 @@ Hint: Run the same command again with --state ... to resume from saved progress.
 Additional pretty stdout:
 
 ```console
-Loaded support ticket ticket-001 and saved it as the result of load_support_ticket(). ...
 wait_for_resume_signal() is starting with saved ticket ticket-001. ...
 Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step reaches post-exit. ...
 ```
 
-### Second Run: Resume It
+### Second Run After Graceful Ctrl-C: Continue After the Completed Step
 
 ```bash
 uv run journey --file docs/resume_journey/resume_journey.py --state /tmp/journey-resume-tutorial.state
@@ -271,8 +269,34 @@ Execution
 Additional pretty stdout:
 
 ```console
-wait_for_resume_signal() is starting with saved ticket ticket-001. ...
-The journey finished. If this run resumed from saved state, wait_for_resume_signal() restarted with the same saved ticket while load_support_ticket() was reused from the earlier successful step.
+The journey finished. After a graceful Ctrl-C, saved completed steps are reused. After a forceful Ctrl-C, wait_for_resume_signal() restarts with the same saved ticket while load_support_ticket() is reused.
+```
+
+### If You Press Ctrl-C Twice
+
+The second Ctrl-C is forceful. It is useful when the active step is blocked and you do not want to wait for it to reach
+post-exit.
+
+Expected pretty stdout includes:
+
+```console
+      wait_for_resume_signal  start attempt=1
+Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
+Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.
+Warning: wait_for_resume_signal interrupted after ... (KeyboardInterrupt)
+Interrupted: Journey execution was interrupted before it finished.
+Hint: Run the same command again with --state ... to resume from saved progress.
+```
+
+On the next run, Journey reuses earlier successful steps and starts the dirty step again with the saved arguments:
+
+```console
+Execution
+    case_1 resume
+      wait_for_resume_signal  start attempt=2
+      wait_for_resume_signal  ok attempt=2 duration=...
+      assert_resumed_ticket  ok attempt=1 duration=...
+    case_1 done steps=3 duration=...
 ```
 
 ## What To Notice
@@ -284,6 +308,6 @@ The journey finished. If this run resumed from saved state, wait_for_resume_sign
 - Any value that Journey may need to replay later must be pickle-serializable or rehydratable.
 - `--state` keeps successful step bindings so the rerun can skip what already succeeded.
 - First Ctrl-C in a CLI `--state` run resumes after the completed step; second Ctrl-C restarts the dirty step from the
-  top later. Journey never jumps into the middle of the function.
+  top later. Without `--state`, Ctrl-C cannot resume. Journey never jumps into the middle of the function.
 
 Continue with [04 Browser and Local Integrations](04-browser-and-local-integrations.md) when your steps need to open real pages, receive webhooks, or inspect local files.

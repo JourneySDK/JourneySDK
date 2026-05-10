@@ -204,6 +204,10 @@ retried.
 - **Saved step binding**: stored step inputs, metadata, and optional result that Journey can use when replaying or
   resuming.
 - **Dirty step**: the step that had started but had not completed when execution was interrupted.
+- **Graceful interrupt**: the first Ctrl-C in a CLI run with `--state`. Journey lets the active step reach post-exit
+  so progress can be saved and the next run can continue after that step.
+- **Forced interrupt**: the second Ctrl-C in a CLI run with `--state`. Journey stops the active dirty step as soon as
+  it can; the next run restarts that step from saved inputs instead of jumping into the middle of the function.
 - **Replay**: rerunning part of a case from a step boundary while reusing saved values before that boundary.
 - **Replay boundary**: the step index where replay starts.
 - **Replay anchor**: the step label reported for a targeted branch run or used by retry and branch replay.
@@ -270,8 +274,8 @@ Each step attempt has six phases:
    returned handles still live.
 5. **Exit**: Journey discovers returned `__exit__` handles and closes them
    before the next step runs.
-6. **Post-exit**: a graceful CLI Ctrl-C stops here after the completed step has
-   been saved and exited.
+6. **Post-exit**: in a CLI run with `--state`, the first Ctrl-C stops here after the completed step has been saved and
+   exited.
 
 In noninteractive `--develop-step` mode, Journey stores the returned value,
 pauses at pre-exit, then closes returned handles before the command exits. With
@@ -438,13 +442,15 @@ The optional `output={...}` argument maps field names to descriptions or JSON-sc
 If the browser task cannot be completed because the page shows a blocking app state, such as a locked account or
 invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
 
-Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is
-enabled, Journey stores the step inputs and outputs it may need to replay later, so those values must be
-pickle-serializable. In the CLI, the first Ctrl-C during an active step lets that step finish storage and exit before
-the command stops; the next run continues after that step. Press Ctrl-C a second time to stop inside the dirty step,
-which restarts from the top later with the same inputs. The same replay rule applies to steps that may be replayed
-because of retries or `branch(start_from=...)`. The state file is kept after the run finishes, so rerunning the same
-command can reuse that saved progress; delete the file when you want to start fresh.
+Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is enabled,
+Journey stores the step inputs and outputs it may need to replay later, so those values must be pickle-serializable.
+In the CLI, the first Ctrl-C during an active step is graceful: Journey logs that it is finishing the active step,
+lets that step finish storage and exit, then stops at post-exit. The next run continues after that completed step.
+Press Ctrl-C a second time to force an immediate stop; Journey treats the current step as dirty, and the next run
+restarts that step from the top with the same saved inputs. Without `--state`, Ctrl-C stops immediately and the run
+cannot resume. The same replay rule applies to steps that may be replayed because of retries or
+`branch(start_from=...)`. The state file is kept after the run finishes, so rerunning the same command can reuse that
+saved progress; delete the file when you want to start fresh.
 
 ## How it works
 
@@ -513,6 +519,9 @@ Execute with persisted state so Ctrl-C can be resumed later:
 ```bash
 uv run journey --state run.state
 ```
+
+With `--state`, press Ctrl-C once to stop after the active step is saved, or press it a second time to stop now and
+restart the dirty step from saved inputs on resume. A bare `uv run journey` Ctrl-C cannot resume.
 
 Execute only the case that reaches a target step label:
 

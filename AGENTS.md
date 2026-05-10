@@ -44,8 +44,8 @@ controls visibility with `--log-level debug|info|warning|error|off`.
 ## Core principles
 
 - **Developer-centric**: The developer-facing interfaces (API and CLI) must be straightforward and intuitive.
-- **Resumable tests**: With CLI `--state`, first Ctrl-C lets the active step finish and resume after it; second Ctrl-C
-  interrupts the dirty step, which later restarts from the top with saved inputs.
+- **Resumable tests**: With CLI `--state`, first Ctrl-C is graceful and resumes after the completed step; second
+  Ctrl-C stops now and later restarts the dirty step from saved inputs. Without `--state`, Ctrl-C cannot resume.
 - **Extensible design**: There are official touchpoints, and everyone is welcome to add their own. Adding new touchpoints must be
   straightforward and intuitive.
 - **Clear documentation**: To make it developer-friendly, all docs must be written in plain English, with enough
