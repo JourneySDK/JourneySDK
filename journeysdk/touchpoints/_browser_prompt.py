@@ -11,6 +11,7 @@ from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
 from langchain_core.tools import tool
+from journeysdk.executor import _is_step_forced_interrupt_requested
 from journeysdk.logger import (
     JourneyLogRecord,
     PrettyLine,
@@ -56,6 +57,12 @@ _PROMPT_FAIL_SESSION_ACTION_NAME = "journey_fail_session"
 _BROWSER_REPLAY_SECTION = "Replay code"
 _BROWSER_SUCCESS_CHECK_SECTION = "Success check code"
 _BROWSER_NOTES_SECTION = "Notes"
+_FORCED_INTERRUPT_ABORT_MARKERS = (
+    "TargetClosedError",
+    "Target page, context or browser has been closed",
+    "net::ERR_ABORTED",
+    "maybe frame was detached",
+)
 
 _PROMPT_SYSTEM_MESSAGE = """You control a Playwright sync browser page with available actions.
 
@@ -179,25 +186,29 @@ class _PromptSession:
 
     def run(self) -> str | dict[str, object]:
         self._log_start()
-        return PromptEngineSession(
-            component="browser",
-            owner="JourneyBrowserPage.prompt(...)",
-            instruction=self._instruction,
-            model=self._model,
-            max_steps=self._max_steps,
-            memory_path=self._memory_path,
-            output_schema=self._output_schema,
-            system_prompt=_PROMPT_SYSTEM_MESSAGE,
-            logger=_PROMPT_LOGGER,
-            build_observation=self._build_observation,
-            build_actions=self._build_agent_actions,
-            load_model=_load_langchain_model,
-            create_agent=_create_langchain_agent,
-            before_final_observation=self._settle_active_page_for_final_output,
-            replay_memory=self._replay_memory,
-            compile_memory=self._compile_memory,
-            format_memory=_format_browser_memory_for_prompt,
-        ).run()
+        try:
+            return PromptEngineSession(
+                component="browser",
+                owner="JourneyBrowserPage.prompt(...)",
+                instruction=self._instruction,
+                model=self._model,
+                max_steps=self._max_steps,
+                memory_path=self._memory_path,
+                output_schema=self._output_schema,
+                system_prompt=_PROMPT_SYSTEM_MESSAGE,
+                logger=_PROMPT_LOGGER,
+                build_observation=self._build_observation,
+                build_actions=self._build_agent_actions,
+                load_model=_load_langchain_model,
+                create_agent=_create_langchain_agent,
+                before_final_observation=self._settle_active_page_for_final_output,
+                replay_memory=self._replay_memory,
+                compile_memory=self._compile_memory,
+                format_memory=_format_browser_memory_for_prompt,
+            ).run()
+        except Exception as exc:
+            _raise_keyboard_interrupt_if_forced_prompt_abort(exc)
+            raise
 
     def _log_start(self) -> None:
         self._discover_pages()
@@ -387,6 +398,7 @@ class _PromptSession:
                 filename="<journey-browser-memory-check>",
             )
         except Exception as exc:
+            _raise_keyboard_interrupt_if_forced_prompt_abort(exc)
             detail = _format_python_error(exc)
             _emit_prompt_log(
                 f"prompt memory replay failed: {detail}",
@@ -426,6 +438,8 @@ class _PromptSession:
             )
             return _parse_memory_draft(response_text)
         except Exception as exc:
+            if _is_step_forced_interrupt_requested():
+                raise KeyboardInterrupt() from exc
             _emit_prompt_log(
                 f"prompt memory compile skipped: {_format_python_error(exc)}",
                 event="prompt_memory_compile_failed",
@@ -475,6 +489,7 @@ class _PromptSession:
                 target=target,
             )
         except Exception as exc:
+            _raise_keyboard_interrupt_if_forced_prompt_abort(exc)
             for record in self._log_new_pages(
                 previous_page_count=previous_page_count,
             ):
@@ -651,7 +666,8 @@ class _PromptSession:
             if page not in self._pages:
                 try:
                     page.wait_for_load_state("load", timeout=self._timeout_ms)
-                except Exception:
+                except Exception as exc:
+                    _raise_keyboard_interrupt_if_forced_prompt_abort(exc)
                     pass
                 self._pages.append(page)
 
@@ -662,13 +678,15 @@ class _PromptSession:
                 "networkidle",
                 timeout=min(self._timeout_ms, 2000),
             )
-        except Exception:
+        except Exception as exc:
+            _raise_keyboard_interrupt_if_forced_prompt_abort(exc)
             pass
         wait_for_timeout = getattr(active_page, "wait_for_timeout", None)
         if callable(wait_for_timeout):
             try:
                 wait_for_timeout(500)
-            except Exception:
+            except Exception as exc:
+                _raise_keyboard_interrupt_if_forced_prompt_abort(exc)
                 pass
 
     def _prompt_page_payloads(self) -> list[dict[str, object]]:
@@ -1262,6 +1280,14 @@ def _format_python_error(exc: BaseException) -> str:
     if detail:
         return f"{type(exc).__name__}: {detail}"
     return type(exc).__name__
+
+
+def _raise_keyboard_interrupt_if_forced_prompt_abort(exc: BaseException) -> None:
+    if not _is_step_forced_interrupt_requested():
+        return
+    detail = _format_python_error(exc)
+    if any(marker in detail for marker in _FORCED_INTERRUPT_ABORT_MARKERS):
+        raise KeyboardInterrupt() from exc
 
 
 def _parse_page_index(raw_index: object, *, page_count: int) -> int:

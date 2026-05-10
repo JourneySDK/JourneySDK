@@ -415,8 +415,13 @@ class PromptEngineSession:
             daemon=True,
         )
         thread.start()
-        while not done.is_set():
-            self._run_next_prompt_thread_call(timeout=0.05)
+        try:
+            while not done.is_set():
+                self._run_next_prompt_thread_call(timeout=0.05)
+        except BaseException as exc:
+            self._cancel_pending_prompt_thread_calls(exc)
+            thread.join(timeout=0.25)
+            raise
         thread.join()
         if error is not None:
             raise error
@@ -431,7 +436,18 @@ class PromptEngineSession:
             call.result = call.callback()
         except BaseException as exc:
             call.error = exc
+            if not isinstance(exc, Exception):
+                raise
         finally:
+            call.done.set()
+
+    def _cancel_pending_prompt_thread_calls(self, exc: BaseException) -> None:
+        while True:
+            try:
+                call = self._prompt_thread_calls.get_nowait()
+            except Empty:
+                return
+            call.error = exc
             call.done.set()
 
     def _raise_max_steps(self) -> None:

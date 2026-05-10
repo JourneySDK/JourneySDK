@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -14,7 +16,11 @@ from typing import Literal, TypedDict, cast
 from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import _register_step_exit_object, _require_executing_step
-from journeysdk.executor import _is_step_interrupt_pending
+from journeysdk.executor import (
+    _is_step_forced_interrupt_requested,
+    _is_step_interrupt_pending,
+    _register_forced_step_interrupt_callback,
+)
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
 
@@ -186,6 +192,7 @@ class JourneyBrowserPage(PlaywrightPage):
         self._journey_browser = None
         self._journey_manager = None
         self._journey_exit_started = False
+        self._journey_forced_interrupt_unregister: Callable[[], None] | None = None
 
     @classmethod
     def _from_snapshot(cls, snapshot: _PageSnapshot) -> JourneyBrowserPage:
@@ -238,6 +245,28 @@ class JourneyBrowserPage(PlaywrightPage):
             self._journey_browser = browser
         if context is not None:
             self._journey_context = context
+        self._ensure_forced_interrupt_callback()
+
+    def _ensure_forced_interrupt_callback(self) -> None:
+        if self._journey_forced_interrupt_unregister is not None:
+            return
+        self._journey_forced_interrupt_unregister = (
+            _register_forced_step_interrupt_callback(
+                "browser page",
+                self._force_close_after_forced_interrupt,
+            )
+        )
+
+    def _unregister_forced_interrupt_callback(self) -> None:
+        unregister = self._journey_forced_interrupt_unregister
+        self._journey_forced_interrupt_unregister = None
+        if unregister is not None:
+            unregister()
+
+    def _force_close_after_forced_interrupt(self) -> None:
+        _suppress_playwright_callback_future_noise(self._journey_manager)
+        _kill_playwright_driver_process(self._journey_manager)
+        self._mark_step_closed()
 
     def _snapshot_for_storage(self) -> _PageSnapshot:
         if self._is_live:
@@ -260,6 +289,7 @@ class JourneyBrowserPage(PlaywrightPage):
         if self._journey_exit_started:
             return
         self._journey_exit_started = True
+        self._unregister_forced_interrupt_callback()
         cleanup_url = self.url
         was_live = self._is_live
         _LOGGER.debug(
@@ -269,7 +299,23 @@ class JourneyBrowserPage(PlaywrightPage):
             live=was_live,
         )
         failures: list[BaseException] = []
-        interrupted = exc_type is not None and issubclass(exc_type, KeyboardInterrupt)
+        forced_interrupted = _is_step_forced_interrupt_requested()
+        interrupted = (
+            exc_type is not None and issubclass(exc_type, KeyboardInterrupt)
+        ) or forced_interrupted
+
+        if forced_interrupted:
+            if self._is_live:
+                self._mark_step_closed()
+            _suppress_playwright_callback_future_noise(self._journey_manager)
+            _kill_playwright_driver_process(self._journey_manager)
+            _LOGGER.debug(
+                "page_cleanup_forced_interrupt",
+                "skipped normal browser cleanup after forced interrupt",
+                url=cleanup_url,
+                live=was_live,
+            )
+            return
 
         if self._is_live:
             if interrupted:
@@ -304,6 +350,8 @@ class JourneyBrowserPage(PlaywrightPage):
         manager_exit = getattr(self._journey_manager, "__exit__", None)
         if callable(manager_exit):
             try:
+                if interrupted:
+                    _suppress_playwright_callback_future_noise(self._journey_manager)
                 manager_exit(exc_type, exc, traceback)
             except BaseException as manager_exc:  # pragma: no cover - environment dependent
                 if interrupted:
@@ -467,7 +515,9 @@ def open_page(
         _close_open_page_after_interrupt(page, exc)
         raise
     except Exception as exc:
-        if _is_step_interrupt_pending() and _looks_like_interrupt_abort(exc):
+        if (
+            _is_step_interrupt_pending() or _is_step_forced_interrupt_requested()
+        ) and _looks_like_interrupt_abort(exc):
             _LOGGER.warning(
                 "open_page_interrupted_after_signal",
                 "browser page aborted after Ctrl-C",
@@ -579,6 +629,57 @@ def _close_open_page_after_interrupt(
 def _looks_like_interrupt_abort(exc: BaseException) -> bool:
     rendered = _format_exception(exc)
     return any(marker in rendered for marker in _INTERRUPT_ABORT_MARKERS)
+
+
+def _suppress_playwright_callback_future_noise(manager: object) -> None:
+    connection = getattr(manager, "_connection", None)
+    callbacks = getattr(connection, "_callbacks", None)
+    if not isinstance(callbacks, dict):
+        return
+    for callback in tuple(callbacks.values()):
+        future = getattr(callback, "future", None)
+        add_done_callback = getattr(future, "add_done_callback", None)
+        if not callable(add_done_callback):
+            continue
+        add_done_callback(_retrieve_future_exception)
+
+
+def _retrieve_future_exception(future: object) -> None:
+    exception = getattr(future, "exception", None)
+    if not callable(exception):
+        return
+    try:
+        exception()
+    except BaseException:
+        return
+
+
+def _kill_playwright_driver_process(manager: object) -> None:
+    connection = getattr(manager, "_connection", None)
+    transport = getattr(connection, "_transport", None)
+    process = getattr(transport, "_proc", None)
+    pid = getattr(process, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        return
+    returncode = getattr(process, "returncode", None)
+    if returncode is not None:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        _LOGGER.debug(
+            "playwright_driver_forced_interrupt_kill",
+            "sent SIGTERM to Playwright driver after forced interrupt",
+            pid=pid,
+        )
+    except ProcessLookupError:
+        return
+    except BaseException as exc:  # pragma: no cover - platform dependent
+        _LOGGER.debug(
+            "playwright_driver_forced_interrupt_kill_failure",
+            "failed to terminate Playwright driver after forced interrupt",
+            pid=pid,
+            error=_format_exception(exc),
+        )
 
 
 def _ensure_browser_type_installed(

@@ -6,7 +6,7 @@ import hashlib
 import inspect
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
@@ -112,6 +112,9 @@ class _StepInterruptController(Protocol):
     def is_step_interrupt_pending(self) -> bool:
         ...
 
+    def is_step_forced_interrupt_requested(self) -> bool:
+        ...
+
     def raise_if_interrupted_after_step(self) -> None:
         ...
 
@@ -142,6 +145,34 @@ def _notify_step_lifecycle_phase(phase: str | None) -> None:
 def _is_step_interrupt_pending() -> bool:
     controller = _STEP_INTERRUPT_CONTROLLER.get()
     return controller is not None and controller.is_step_interrupt_pending()
+
+
+def _is_step_forced_interrupt_requested() -> bool:
+    controller = _STEP_INTERRUPT_CONTROLLER.get()
+    if controller is None:
+        return False
+    is_forced = getattr(controller, "is_step_forced_interrupt_requested", None)
+    return callable(is_forced) and bool(is_forced())
+
+
+def _register_forced_step_interrupt_callback(
+    name: str,
+    callback: Callable[[], None],
+) -> Callable[[], None]:
+    controller = _STEP_INTERRUPT_CONTROLLER.get()
+    if controller is None:
+        return _noop_forced_step_interrupt_callback_unregister
+    register = getattr(controller, "register_forced_interrupt_callback", None)
+    if not callable(register):
+        return _noop_forced_step_interrupt_callback_unregister
+    unregister = register(name, callback)
+    if callable(unregister):
+        return cast(Callable[[], None], unregister)
+    return _noop_forced_step_interrupt_callback_unregister
+
+
+def _noop_forced_step_interrupt_callback_unregister() -> None:
+    return None
 
 
 def _raise_if_interrupted_after_step() -> None:

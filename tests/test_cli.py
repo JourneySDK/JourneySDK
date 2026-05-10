@@ -3,13 +3,20 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from journeysdk.cli import _active_environment_python, _read_pause_choice, build_parser, main
+from journeysdk.cli import (
+    _CliStepInterruptController,
+    _active_environment_python,
+    _read_pause_choice,
+    build_parser,
+    main,
+)
 from journeysdk.logger import configure_logging
 
 
@@ -55,6 +62,36 @@ def _execute_result_payload(output: str) -> dict[str, object]:
     payload = result_events[0]["payload"]
     assert isinstance(payload, dict)
     return payload
+
+
+def test_cli_step_interrupt_controller_logs_forced_interrupt_once(
+    capsys: pytest.CaptureFixture[str],
+):
+    controller = _CliStepInterruptController()
+    controller.on_step_lifecycle_phase("execution")
+    cleanup_calls: list[str] = []
+    cleanup_ran = threading.Event()
+
+    def cleanup() -> None:
+        cleanup_calls.append("cleanup")
+        cleanup_ran.set()
+
+    controller.register_forced_interrupt_callback(
+        "fake cleanup",
+        cleanup,
+    )
+
+    controller.handle_sigint(2, None)
+    with pytest.raises(KeyboardInterrupt):
+        controller.handle_sigint(2, None)
+    with pytest.raises(KeyboardInterrupt):
+        controller.handle_sigint(2, None)
+
+    output = capsys.readouterr().out
+    assert output.count("Ctrl-C received. Finishing the active step") == 1
+    assert output.count("Ctrl-C received again. Stopping now") == 1
+    assert cleanup_ran.wait(timeout=1)
+    assert cleanup_calls == ["cleanup"]
 
 
 def _write_develop_lifecycle_flow(

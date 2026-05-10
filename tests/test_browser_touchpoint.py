@@ -1046,6 +1046,127 @@ def test_open_page_playwright_abort_after_pending_interrupt_is_keyboard_interrup
     assert ("capture_state", "about:blank") not in events
 
 
+def test_browser_interrupt_cleanup_marks_playwright_callback_futures_observed():
+    class FakeFuture:
+        def __init__(self) -> None:
+            self.callbacks: list[object] = []
+            self.retrieved = False
+
+        def add_done_callback(self, callback: object) -> None:
+            self.callbacks.append(callback)
+
+        def exception(self) -> RuntimeError:
+            self.retrieved = True
+            return RuntimeError("TargetClosedError: browser closed")
+
+    class FakeCallback:
+        def __init__(self, future: FakeFuture) -> None:
+            self.future = future
+
+    class FakeConnection:
+        def __init__(self, future: FakeFuture) -> None:
+            self._callbacks = {"pending": FakeCallback(future)}
+
+    class FakeManager:
+        def __init__(self, future: FakeFuture) -> None:
+            self._connection = FakeConnection(future)
+
+    future = FakeFuture()
+    journey_browser._suppress_playwright_callback_future_noise(FakeManager(future))
+
+    assert len(future.callbacks) == 1
+    callback = future.callbacks[0]
+    assert callable(callback)
+    callback(future)
+    assert future.retrieved
+
+
+def test_browser_registers_forced_interrupt_cleanup_that_stops_playwright_driver(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class FakeController:
+        def __init__(self) -> None:
+            self.callbacks: list[Callable[[], None]] = []
+
+        def on_step_lifecycle_phase(self, phase: str | None) -> None:
+            del phase
+
+        def is_step_interrupt_pending(self) -> bool:
+            return False
+
+        def is_step_forced_interrupt_requested(self) -> bool:
+            return True
+
+        def raise_if_interrupted_after_step(self) -> None:
+            return None
+
+        def register_forced_interrupt_callback(
+            self,
+            name: str,
+            callback: Callable[[], None],
+        ) -> Callable[[], None]:
+            del name
+            self.callbacks.append(callback)
+            return lambda: None
+
+    class FakeProcess:
+        pid = 12345
+        returncode = None
+
+    class FakeTransport:
+        _proc = FakeProcess()
+
+    class FakeConnection:
+        _transport = FakeTransport()
+        _callbacks: dict[str, object] = {}
+
+    class FakeManager:
+        _connection = FakeConnection()
+
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        journey_browser.os,
+        "kill",
+        lambda pid, sig: killed.append((pid, sig)),
+    )
+
+    controller = FakeController()
+    with journey_executor._use_step_interrupt_controller(controller):
+        page = journey_browser.JourneyBrowserPage._from_snapshot(
+            journey_browser._PageSnapshot.from_url("https://example.test/")
+        )
+        page._set_step_resources(manager=FakeManager())
+
+    assert len(controller.callbacks) == 1
+    controller.callbacks[0]()
+    assert killed == [(12345, journey_browser.signal.SIGTERM)]
+
+
+def test_browser_prompt_forced_target_closed_is_keyboard_interrupt():
+    class FakeController:
+        def on_step_lifecycle_phase(self, phase: str | None) -> None:
+            del phase
+
+        def is_step_interrupt_pending(self) -> bool:
+            return False
+
+        def is_step_forced_interrupt_requested(self) -> bool:
+            return True
+
+        def raise_if_interrupted_after_step(self) -> None:
+            return None
+
+    with journey_executor._use_step_interrupt_controller(FakeController()):
+        with pytest.raises(KeyboardInterrupt):
+            journey_browser_prompt._raise_keyboard_interrupt_if_forced_prompt_abort(
+                RuntimeError("TargetClosedError: Target page has been closed")
+            )
+
+        journey_browser_prompt._raise_keyboard_interrupt_if_forced_prompt_abort(
+            RuntimeError("ordinary prompt failure")
+        )
+
+
 def test_open_page_real_navigation_failure_remains_browser_failure(
     monkeypatch,
     capsys: pytest.CaptureFixture[str],

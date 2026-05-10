@@ -262,6 +262,56 @@ def test_prompt_engine_runs_action_adapter_and_persists_action_records(
     assert expected in log_output
 
 
+def test_prompt_engine_propagates_keyboard_interrupt_from_prompt_thread_action(
+    tmp_path: Path,
+) -> None:
+    model = _FakePromptModel([_action_call("fake_interrupt", {})])
+
+    def build_observation() -> PromptObservation:
+        return PromptObservation(
+            signature="fake://ready",
+            records=(),
+            sections=(
+                PromptTextSection(
+                    heading="Fake visible text",
+                    tag="fake-visible-text",
+                    text="Ready",
+                ),
+            ),
+        )
+
+    def build_actions(context: PromptActionContext) -> list[object]:
+        @tool("fake_interrupt")
+        def fake_interrupt() -> list[dict[str, object]]:
+            """Raise KeyboardInterrupt on the prompt thread."""
+
+            def run() -> list[dict[str, object]]:
+                raise KeyboardInterrupt()
+
+            return context.run_on_prompt_thread(run)
+
+        return [fake_interrupt]
+
+    with pytest.raises(KeyboardInterrupt):
+        PromptEngineSession(
+            component="fake-action",
+            owner="fake.prompt(...)",
+            instruction="interrupt",
+            model="fake:model",
+            max_steps=3,
+            memory_path=tmp_path / "fake.memory.md",
+            output_schema=None,
+            system_prompt="Use fake_interrupt when more work is needed.",
+            logger=get_logger("fake-prompt"),
+            build_observation=build_observation,
+            build_actions=build_actions,
+            load_model=lambda model_name: model,
+            create_agent=_fake_create_agent,
+        ).run()
+
+    assert len(model.calls) == 1
+
+
 def test_prompt_engine_logs_loaded_prompt_memory_as_nested_pretty_row(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

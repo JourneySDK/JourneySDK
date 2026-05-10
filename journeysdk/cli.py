@@ -8,7 +8,7 @@ import signal
 import sys
 import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -65,15 +65,38 @@ class _JourneyArgumentParser(argparse.ArgumentParser):
 
 
 class _CliStepInterruptController:
-    def __init__(self) -> None:
+    def __init__(self, *, graceful: bool = True) -> None:
+        self._graceful = graceful
         self._phase: str | None = None
         self._pending_interrupt = False
+        self._forced_interrupt_requested = False
+        self._forced_interrupt_logged = False
+        self._forced_interrupt_cleanup_started = False
+        self._forced_interrupt_callback_id = 0
+        self._forced_interrupt_callbacks: dict[int, tuple[str, Callable[[], None]]] = {}
 
     def on_step_lifecycle_phase(self, phase: str | None) -> None:
         self._phase = phase
 
     def is_step_interrupt_pending(self) -> bool:
         return self._pending_interrupt
+
+    def is_step_forced_interrupt_requested(self) -> bool:
+        return self._forced_interrupt_requested
+
+    def register_forced_interrupt_callback(
+        self,
+        name: str,
+        callback: Callable[[], None],
+    ) -> Callable[[], None]:
+        callback_id = self._forced_interrupt_callback_id
+        self._forced_interrupt_callback_id += 1
+        self._forced_interrupt_callbacks[callback_id] = (name, callback)
+
+        def unregister() -> None:
+            self._forced_interrupt_callbacks.pop(callback_id, None)
+
+        return unregister
 
     def raise_if_interrupted_after_step(self) -> None:
         if not self._pending_interrupt:
@@ -83,7 +106,11 @@ class _CliStepInterruptController:
 
     def handle_sigint(self, signum: int, frame: object) -> None:
         del signum, frame
-        if self._phase in _GRACEFUL_INTERRUPT_PHASES and not self._pending_interrupt:
+        if (
+            self._graceful
+            and self._phase in _GRACEFUL_INTERRUPT_PHASES
+            and not self._pending_interrupt
+        ):
             self._pending_interrupt = True
             _CLI_LOGGER.warning(
                 "graceful_interrupt_requested",
@@ -95,7 +122,9 @@ class _CliStepInterruptController:
                 phase=self._phase,
             )
             return
-        if self._pending_interrupt:
+        self._forced_interrupt_requested = True
+        if self._pending_interrupt and not self._forced_interrupt_logged:
+            self._forced_interrupt_logged = True
             _CLI_LOGGER.warning(
                 "forced_interrupt_requested",
                 "Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.",
@@ -105,16 +134,43 @@ class _CliStepInterruptController:
                 ),
                 phase=self._phase,
             )
+        self._start_forced_interrupt_cleanup()
         raise KeyboardInterrupt()
+
+    def _start_forced_interrupt_cleanup(self) -> None:
+        if self._forced_interrupt_cleanup_started:
+            return
+        self._forced_interrupt_cleanup_started = True
+        callbacks = tuple(self._forced_interrupt_callbacks.values())
+        if not callbacks:
+            return
+
+        def cleanup_worker() -> None:
+            for name, callback in callbacks:
+                try:
+                    callback()
+                except BaseException as exc:  # pragma: no cover - defensive logging
+                    _CLI_LOGGER.debug(
+                        "forced_interrupt_cleanup_failure",
+                        "forced interrupt cleanup callback failed",
+                        callback=name,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+
+        threading.Thread(
+            target=cleanup_worker,
+            name="journey-forced-interrupt-cleanup",
+            daemon=True,
+        ).start()
 
 
 @contextmanager
 def _graceful_cli_interrupts(enabled: bool) -> Iterator[None]:
-    if not enabled or threading.current_thread() is not threading.main_thread():
+    if threading.current_thread() is not threading.main_thread():
         yield
         return
 
-    controller = _CliStepInterruptController()
+    controller = _CliStepInterruptController(graceful=enabled)
     previous_handler = signal.getsignal(signal.SIGINT)
 
     def handler(signum: int, frame: object) -> None:
