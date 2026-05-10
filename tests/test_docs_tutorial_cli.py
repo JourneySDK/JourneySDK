@@ -236,7 +236,7 @@ def test_resume_readme_commands_interrupt_then_resume(
     assert "Hint: Run the same command again with --state" in first_output
     assert "Loaded support ticket ticket-001" in first_error
     assert INTERRUPT_PROMPT_PREFIX in first_error
-    assert "interrupt requested; waiting for the active step to reach post-exit" in first_error
+    assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_error
     assert "wait_for_resume_signal" in first_error
     assert "ok attempt=1 duration=" in first_error
 
@@ -340,7 +340,7 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
         assert first_exit == 130
         assert live_stderr.prompt_seen.is_set()
         assert "Interrupted: Journey execution was interrupted before it finished." in first_output
-        assert "interrupt requested; waiting for the active step to reach post-exit" in first_error
+        assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_error
         assert "continue_authenticated_dashboard" in first_error
         assert "ok attempt=1 duration=" in first_error
         assert "Signed in and returned JourneyBrowserPage" in first_error

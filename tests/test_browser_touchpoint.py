@@ -21,6 +21,7 @@ from journeysdk._prompt_memory import (
     PromptMemorySection,
     write_prompt_memory_entry,
 )
+from journeysdk import executor as journey_executor
 from journeysdk import _prompt_engine as journey_prompt_engine
 from journeysdk.touchpoints import _browser_prompt as journey_browser_prompt
 from journeysdk.touchpoints import browser as journey_browser
@@ -60,6 +61,7 @@ def _attach_fake_live_page(
     events: list[object],
     fallback_snapshot: object,
     initial_url: str = "about:blank",
+    fail_goto: BaseException | None = None,
 ) -> None:
     context = getattr(native_page, "context")
     page._journey_snapshot = fallback_snapshot
@@ -70,6 +72,9 @@ def _attach_fake_live_page(
     page._impl_obj = _FakePageImpl(page)
 
     def goto(self, url: str, *, wait_until: str) -> None:
+        if fail_goto is not None:
+            events.append(("goto", url, wait_until))
+            raise fail_goto
         self._fake_url = url
         events.append(("goto", url, wait_until))
 
@@ -113,9 +118,11 @@ class _FakeContext:
         events: list[object],
         *,
         fail_new_page: bool = False,
+        fail_close: BaseException | None = None,
     ) -> None:
         self._events = events
         self._fail_new_page = fail_new_page
+        self._fail_close = fail_close
         self.page = _FakeNativePage(self)
         self._cookies: list[dict[str, object]] = []
 
@@ -134,6 +141,8 @@ class _FakeContext:
 
     def close(self) -> None:
         self._events.append("context_close")
+        if self._fail_close is not None:
+            raise self._fail_close
 
 
 class _FakeBrowser:
@@ -142,9 +151,16 @@ class _FakeBrowser:
         events: list[object],
         *,
         fail_new_page: bool = False,
+        fail_context_close: BaseException | None = None,
+        fail_close: BaseException | None = None,
     ) -> None:
         self._events = events
-        self.context = _FakeContext(events, fail_new_page=fail_new_page)
+        self._fail_close = fail_close
+        self.context = _FakeContext(
+            events,
+            fail_new_page=fail_new_page,
+            fail_close=fail_context_close,
+        )
 
     def new_context(self) -> _FakeContext:
         self._events.append("new_context")
@@ -152,6 +168,8 @@ class _FakeBrowser:
 
     def close(self) -> None:
         self._events.append("browser_close")
+        if self._fail_close is not None:
+            raise self._fail_close
 
 
 class _FakeBrowserType:
@@ -160,15 +178,24 @@ class _FakeBrowserType:
         events: list[object],
         *,
         fail_new_page: bool = False,
+        fail_context_close: BaseException | None = None,
+        fail_browser_close: BaseException | None = None,
         executable_path: str | None = None,
     ) -> None:
         self._events = events
         self._fail_new_page = fail_new_page
+        self._fail_context_close = fail_context_close
+        self._fail_browser_close = fail_browser_close
         self.executable_path = executable_path
 
-    def launch(self, *, headless: bool) -> _FakeBrowser:
-        self._events.append(("launch", headless))
-        return _FakeBrowser(self._events, fail_new_page=self._fail_new_page)
+    def launch(self, *, headless: bool, handle_sigint: bool) -> _FakeBrowser:
+        self._events.append(("launch", headless, handle_sigint))
+        return _FakeBrowser(
+            self._events,
+            fail_new_page=self._fail_new_page,
+            fail_context_close=self._fail_context_close,
+            fail_close=self._fail_browser_close,
+        )
 
 
 class _FakePlaywright:
@@ -177,11 +204,15 @@ class _FakePlaywright:
         events: list[object],
         *,
         fail_new_page: bool = False,
+        fail_context_close: BaseException | None = None,
+        fail_browser_close: BaseException | None = None,
         executable_path: str | None = None,
     ) -> None:
         self.chromium = _FakeBrowserType(
             events,
             fail_new_page=fail_new_page,
+            fail_context_close=fail_context_close,
+            fail_browser_close=fail_browser_close,
             executable_path=executable_path,
         )
 
@@ -192,10 +223,14 @@ class _FakeManager:
         events: list[object],
         *,
         fail_new_page: bool = False,
+        fail_context_close: BaseException | None = None,
+        fail_browser_close: BaseException | None = None,
         executable_path: str | None = None,
     ) -> None:
         self._events = events
         self._fail_new_page = fail_new_page
+        self._fail_context_close = fail_context_close
+        self._fail_browser_close = fail_browser_close
         self._executable_path = executable_path
 
     def __enter__(self) -> _FakePlaywright:
@@ -203,6 +238,8 @@ class _FakeManager:
         return _FakePlaywright(
             self._events,
             fail_new_page=self._fail_new_page,
+            fail_context_close=self._fail_context_close,
+            fail_browser_close=self._fail_browser_close,
             executable_path=self._executable_path,
         )
 
@@ -216,6 +253,9 @@ def _install_fake_playwright(
     events: list[object],
     *,
     fail_new_page: bool = False,
+    fail_goto: BaseException | None = None,
+    fail_context_close: BaseException | None = None,
+    fail_browser_close: BaseException | None = None,
     executable_path: str | None = None,
 ) -> None:
     def attach_live_page(
@@ -229,6 +269,7 @@ def _install_fake_playwright(
             native_page,
             events=events,
             fallback_snapshot=fallback_snapshot,
+            fail_goto=fail_goto,
         )
 
     monkeypatch.setattr(
@@ -237,6 +278,8 @@ def _install_fake_playwright(
         lambda: _FakeManager(
             events,
             fail_new_page=fail_new_page,
+            fail_context_close=fail_context_close,
+            fail_browser_close=fail_browser_close,
             executable_path=executable_path,
         ),
     )
@@ -721,7 +764,7 @@ def test_open_page_opens_url_string_and_cleans_returned_page(
 
     assert events == [
         "playwright_enter",
-        ("launch", True),
+        ("launch", True, False),
         "new_context",
         "new_page",
         ("goto", "http://example.test/login", "load"),
@@ -754,7 +797,7 @@ def test_open_page_cleans_unreturned_page_at_step_exit(monkeypatch):
 
     assert events == [
         "playwright_enter",
-        ("launch", True),
+        ("launch", True, False),
         "new_context",
         "new_page",
         ("goto", "http://example.test/login", "load"),
@@ -783,7 +826,7 @@ def test_open_page_cleans_unreturned_page_when_step_fails(monkeypatch):
     assert "assertion failed" in str(exc_info.value)
     assert events == [
         "playwright_enter",
-        ("launch", True),
+        ("launch", True, False),
         "new_context",
         "new_page",
         ("goto", "http://example.test/login", "load"),
@@ -830,7 +873,7 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypat
 
     assert events == [
         "playwright_enter",
-        ("launch", False),
+        ("launch", False, False),
         "new_context",
         (
             "add_cookies",
@@ -887,7 +930,7 @@ def test_open_page_installs_missing_browser_automatically(monkeypatch, tmp_path:
     ]
     assert events == [
         "playwright_enter",
-        ("launch", True),
+        ("launch", True, False),
         "new_context",
         "new_page",
         ("goto", "http://example.test/login", "load"),
@@ -915,13 +958,119 @@ def test_open_page_cleans_partial_allocations_on_failure(monkeypatch):
     assert "new page failed" in str(exc_info.value)
     assert events == [
         "playwright_enter",
-        ("launch", True),
+        ("launch", True, False),
         "new_context",
         "new_page",
         "context_close",
         "browser_close",
         "playwright_exit",
     ]
+
+
+def test_open_page_keyboard_interrupt_is_not_reported_as_browser_failure(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        fail_goto=KeyboardInterrupt(),
+        fail_context_close=RuntimeError("TargetClosedError: context closed"),
+        fail_browser_close=RuntimeError("TargetClosedError: browser closed"),
+    )
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with pytest.raises(KeyboardInterrupt):
+        journey_sdk.execute(journey)
+
+    output = capsys.readouterr().out
+    assert "Browser failed to open" not in output
+    assert "browser page cleanup failed" not in output
+    assert "TargetClosedError" not in output
+    assert events == [
+        "playwright_enter",
+        ("launch", True, False),
+        "new_context",
+        "new_page",
+        ("goto", "http://example.test/login", "load"),
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
+
+
+def test_open_page_playwright_abort_after_pending_interrupt_is_keyboard_interrupt(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        fail_goto=RuntimeError(
+            "JourneyBrowserPage.goto: net::ERR_ABORTED; maybe frame was detached?"
+        ),
+    )
+
+    class PendingInterruptController:
+        def on_step_lifecycle_phase(self, phase: str | None) -> None:
+            del phase
+
+        def is_step_interrupt_pending(self) -> bool:
+            return True
+
+        def raise_if_interrupted_after_step(self) -> None:
+            raise KeyboardInterrupt()
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with journey_executor._use_step_interrupt_controller(PendingInterruptController()):
+        with pytest.raises(KeyboardInterrupt):
+            journey_sdk.execute(journey)
+
+    output = capsys.readouterr().out
+    assert "Browser failed to open" not in output
+    assert "failed after" not in output
+    assert ("capture_state", "about:blank") not in events
+
+
+def test_open_page_real_navigation_failure_remains_browser_failure(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        fail_goto=RuntimeError("navigation failed"),
+    )
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    output = capsys.readouterr().out
+    assert "navigation failed" in str(exc_info.value)
+    assert "Browser failed to open chromium http://example.test/login" in output
+    assert ("capture_state", "about:blank") in events
 
 
 def test_ensure_browser_installed_reports_automatic_install_failure(

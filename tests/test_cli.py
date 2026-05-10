@@ -1314,6 +1314,7 @@ def test_execute_develop_step_closes_returned_handles_when_prompt_is_interrupted
     output = capsys.readouterr().out
     assert exit_code == 130
     assert "Interrupted: Journey execution was interrupted before it finished." in output
+    assert "This run was interrupted without --state, so it cannot resume." in output
     lines = _event_lines(events_file)
     assert lines.index("prompt_interrupt") < lines.index("exit_publish")
 
@@ -2346,6 +2347,8 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
 
     assert first_exit == 130
     assert "Interrupted: Journey execution was interrupted before it finished." in first_capture.out
+    assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_capture.out
+    assert "phase=execution" not in first_capture.out
     assert "publish" in first_capture.out
     assert "ok attempt=1 duration=" in first_capture.out
     assert "publish interrupted" not in first_capture.out
@@ -2435,6 +2438,8 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
     first_capture = capsys.readouterr()
 
     assert first_exit == 130
+    assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_capture.out
+    assert "Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume." in first_capture.out
     assert "Warning: publish interrupted after" in first_capture.out
     first_events = _event_lines(events_file)
     runtime_seed = first_events[0].rsplit("_", 1)[1]

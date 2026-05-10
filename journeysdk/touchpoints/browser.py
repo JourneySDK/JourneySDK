@@ -14,6 +14,7 @@ from typing import Literal, TypedDict, cast
 from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import _register_step_exit_object, _require_executing_step
+from journeysdk.executor import _is_step_interrupt_pending
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
 
@@ -56,6 +57,12 @@ _REHYDRATE_STORAGE_SCRIPT = """
 """
 
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
+_INTERRUPT_ABORT_MARKERS = (
+    "net::ERR_ABORTED",
+    "TargetClosedError",
+    "Target page, context or browser has been closed",
+    "maybe frame was detached",
+)
 _BROWSER_INSTALL_LOCK = Lock()
 _LOGGER = get_logger("browser")
 
@@ -262,14 +269,18 @@ class JourneyBrowserPage(PlaywrightPage):
             live=was_live,
         )
         failures: list[BaseException] = []
+        interrupted = exc_type is not None and issubclass(exc_type, KeyboardInterrupt)
 
         if self._is_live:
-            try:
-                self._snapshot_for_storage()
-            except BaseException as snapshot_exc:  # pragma: no cover - surfaced through executor
-                failures.append(snapshot_exc)
-            finally:
+            if interrupted:
                 self._mark_step_closed()
+            else:
+                try:
+                    self._snapshot_for_storage()
+                except BaseException as snapshot_exc:  # pragma: no cover - surfaced through executor
+                    failures.append(snapshot_exc)
+                finally:
+                    self._mark_step_closed()
 
         for resource in (
             self._journey_context,
@@ -280,14 +291,30 @@ class JourneyBrowserPage(PlaywrightPage):
                 try:
                     close()
                 except BaseException as close_exc:  # pragma: no cover - environment dependent
-                    failures.append(close_exc)
+                    if interrupted:
+                        _LOGGER.debug(
+                            "page_cleanup_interrupt_close_failure",
+                            "ignored browser cleanup failure during interrupt",
+                            url=cleanup_url,
+                            error=_format_exception(close_exc),
+                        )
+                    else:
+                        failures.append(close_exc)
 
         manager_exit = getattr(self._journey_manager, "__exit__", None)
         if callable(manager_exit):
             try:
                 manager_exit(exc_type, exc, traceback)
             except BaseException as manager_exc:  # pragma: no cover - environment dependent
-                failures.append(manager_exc)
+                if interrupted:
+                    _LOGGER.debug(
+                        "page_cleanup_interrupt_manager_failure",
+                        "ignored browser manager cleanup failure during interrupt",
+                        url=cleanup_url,
+                        error=_format_exception(manager_exc),
+                    )
+                else:
+                    failures.append(manager_exc)
 
         if failures:
             _LOGGER.error(
@@ -429,7 +456,29 @@ def open_page(
             browser=browser,
         )
         return page
-    except BaseException as exc:
+    except KeyboardInterrupt as exc:
+        _LOGGER.warning(
+            "open_page_interrupted",
+            "browser page opening was interrupted",
+            pretty=False,
+            url=snapshot.url,
+            browser=browser,
+        )
+        _close_open_page_after_interrupt(page, exc)
+        raise
+    except Exception as exc:
+        if _is_step_interrupt_pending() and _looks_like_interrupt_abort(exc):
+            _LOGGER.warning(
+                "open_page_interrupted_after_signal",
+                "browser page aborted after Ctrl-C",
+                pretty=False,
+                url=snapshot.url,
+                browser=browser,
+                error=_format_exception(exc),
+            )
+            interrupt = KeyboardInterrupt()
+            _close_open_page_after_interrupt(page, interrupt)
+            raise interrupt from exc
         _LOGGER.error(
             "open_page_failure",
             "failed to open browser page",
@@ -438,6 +487,14 @@ def open_page(
             browser=browser,
             error=_format_exception(exc),
         )
+        try:
+            page.__exit__(type(exc), exc, exc.__traceback__)
+        except BaseException as cleanup_exc:
+            add_note = getattr(exc, "add_note", None)
+            if callable(add_note):
+                add_note(str(cleanup_exc))
+        raise
+    except BaseException as exc:
         try:
             page.__exit__(type(exc), exc, exc.__traceback__)
         except BaseException as cleanup_exc:
@@ -497,12 +554,31 @@ def _launch_browser_with_auto_install(
     )
     launch = getattr(browser_type, "launch")
     try:
-        return launch(headless=headless)
+        return launch(headless=headless, handle_sigint=False)
     except BaseException as exc:
         if attempted_install or not _looks_like_missing_browser_error(exc):
             raise
         _install_playwright_browser(browser)
-        return launch(headless=headless)
+        return launch(headless=headless, handle_sigint=False)
+
+
+def _close_open_page_after_interrupt(
+    page: JourneyBrowserPage,
+    exc: KeyboardInterrupt,
+) -> None:
+    try:
+        page.__exit__(KeyboardInterrupt, exc, exc.__traceback__)
+    except BaseException as cleanup_exc:
+        _LOGGER.debug(
+            "open_page_interrupt_cleanup_failure",
+            "ignored browser cleanup failure during interrupt",
+            error=_format_exception(cleanup_exc),
+        )
+
+
+def _looks_like_interrupt_abort(exc: BaseException) -> bool:
+    rendered = _format_exception(exc)
+    return any(marker in rendered for marker in _INTERRUPT_ABORT_MARKERS)
 
 
 def _ensure_browser_type_installed(

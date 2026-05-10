@@ -87,10 +87,24 @@ class _CliStepInterruptController:
             self._pending_interrupt = True
             _CLI_LOGGER.warning(
                 "graceful_interrupt_requested",
-                "interrupt requested; waiting for the active step to reach post-exit",
+                "Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.",
+                pretty=pretty_line(
+                    "Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.",
+                    style="warning",
+                ),
                 phase=self._phase,
             )
             return
+        if self._pending_interrupt:
+            _CLI_LOGGER.warning(
+                "forced_interrupt_requested",
+                "Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.",
+                pretty=pretty_line(
+                    "Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.",
+                    style="warning",
+                ),
+                phase=self._phase,
+            )
         raise KeyboardInterrupt()
 
 
@@ -1532,9 +1546,13 @@ def _emit_interrupt_output(*, state: str | None) -> None:
         state=state,
     )
     hint = (
-        f"Run the same command again with --state {state} to resume."
+        f"Run the same command again with --state {state} to resume from saved progress."
         if state is not None
-        else "Run the same command again to start over."
+        else (
+            "This run was interrupted without --state, so it cannot resume. "
+            "Run the same command again to start over, or rerun with --state <path> "
+            "next time to make Ctrl-C resumable."
+        )
     )
     _CLI_LOGGER.warning(
         "interrupt_summary",
