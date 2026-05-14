@@ -18,9 +18,9 @@ from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import _register_step_exit_object, _require_executing_step
 from journeysdk.executor import (
     _is_step_forced_interrupt_requested,
-    _is_step_interrupt_pending,
     _register_forced_step_interrupt_callback,
 )
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
 
@@ -63,12 +63,6 @@ _REHYDRATE_STORAGE_SCRIPT = """
 """
 
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
-_INTERRUPT_ABORT_MARKERS = (
-    "net::ERR_ABORTED",
-    "TargetClosedError",
-    "Target page, context or browser has been closed",
-    "maybe frame was detached",
-)
 _BROWSER_INSTALL_LOCK = Lock()
 _LOGGER = get_logger("browser")
 
@@ -192,6 +186,7 @@ class JourneyBrowserPage(PlaywrightPage):
         self._journey_browser = None
         self._journey_manager = None
         self._journey_exit_started = False
+        self._journey_forced_interrupt_cleanup_started = False
         self._journey_forced_interrupt_unregister: Callable[[], None] | None = None
 
     @classmethod
@@ -264,9 +259,13 @@ class JourneyBrowserPage(PlaywrightPage):
             unregister()
 
     def _force_close_after_forced_interrupt(self) -> None:
+        self._journey_forced_interrupt_cleanup_started = True
         _suppress_playwright_callback_future_noise(self._journey_manager)
         _kill_playwright_driver_process(self._journey_manager)
         self._mark_step_closed()
+
+    def _is_forced_interrupt_cleanup_started(self) -> bool:
+        return bool(getattr(self, "_journey_forced_interrupt_cleanup_started", False))
 
     def _snapshot_for_storage(self) -> _PageSnapshot:
         if self._is_live:
@@ -305,6 +304,7 @@ class JourneyBrowserPage(PlaywrightPage):
         ) or forced_interrupted
 
         if forced_interrupted:
+            self._journey_forced_interrupt_cleanup_started = True
             if self._is_live:
                 self._mark_step_closed()
             _suppress_playwright_callback_future_noise(self._journey_manager)
@@ -515,9 +515,7 @@ def open_page(
         _close_open_page_after_interrupt(page, exc)
         raise
     except Exception as exc:
-        if (
-            _is_step_interrupt_pending() or _is_step_forced_interrupt_requested()
-        ) and _looks_like_interrupt_abort(exc):
+        if _is_forced_interrupt_playwright_error(page, exc):
             _LOGGER.warning(
                 "open_page_interrupted_after_signal",
                 "browser page aborted after Ctrl-C",
@@ -626,9 +624,16 @@ def _close_open_page_after_interrupt(
         )
 
 
-def _looks_like_interrupt_abort(exc: BaseException) -> bool:
-    rendered = _format_exception(exc)
-    return any(marker in rendered for marker in _INTERRUPT_ABORT_MARKERS)
+def _is_forced_interrupt_playwright_error(
+    page: JourneyBrowserPage,
+    exc: BaseException,
+) -> bool:
+    """Classify only Playwright errors caused by Journey-owned forced cleanup."""
+
+    return page._is_forced_interrupt_cleanup_started() and isinstance(
+        exc,
+        PlaywrightError,
+    )
 
 
 def _suppress_playwright_callback_future_noise(manager: object) -> None:

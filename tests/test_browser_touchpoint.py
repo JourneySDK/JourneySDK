@@ -14,6 +14,7 @@ from journeysdk.errors import CallableExecutionError, InvalidBranchUsageError
 
 pytest.importorskip("playwright.sync_api")
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page as PlaywrightPage
 
 from journeysdk._prompt_memory import (
@@ -62,6 +63,7 @@ def _attach_fake_live_page(
     fallback_snapshot: object,
     initial_url: str = "about:blank",
     fail_goto: BaseException | None = None,
+    force_cleanup_before_goto_failure: bool = False,
 ) -> None:
     context = getattr(native_page, "context")
     page._journey_snapshot = fallback_snapshot
@@ -74,6 +76,8 @@ def _attach_fake_live_page(
     def goto(self, url: str, *, wait_until: str) -> None:
         if fail_goto is not None:
             events.append(("goto", url, wait_until))
+            if force_cleanup_before_goto_failure:
+                self._force_close_after_forced_interrupt()
             raise fail_goto
         self._fake_url = url
         events.append(("goto", url, wait_until))
@@ -96,6 +100,8 @@ def _attach_fake_live_page(
         events.append(("reload", wait_until))
 
     def snapshot_for_storage(self):
+        if not self._is_live and self._journey_snapshot is not None:
+            return self._journey_snapshot
         events.append(("capture_state", self._fake_url))
         self._journey_snapshot = journey_browser._PageSnapshot.from_payload(
             _state_payload(
@@ -254,6 +260,7 @@ def _install_fake_playwright(
     *,
     fail_new_page: bool = False,
     fail_goto: BaseException | None = None,
+    force_cleanup_before_goto_failure: bool = False,
     fail_context_close: BaseException | None = None,
     fail_browser_close: BaseException | None = None,
     executable_path: str | None = None,
@@ -270,6 +277,7 @@ def _install_fake_playwright(
             events=events,
             fallback_snapshot=fallback_snapshot,
             fail_goto=fail_goto,
+            force_cleanup_before_goto_failure=force_cleanup_before_goto_failure,
         )
 
     monkeypatch.setattr(
@@ -1006,7 +1014,7 @@ def test_open_page_keyboard_interrupt_is_not_reported_as_browser_failure(
     ]
 
 
-def test_open_page_playwright_abort_after_pending_interrupt_is_keyboard_interrupt(
+def test_open_page_playwright_abort_after_forced_interrupt_is_keyboard_interrupt(
     monkeypatch,
     capsys: pytest.CaptureFixture[str],
 ):
@@ -1014,16 +1022,20 @@ def test_open_page_playwright_abort_after_pending_interrupt_is_keyboard_interrup
     _install_fake_playwright(
         monkeypatch,
         events,
-        fail_goto=RuntimeError(
+        fail_goto=PlaywrightError(
             "JourneyBrowserPage.goto: net::ERR_ABORTED; maybe frame was detached?"
         ),
+        force_cleanup_before_goto_failure=True,
     )
 
-    class PendingInterruptController:
+    class ForcedInterruptController:
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
             del phase
 
         def is_step_interrupt_pending(self) -> bool:
+            return False
+
+        def is_step_forced_interrupt_requested(self) -> bool:
             return True
 
         def raise_if_interrupted_after_step(self) -> None:
@@ -1036,7 +1048,7 @@ def test_open_page_playwright_abort_after_pending_interrupt_is_keyboard_interrup
     def journey():
         journey_sdk.step(open_fails)
 
-    with journey_executor._use_step_interrupt_controller(PendingInterruptController()):
+    with journey_executor._use_step_interrupt_controller(ForcedInterruptController()):
         with pytest.raises(KeyboardInterrupt):
             journey_sdk.execute(journey)
 
@@ -1044,6 +1056,161 @@ def test_open_page_playwright_abort_after_pending_interrupt_is_keyboard_interrup
     assert "Browser failed to open" not in output
     assert "failed after" not in output
     assert ("capture_state", "about:blank") not in events
+
+
+def test_open_page_forced_interrupt_without_cleanup_keeps_playwright_failure(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        fail_goto=PlaywrightError(
+            "JourneyBrowserPage.goto: net::ERR_ABORTED; maybe frame was detached?"
+        ),
+    )
+
+    class ForcedInterruptController:
+        def on_step_lifecycle_phase(self, phase: str | None) -> None:
+            del phase
+
+        def is_step_interrupt_pending(self) -> bool:
+            return False
+
+        def is_step_forced_interrupt_requested(self) -> bool:
+            return True
+
+        def raise_if_interrupted_after_step(self) -> None:
+            return None
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with journey_executor._use_step_interrupt_controller(ForcedInterruptController()):
+        with pytest.raises(CallableExecutionError) as exc_info:
+            journey_sdk.execute(journey)
+
+    output = capsys.readouterr().out
+    assert "net::ERR_ABORTED" in str(exc_info.value)
+    assert "Browser failed to open chromium http://example.test/login" in output
+
+
+def test_open_page_pending_interrupt_keeps_real_playwright_failure(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        fail_goto=PlaywrightError(
+            "JourneyBrowserPage.goto: net::ERR_ABORTED; maybe frame was detached?"
+        ),
+    )
+
+    class PendingInterruptController:
+        def on_step_lifecycle_phase(self, phase: str | None) -> None:
+            del phase
+
+        def is_step_interrupt_pending(self) -> bool:
+            return True
+
+        def is_step_forced_interrupt_requested(self) -> bool:
+            return False
+
+        def raise_if_interrupted_after_step(self) -> None:
+            raise KeyboardInterrupt()
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with journey_executor._use_step_interrupt_controller(PendingInterruptController()):
+        with pytest.raises(CallableExecutionError) as exc_info:
+            journey_sdk.execute(journey)
+
+    output = capsys.readouterr().out
+    assert "net::ERR_ABORTED" in str(exc_info.value)
+    assert "Browser failed to open chromium http://example.test/login" in output
+
+
+def test_open_page_no_interrupt_keeps_target_closed_playwright_failure(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        fail_goto=PlaywrightError(
+            "TargetClosedError: Target page, context or browser has been closed"
+        ),
+    )
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    output = capsys.readouterr().out
+    assert "TargetClosedError" in str(exc_info.value)
+    assert "Browser failed to open chromium http://example.test/login" in output
+
+
+def test_open_page_forced_interrupt_keeps_non_playwright_failure(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        fail_goto=RuntimeError(
+            "TargetClosedError: application-level failure that is not Playwright"
+        ),
+        force_cleanup_before_goto_failure=True,
+    )
+
+    class ForcedInterruptController:
+        def on_step_lifecycle_phase(self, phase: str | None) -> None:
+            del phase
+
+        def is_step_interrupt_pending(self) -> bool:
+            return False
+
+        def is_step_forced_interrupt_requested(self) -> bool:
+            return True
+
+        def raise_if_interrupted_after_step(self) -> None:
+            return None
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with journey_executor._use_step_interrupt_controller(ForcedInterruptController()):
+        with pytest.raises(CallableExecutionError) as exc_info:
+            journey_sdk.execute(journey)
+
+    output = capsys.readouterr().out
+    assert "application-level failure" in str(exc_info.value)
+    assert "Browser failed to open chromium http://example.test/login" in output
 
 
 def test_browser_interrupt_cleanup_marks_playwright_callback_futures_observed():
@@ -1140,9 +1307,23 @@ def test_browser_registers_forced_interrupt_cleanup_that_stops_playwright_driver
     assert len(controller.callbacks) == 1
     controller.callbacks[0]()
     assert killed == [(12345, journey_browser.signal.SIGTERM)]
+    assert page._is_forced_interrupt_cleanup_started()
 
 
-def test_browser_prompt_forced_target_closed_is_keyboard_interrupt():
+def test_browser_prompt_forced_cleanup_playwright_error_is_keyboard_interrupt():
+    page = journey_browser.JourneyBrowserPage._from_snapshot(
+        journey_browser._PageSnapshot.from_url("https://example.test/")
+    )
+    page._journey_forced_interrupt_cleanup_started = True
+
+    with pytest.raises(KeyboardInterrupt):
+        journey_browser_prompt._raise_keyboard_interrupt_if_forced_prompt_abort(
+            page,
+            PlaywrightError("TargetClosedError: Target page has been closed"),
+        )
+
+
+def test_browser_prompt_forced_interrupt_without_cleanup_keeps_playwright_error():
     class FakeController:
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
             del phase
@@ -1156,15 +1337,31 @@ def test_browser_prompt_forced_target_closed_is_keyboard_interrupt():
         def raise_if_interrupted_after_step(self) -> None:
             return None
 
-    with journey_executor._use_step_interrupt_controller(FakeController()):
-        with pytest.raises(KeyboardInterrupt):
-            journey_browser_prompt._raise_keyboard_interrupt_if_forced_prompt_abort(
-                RuntimeError("TargetClosedError: Target page has been closed")
-            )
+    page = journey_browser.JourneyBrowserPage._from_snapshot(
+        journey_browser._PageSnapshot.from_url("https://example.test/")
+    )
 
+    with journey_executor._use_step_interrupt_controller(FakeController()):
         journey_browser_prompt._raise_keyboard_interrupt_if_forced_prompt_abort(
-            RuntimeError("ordinary prompt failure")
+            page,
+            PlaywrightError("TargetClosedError: Target page has been closed"),
         )
+
+
+def test_browser_prompt_forced_cleanup_keeps_non_playwright_error():
+    page = journey_browser.JourneyBrowserPage._from_snapshot(
+        journey_browser._PageSnapshot.from_url("https://example.test/")
+    )
+    page._journey_forced_interrupt_cleanup_started = True
+
+    journey_browser_prompt._raise_keyboard_interrupt_if_forced_prompt_abort(
+        page,
+        RuntimeError("ordinary prompt failure"),
+    )
+    journey_browser_prompt._raise_keyboard_interrupt_if_forced_prompt_abort(
+        page,
+        RuntimeError("TargetClosedError: application-level failure"),
+    )
 
 
 def test_open_page_real_navigation_failure_remains_browser_failure(
