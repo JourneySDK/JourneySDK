@@ -24,6 +24,7 @@ from .rehydration import StoredValue
 STATE_FORMAT_VERSION = 11
 DEFAULT_STATE_FILENAME = "state.json"
 DEFAULT_STATE_DIR = ".journey"
+LEGACY_DEFAULT_STATE_FILENAME = ".state"
 
 
 @dataclass
@@ -133,6 +134,7 @@ def prepare_execution_state_storage(
 
     path = Path(path)
     if update_enabled:
+        _migrate_legacy_default_state(path)
         artifact_root, temporary = artifact_root_for_state(path)
         return ExecutionStateStorage(
             display_path=path,
@@ -158,6 +160,21 @@ def prepare_execution_state_storage(
         cleanup_root=temp_root,
         artifact_root_is_temporary=True,
     )
+
+
+def _migrate_legacy_default_state(path: Path) -> None:
+    if path.name != DEFAULT_STATE_FILENAME or path.parent.name != DEFAULT_STATE_DIR:
+        return
+
+    legacy_path = path.parent.parent / LEGACY_DEFAULT_STATE_FILENAME
+    if legacy_path.exists() and not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(legacy_path, path)
+
+    legacy_artifacts, _ = artifact_root_for_state(legacy_path)
+    artifact_root, _ = artifact_root_for_state(path)
+    if legacy_artifacts.exists() and not artifact_root.exists():
+        shutil.move(str(legacy_artifacts), str(artifact_root))
 
 
 def delete_artifact_root(path: Path) -> None:

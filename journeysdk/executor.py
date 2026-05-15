@@ -787,6 +787,13 @@ def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotSta
     )
 
 
+def _execution_state_is_complete(state: ExecutionStateEnvelope) -> bool:
+    return (
+        state.active_case is None
+        and state.current_case_index >= len(state.selected_cases)
+    )
+
+
 def _rehydration_key(*, kind: str, identifier: str, lineage: tuple[str, ...]) -> str:
     if not lineage:
         return f"{kind}:{identifier}"
@@ -891,6 +898,7 @@ class _StateController:
         develop_step: str | None,
         selected_cases: list[_SelectedCase],
         allow_stale_develop_pause: bool = False,
+        reset_completed_state: bool = False,
     ) -> None:
         self.path = storage.display_path
         self._run_path = storage.run_path
@@ -912,6 +920,12 @@ class _StateController:
         loaded: ExecutionStateEnvelope | None = None
         if self._run_path is not None:
             loaded = load_execution_state(self._run_path)
+        if (
+            reset_completed_state
+            and loaded is not None
+            and _execution_state_is_complete(loaded)
+        ):
+            loaded = None
 
         if loaded is None:
             loaded = ExecutionStateEnvelope(
@@ -3286,6 +3300,7 @@ def _execute_plan(
         allow_stale_develop_pause=(
             develop_step is not None and effective_pause_action is None
         ),
+        reset_completed_state=using_default_state,
     )
     resolved_prompt_memory_root = _resolve_prompt_memory_root(
         journey_fn,
@@ -3418,8 +3433,6 @@ def _execute_plan(
             case_reports=case_reports,
         )
         execution_observer.on_journey_complete(report=result)
-        if using_default_state:
-            state_controller.clear()
     except KeyboardInterrupt:
         raise
     except Exception:

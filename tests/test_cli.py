@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 import sys
 import threading
 import textwrap
@@ -18,7 +19,7 @@ from journeysdk.cli import (
     main,
 )
 from journeysdk.logger import configure_logging
-from journeysdk.state import default_execution_state_path
+from journeysdk.state import default_execution_state_path, load_execution_state
 
 
 @pytest.fixture(autouse=True)
@@ -2226,7 +2227,7 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in output
 
 
-def test_execute_default_state_uses_single_file_and_clears_after_success(
+def test_execute_default_state_uses_single_file_after_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2261,8 +2262,44 @@ def test_execute_default_state_uses_single_file_and_clears_after_success(
     exit_code = main(["--log-level", "off"])
 
     assert exit_code == 0
-    assert not _state_path(alpha_file).exists()
+    assert _state_path(alpha_file).exists()
     assert _state_path(alpha_file) == _state_path(beta_file)
+
+
+def test_execute_default_state_persists_but_reruns_after_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def finish():
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write("finish\\n")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(finish)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    first_exit = main(["--file", "flow.py", "--log-level", "off"])
+    second_exit = main(["--file", "flow.py", "--log-level", "off"])
+
+    assert first_exit == 0
+    assert second_exit == 0
+    assert _state_path(flow_file).exists()
+    assert _event_lines(events_file) == ["finish", "finish"]
 
 
 def test_execute_no_state_skips_default_state_file(
@@ -2406,7 +2443,74 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     assert [item["journey_name"] for item in payload["journeys"]] == ["flow"]
     assert "plan" not in payload["journeys"][0]
     assert payload["errors"] == []
-    assert not state_file.exists()
+    assert state_file.exists()
+
+
+def test_execute_migrates_legacy_default_state_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    state_file = _state_path(flow_file)
+    legacy_state_file = tmp_path / ".state"
+    marker_file = tmp_path / "resume.flag"
+    events_file = tmp_path / "events.log"
+
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        MARKER = Path({str(marker_file)!r})
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare")
+            return {{"token": "ready"}}
+
+        def maybe_interrupt(payload):
+            _append(f"work_{{payload['token']}}")
+            if not MARKER.exists():
+                MARKER.write_text("ready", encoding="utf-8")
+                raise KeyboardInterrupt()
+            return True
+
+        @journey.journey
+        def flow():
+            payload = journey.step(prepare)
+            journey.step(maybe_interrupt, payload)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    first_exit = main(["--file", "flow.py", "--log-level", "off"])
+    capsys.readouterr()
+
+    assert first_exit == 130
+    state = load_execution_state(state_file)
+    assert state is not None
+    legacy_state_file.write_bytes(pickle.dumps(state))
+    state_file.unlink()
+    state_file.parent.rmdir()
+
+    second_exit = main(["--file", "flow.py", "--log-level", "off"])
+    capsys.readouterr()
+
+    assert second_exit == 0
+    assert not legacy_state_file.exists()
+    assert state_file.exists()
+    assert _event_lines(events_file) == [
+        "prepare",
+        "work_ready",
+        "work_ready",
+    ]
 
 
 def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
