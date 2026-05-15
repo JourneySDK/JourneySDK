@@ -30,7 +30,7 @@ for retry, branch, or persistent-state behavior.
 
 Prompt-capable official touchpoints use named prompt memory and optional structured output. Pass a literal, unique
 `memory="name"` to a touchpoint's `prompt(...)` method when prior successful runs should teach later runs replayable fast
-paths. Journey stores `name.memory.md` beside the journey source. Use `--no-memory` for runs that should ignore and avoid
+paths. Journey stores `.journey/name.memory.md` under the journey source directory. Use `--no-memory` for runs that should ignore and avoid
 updating those files. Prompt methods return a result object with `result.output`. Omit `output` when that field should
 contain plain text; pass `output={"field": "description"}` or JSON-schema field fragments when it should contain a
 provider-validated `dict[str, object]`. If the requested browser task cannot complete because the page shows a blocking
@@ -140,7 +140,7 @@ in-process continue/retry prompt.
 - Prefer explicit step functions over anonymous lambdas or deeply nested closures.
 - Store external resource handles as serializable descriptors or rehydratable top-level classes, not as live sockets, browsers, sessions, or clients.
 - Keep official touchpoint usage side-effect free during planning; acquire live resources inside step execution.
-- Use literal, unique prompt-memory names for AI-driven `prompt(...)` calls, and keep generated `*.memory.md` files
+- Use literal, unique prompt-memory names for AI-driven `prompt(...)` calls, and keep generated `.journey/*.memory.md` files
   reviewable if they are committed.
 - Use `journeysdk.logger.get_logger("component")` for SDK/touchpoint/tutorial diagnostics instead of printing directly.
 - When adding logger calls, keep machine-readable fields in `message` and keyword fields, and pass `pretty=` only for

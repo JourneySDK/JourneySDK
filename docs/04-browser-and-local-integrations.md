@@ -370,7 +370,7 @@ If the requested browser task cannot complete because the page shows a blocking 
 invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
 
 The `memory="sign-in-popup"` argument gives this prompt a named memory file. After a successful run, Journey writes
-`docs/browser_prompt_journey/sign-in-popup.memory.md` beside the journey source. Later runs with the same prompt
+`docs/browser_prompt_journey/.journey/sign-in-popup.memory.md`. Later runs with the same prompt
 memory replay the successful fast path first, and fall back to the model with the remembered path as context if replay
 no longer matches the page. Prompt memory stores compact code and checks only; it does not store screenshots, rendered
 HTML, or full model prompts.

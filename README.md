@@ -435,7 +435,7 @@ Set provider credentials with the provider's normal environment variables such a
 `ANTHROPIC_API_KEY`. Browser prompts default to `anthropic:claude-sonnet-4-6`; override that by passing a LangChain
 model identifier like `model="anthropic:claude-sonnet-4-5"` or by setting `JOURNEY_BROWSER_PROMPT_MODEL`.
 The optional `memory="sign-in-popup"` argument stores a replayable fast path from successful runs in
-`sign-in-popup.memory.md` beside the journey source; pass `--no-memory` when you want a run to ignore and avoid
+`.journey/sign-in-popup.memory.md` under the journey source directory; pass `--no-memory` when you want a run to ignore and avoid
 updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.
 The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
 `dict[str, object]` return value instead of plain text.

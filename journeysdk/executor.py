@@ -41,6 +41,7 @@ from .session import use_session
 from .state import (
     STATE_FORMAT_VERSION,
     ActiveCaseState,
+    DEFAULT_STATE_DIR,
     ExecutionStateStorage,
     ExecutionStateEnvelope,
     PausedStepState,
@@ -3212,9 +3213,9 @@ def _resolve_prompt_memory_root(
     prompt_memory_root: str | Path | None,
 ) -> Path:
     if prompt_memory_root is not None:
-        return Path(prompt_memory_root)
+        return Path(prompt_memory_root) / DEFAULT_STATE_DIR
     source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
-    return Path(source_file).resolve().parent
+    return Path(source_file).resolve().parent / DEFAULT_STATE_DIR
 
 
 def _resolve_default_state_path(

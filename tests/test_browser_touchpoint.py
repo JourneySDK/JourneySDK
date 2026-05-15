@@ -18,6 +18,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page as PlaywrightPage
 
 from journeysdk._prompt_memory import (
+    PROMPT_MEMORY_DIR,
     PromptMemoryEntry,
     PromptMemorySection,
     write_prompt_memory_entry,
@@ -26,6 +27,10 @@ from journeysdk import executor as journey_executor
 from journeysdk import _prompt_engine as journey_prompt_engine
 from journeysdk.touchpoints import _browser_prompt as journey_browser_prompt
 from journeysdk.touchpoints import browser as journey_browser
+
+
+def _prompt_memory_path(root: Path, name: str) -> Path:
+    return root / PROMPT_MEMORY_DIR / f"{name}.memory.md"
 
 
 def _state_payload(
@@ -1941,7 +1946,7 @@ def test_journey_browser_prompt_finish_with_blocking_error_raises(
     assert reason in prompt_text
     assert "AI prompt" in log_output
     assert "failed" in log_output
-    assert not (tmp_path / "sign-in.memory.md").exists()
+    assert not _prompt_memory_path(tmp_path, "sign-in").exists()
 
 
 def test_journey_browser_prompt_fail_action_raises_without_final_output(
@@ -1980,7 +1985,7 @@ def test_journey_browser_prompt_fail_action_raises_without_final_output(
     assert not fake_model.structured_calls
     assert "AI prompt" in log_output
     assert "failed" in log_output
-    assert not (tmp_path / "sign-in.memory.md").exists()
+    assert not _prompt_memory_path(tmp_path, "sign-in").exists()
 
 
 def test_journey_browser_prompt_rejects_invalid_output_specs(monkeypatch):
@@ -2210,7 +2215,7 @@ def test_journey_browser_prompt_compiles_and_replays_named_memory(
         memory="chat-start",
     ) == "Signed in."
 
-    memory_path = tmp_path / "chat-start.memory.md"
+    memory_path = _prompt_memory_path(tmp_path, "chat-start")
     memory_text = memory_path.read_text(encoding="utf-8")
     assert 'page.locator("#password-field").fill("1111", timeout=timeout_ms)' in memory_text
     assert '"1212"' not in memory_text
@@ -2281,7 +2286,7 @@ def test_journey_browser_prompt_falls_back_when_memory_replay_fails(
 ):
     monkeypatch.chdir(tmp_path)
     write_prompt_memory_entry(
-        tmp_path / "sign-in.memory.md",
+        _prompt_memory_path(tmp_path, "sign-in"),
         PromptMemoryEntry(
             component="browser",
             instruction="sign in",
@@ -2374,7 +2379,7 @@ def test_journey_browser_prompt_validates_memory_sections_at_browser_boundary(
 ):
     monkeypatch.chdir(tmp_path)
     write_prompt_memory_entry(
-        tmp_path / "sign-in.memory.md",
+        _prompt_memory_path(tmp_path, "sign-in"),
         PromptMemoryEntry(
             component="browser",
             instruction="sign in",
@@ -2415,7 +2420,8 @@ def test_journey_browser_prompt_does_not_reuse_legacy_memory_shape(
     tmp_path: Path,
 ):
     monkeypatch.chdir(tmp_path)
-    memory_path = tmp_path / "legacy.memory.json"
+    memory_path = tmp_path / PROMPT_MEMORY_DIR / "legacy.memory.json"
+    memory_path.parent.mkdir(parents=True)
     memory_path.write_text(
         json.dumps(
             {

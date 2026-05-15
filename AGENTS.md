@@ -73,7 +73,7 @@ controls visibility with `--log-level debug|info|warning|error|off`.
   explicit `output` uses native model structured-output support and stores a dictionary on `result.output`.
 - If an AI-driven `prompt(...)` cannot complete the requested task because the observed app state blocks it, the prompt
   should raise instead of returning a successful result that merely summarizes the failure.
-- Memory files are named `[memory].memory.md`, live beside the journey source file, and are intended to be
+- Memory files are named `.journey/[memory].memory.md`, live under the journey source file's `.journey` folder, and are intended to be
   reviewable replay fast paths in version control.
 - `--no-memory` and `execute(..., no_memory=True)` must disable all prompt-memory reads and writes.
 - `--no-memory-update` and `execute(..., no_memory_update=True)` must still allow prompt-memory reads but skip writes.

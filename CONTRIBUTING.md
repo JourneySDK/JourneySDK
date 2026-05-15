@@ -77,7 +77,7 @@ Official touchpoints that add an AI-driven `prompt(...)` method should use the s
 successful runs. Do not persist screenshots, rendered HTML, full model prompts, or other raw observations that may
 contain secrets.
 
-Memory files are named `[memory].memory.md` and live beside the journey source. Planning must be able to validate
+Memory files are named `.journey/[memory].memory.md` and live under the journey source file's `.journey` folder. Planning must be able to validate
 literal memory names and reject duplicates before execution.
 
 ## Planning Hooks And Core Dependencies
