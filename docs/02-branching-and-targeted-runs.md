@@ -92,7 +92,7 @@ from the selected case's beginning.
 ### Stop After the Target Step While You Iterate
 
 ```bash
-uv run journey --file docs/branching_journey/branching_journey.py --develop-step assert_manual_review_path --state dev.state
+uv run journey --file docs/branching_journey/branching_journey.py --develop-step assert_manual_review_path
 ```
 
 ```console
@@ -176,7 +176,7 @@ retry behavior causes replay.
 - Branch `start_from` points to an earlier step result, and later branch cases resume from that step's post-exit
   boundary.
 - External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, branch
-  rewinds, and `--state` all use the same rehydration path.
+  rewinds, and persistent state all use the same rehydration path.
 - `--step` picks one case. `--develop-step` picks one case and stops after the target so you can iterate faster.
 - Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.
 

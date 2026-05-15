@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from journeysdk import journey, step
+from docs._reset_state import reset_default_state
 
 EVENTS: list[str] = []
 
 
 def reset_demo_state() -> None:
     EVENTS.clear()
+    reset_default_state(__file__)
 
 
 def load_welcome_email_job() -> dict[str, str]:

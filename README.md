@@ -19,7 +19,7 @@ The core value is:
 - **Touchpoints for every system in the journey**: drive or verify each system, service, and channel involved in the
   user flow. A journey might act through the browser touchpoint, then check email, webhooks, payment providers, CRM
   records, support/Ops queues, SMS, or back-office systems through other touchpoints.
-- **Interrupt long waits, resume later**: run with `--state` so a test can stop while waiting on async work or a
+- **Interrupt long waits, resume later**: default persistent state lets a test stop while waiting on async work or a
   third-party service and continue later from saved step state.
 - **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory for
   faster repeat runs, and keep tests editable by the same AI coding assistants that write application code.
@@ -118,7 +118,7 @@ publish checklist.
 
 ## Authoring model
 
-Write one journey in sequential Python with `step`, `branch`, `branch(start_from=...)`, `--state`, and optional step
+Write one journey in sequential Python with `step`, `branch`, `branch(start_from=...)`, default state, and optional step
 retries via `step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate module-level journey entrypoints with
 `@journey`. Journey SDK compiles that authoring flow into linear executable cases so teams can cover branching user
 paths without duplicating test code.
@@ -199,14 +199,14 @@ retried.
 - **Step boundary**: the boundary before and after a step where Journey can save progress, stop, retry, or resume.
 - **Touchpoint**: a system, service, or channel that participates in the tested journey, such as a browser, email,
   webhook, payment gateway, CRM, support/Ops system, SMS provider, or back-office process.
-- **State file**: the `--state` file that stores selected cases, completed case reports, active progress, saved step
-  bindings, and branch-anchor snapshots.
+- **State file**: the default `.journey/state.json` file that stores selected cases, completed case reports, active
+  progress, saved step bindings, and branch-anchor snapshots.
 - **Saved step binding**: stored step inputs, metadata, and optional result that Journey can use when replaying or
   resuming.
 - **Dirty step**: the step that had started but had not completed when execution was interrupted.
-- **Graceful interrupt**: the first Ctrl-C in a CLI run with `--state`. Journey lets the active step reach post-exit
+- **Graceful interrupt**: the first Ctrl-C in a CLI run with persistent state. Journey lets the active step reach post-exit
   so progress can be saved and the next run can continue after that step.
-- **Forced interrupt**: the second Ctrl-C in a CLI run with `--state`. Journey stops the active dirty step as soon as
+- **Forced interrupt**: the second Ctrl-C in a CLI run with persistent state. Journey stops the active dirty step as soon as
   it can; the next run restarts that step from saved inputs instead of jumping into the middle of the function.
 - **Replay**: rerunning part of a case from a step boundary while reusing saved values before that boundary.
 - **Replay boundary**: the step index where replay starts.
@@ -225,7 +225,7 @@ retried.
 
 ## Journey Rehydration Protocol
 
-When retries, `--state`, or step-started branches need
+When retries, persistent state, or step-started branches need
 to reuse a step value across a replay boundary, Journey rehydrates that value
 from SDK-managed saved step bindings. Any step argument or return value that
 may cross one of those boundaries must be pickle-serializable or implement the
@@ -274,7 +274,7 @@ Each step attempt has six phases:
    returned handles still live.
 5. **Exit**: Journey discovers returned `__exit__` handles and closes them
    before the next step runs.
-6. **Post-exit**: in a CLI run with `--state`, the first Ctrl-C stops here after the completed step has been saved and
+6. **Post-exit**: in a CLI run with persistent state, the first Ctrl-C stops here after the completed step has been saved and
    exited.
 
 In noninteractive `--develop-step` mode, Journey stores the returned value,
@@ -321,7 +321,7 @@ outside this protocol. Either return the handle, return a container that
 contains it, or close it explicitly with local `try` / `finally` code.
 
 Keep lifecycle methods idempotent, and close only resources owned by that touchpoint
-call. If the step returns a value that must survive retries, `--state`, or
+call. If the step returns a value that must survive retries, persistent state, or
 branch replay, that value should also implement the Journey rehydration
 protocol above; do not rely on pickling live resources. `JourneyBrowserPage`
 is the canonical example because it implements both protocols: `__exit__`
@@ -442,15 +442,15 @@ The optional `output={...}` argument maps field names to descriptions or JSON-sc
 If the browser task cannot be completed because the page shows a blocking app state, such as a locked account or
 invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
 
-Interrupted executions can also be resumed with `journey --state run.state`. When state persistence is enabled,
+Interrupted executions resume by rerunning the same Journey command. When state persistence is enabled,
 Journey stores the step inputs and outputs it may need to replay later, so those values must be pickle-serializable.
 In the CLI, the first Ctrl-C during an active step is graceful: Journey logs that it is finishing the active step,
 lets that step finish storage and exit, then stops at post-exit. The next run continues after that completed step.
 Press Ctrl-C a second time to force an immediate stop; Journey treats the current step as dirty, and the next run
-restarts that step from the top with the same saved inputs. Without `--state`, Ctrl-C stops immediately and the run
-cannot resume. The same replay rule applies to steps that may be replayed because of retries or
-`branch(start_from=...)`. The state file is kept after the run finishes, so rerunning the same command can reuse that
-saved progress; delete the file when you want to start fresh.
+restarts that step from the top with the same saved inputs. With `--no-state`, Ctrl-C stops immediately and the run
+cannot resume. Use `--no-state-update` to read existing progress without writing new updates. The same replay rule
+applies to steps that may be replayed because of retries or `branch(start_from=...)`. Default state is cleared after a
+clean completion; interrupted and paused runs keep `.journey/state.json` so the same command can resume.
 
 ## How it works
 
@@ -459,7 +459,7 @@ saved progress; delete the file when you want to start fresh.
 2. Run `journey`, which compiles branch choices into linear executable cases and executes them.
 3. Use `branch(start_from=...)`, retries, and state files to replay from durable step boundaries instead of rerunning
    every expensive setup step.
-4. Use `--state` when a long test may be interrupted while waiting on async work or a third-party service.
+4. Rerun the same command to resume a long test interrupted while waiting on async work or a third-party service.
 5. Use `--step` or `--develop-step` when you only want the case that reaches one target step label.
 6. Use `page.prompt(..., memory=...)` when a browser step is easier to describe than hand-maintain with selectors.
 
@@ -481,8 +481,8 @@ flow that reaches a target step label. A targeted run still starts from the sele
 `replay_anchor` in the report identifies the branch step anchor but does not mean Journey skipped shared setup.
 Use `--develop-step` to run that same single case in development mode. By
 default it executes one target step, stores state, prints the paused result, and exits so coding agents can iterate
-with synchronous command calls. Run the same `--develop-step LABEL --state dev.state` command to retry that step from
-its replay boundary, or target the next step with the same state file to continue. Add `--interactive` to keep the
+with synchronous command calls. Run the same `--develop-step LABEL` command to retry that step from
+its replay boundary. Add `--interactive` to keep the
 current process open and prompt after each paused step. Develop-step retries are unlimited and do not spend the step's
 configured `step(..., retry=...)` budget. Each retry or continue reloads and recompiles the journey file first, so
 edits to the current step, later steps, or future journey structure are picked up. If the already-run part of the
@@ -494,8 +494,7 @@ selected case changed, Journey starts that case over so the reused prefix is not
   cases.
 - **Replay from a step**: use `branch(start_from=...)`, retries, and targeted runs to reuse saved setup from durable
   step boundaries.
-- **Interrupt long waits, resume later**: keep long journeys restartable by saving progress between steps with
-  `--state`.
+- **Interrupt long waits, resume later**: keep long journeys restartable by saving progress between steps by default.
 - **Touchpoints for external tests**: integrate hosted inboxes, webhooks, browser pages, Docker snapshots, and
   app-specific channel or service code without forcing them into a custom DSL.
 - **AI-generated steps with `page.prompt(...)`**: describe browser work in natural language and let prompt memory make
@@ -514,14 +513,14 @@ uv run journey
 The default output shows the compiled cases first, then a concise execution timeline. Add `--output structured` when
 you need logfmt fields, or `--output jsonl` for one parseable JSON object per line.
 
-Execute with persisted state so Ctrl-C can be resumed later:
+Execute with default persisted state so Ctrl-C can be resumed later:
 
 ```bash
-uv run journey --state run.state
+uv run journey
 ```
 
-With `--state`, press Ctrl-C once to stop after the active step is saved, or press it a second time to stop now and
-restart the dirty step from saved inputs on resume. A bare `uv run journey` Ctrl-C cannot resume.
+Press Ctrl-C once to stop after the active step is saved, or press it a second time to stop now and restart the dirty
+step from saved inputs on resume. Use `--no-state` for a one-off run that should not read or write state.
 
 Execute only the case that reaches a target step label:
 
@@ -532,15 +531,14 @@ uv run journey --step assert_local_file_contents
 Execute one target case in development mode and stop after the target step:
 
 ```bash
-uv run journey --develop-step assert_local_file_contents --state dev.state
+uv run journey --develop-step assert_local_file_contents
 ```
 
-Rerun that command to retry the same step after editing code. To continue, target
-the next step with the same state file. For a human prompt loop, add
+Rerun that command to retry the same step after editing code. For a human prompt loop, add
 `--interactive`:
 
 ```bash
-uv run journey --develop-step assert_local_file_contents --state dev.state --interactive
+uv run journey --develop-step assert_local_file_contents --interactive
 ```
 
 The cloud webhook and email helpers use `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL` at execution time. Point

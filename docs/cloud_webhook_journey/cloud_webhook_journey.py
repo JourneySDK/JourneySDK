@@ -8,6 +8,7 @@ import time
 import urllib.request
 
 from journeysdk import journey, step
+from docs._reset_state import reset_default_state
 from journeysdk.touchpoints.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 EVENTS: list[str] = []
@@ -15,6 +16,7 @@ EVENTS: list[str] = []
 
 def reset_demo_state() -> None:
     EVENTS.clear()
+    reset_default_state(__file__)
 
 
 def send_invoice_paid_webhook_later(url: str, delay: float = 0.05) -> bool:

@@ -59,23 +59,23 @@ uv run journey --help
 
 ## Ctrl-C And Resumable Runs
 
-Use `--state <path>` when you want a long run to survive interruption:
+Journey persists execution state by default when you want a long run to survive interruption:
 
 ```bash
-uv run journey --state run.state
+uv run journey
 ```
 
-With `--state`, Ctrl-C has two levels:
+With persistent state, Ctrl-C has two levels:
 
 - First Ctrl-C is graceful. Journey prints `Ctrl-C received. Finishing the active step so Journey can save progress.
-  Press Ctrl-C again to stop now.`, lets the active step reach post-exit, saves progress, and stops. The next run with
-  the same `--state` file resumes after that completed step.
+  Press Ctrl-C again to stop now.`, lets the active step reach post-exit, saves progress, and stops. The same command
+  resumes after that completed step.
 - Second Ctrl-C is forceful. Journey prints `Ctrl-C received again. Stopping now; this step will restart from saved
   inputs on resume.`, stops the dirty step as soon as it can, and resumes later by restarting that step from saved
   inputs.
 
-Without `--state`, Ctrl-C stops the run immediately and Journey cannot resume it. Rerun the command to start over, or
-use `--state <path>` next time when interruption should be resumable.
+With `--no-state`, Ctrl-C stops the run immediately and Journey cannot resume it. Use `--no-state-update` when a run
+should read existing state but leave the state file unchanged.
 
 ## Browser Setup
 
@@ -110,5 +110,5 @@ For the full contributor workflow, including package smoke tests and manual publ
 
 AI coding agents can use the source-distributed
 [`journey-developer` skill](../skills/journey-developer/SKILL.md) for Journey authoring, targeted `--step` runs,
-`--develop-step` loops, and persistent `--state` guidance. See [`../skills/README.md`](../skills/README.md) for the
+`--develop-step` loops, and persistent state guidance. See [`../skills/README.md`](../skills/README.md) for the
 minimal install notes.

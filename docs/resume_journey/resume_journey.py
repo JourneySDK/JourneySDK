@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from journeysdk import journey, step
+from docs._reset_state import reset_default_state
 from journeysdk.logger import get_logger
 
 _LOGGER = get_logger("tutorial")
@@ -15,6 +16,7 @@ def reset_demo_state(*, state_path: str | Path | None = None) -> None:
     """Delete one saved tutorial state file so the demo can start fresh."""
 
     if state_path is None:
+        reset_default_state(__file__)
         return
     Path(state_path).unlink(missing_ok=True)
 
@@ -27,7 +29,7 @@ def load_support_ticket() -> dict[str, str]:
     _tutorial_note(
         "Loaded support ticket "
         f"{ticket['ticket_id']} and saved it as the result of load_support_ticket(). "
-        "The next step will reuse this saved ticket if you resume with --state."
+        "The next step will reuse this saved ticket when you resume."
     )
     return ticket
 

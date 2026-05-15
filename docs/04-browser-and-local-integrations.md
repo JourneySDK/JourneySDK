@@ -254,13 +254,13 @@ def browser_resume_journey() -> None:
 ### Reset the Demo
 
 ```bash
-uv run python -c "from docs.browser_resume_journey import reset_demo_state; reset_demo_state(state_path='/tmp/journey-browser-resume-tutorial.state')"
+uv run python -c "from docs.browser_resume_journey import reset_demo_state; reset_demo_state()"
 ```
 
 ### First Run: Interrupt After the Session Is Saved
 
 ```bash
-uv run journey --file docs/browser_resume_journey/browser_resume_journey.py --state /tmp/journey-browser-resume-tutorial.state
+uv run journey --file docs/browser_resume_journey/browser_resume_journey.py
 ```
 
 Press `Ctrl-C` once when the tutorial note tells you to. The command stops after the active step completes; press it a
@@ -281,7 +281,7 @@ Execution
 Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
       continue_authenticated_dashboard  ok attempt=1 duration=...
 Interrupted: Journey execution was interrupted before it finished.
-Hint: Run the same command again with --state ... to resume from saved progress.
+Hint: Run the same command again to resume from saved progress.
 ```
 
 Additional pretty stdout:
@@ -295,7 +295,7 @@ Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step
 ### Second Run: Reopen the Same Saved Session
 
 ```bash
-uv run journey --file docs/browser_resume_journey/browser_resume_journey.py --state /tmp/journey-browser-resume-tutorial.state
+uv run journey --file docs/browser_resume_journey/browser_resume_journey.py
 ```
 
 Expected pretty stdout:
@@ -328,7 +328,7 @@ Ctrl-C received. Finishing the active step so Journey can save progress. Press C
 Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.
 Warning: continue_authenticated_dashboard interrupted after ... (KeyboardInterrupt)
 Interrupted: Journey execution was interrupted before it finished.
-Hint: Run the same command again with --state ... to resume from saved progress.
+Hint: Run the same command again to resume from saved progress.
 ```
 
 ## Prompt a Live Page with an LLM

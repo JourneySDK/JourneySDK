@@ -198,7 +198,7 @@ class CorruptExecutionStateError(ExecutionStateError):
         super().__init__(
             message,
             hint=hint
-            or "Delete the state file or rerun without `--state` if you want to start fresh.",
+            or "Delete the state file or rerun with `--no-state` if you want to start fresh.",
         )
 
 
@@ -214,7 +214,7 @@ class ExecutionStateMismatchError(ExecutionStateError):
         super().__init__(
             message,
             hint=hint
-            or "Delete the state file or rerun without `--state` after changing the journey, step, or selection.",
+            or "Delete the state file or rerun with `--no-state` after changing the journey, step, or selection.",
         )
 
 
@@ -230,5 +230,5 @@ class ExecutionStateSerializationError(ExecutionStateError):
         super().__init__(
             message,
             hint=hint
-            or "Use only pickle-serializable step outputs when `--state` is enabled.",
+            or "Use only pickle-serializable step outputs when persistent state is enabled.",
         )

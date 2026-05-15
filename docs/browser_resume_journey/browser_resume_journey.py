@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from journeysdk import journey, step
+from docs._reset_state import reset_default_state
 from journeysdk.logger import get_logger
 from journeysdk.touchpoints.browser import (
     JourneyBrowserPage,
@@ -26,6 +27,8 @@ def reset_demo_state(*, state_path: str | Path | None = None) -> None:
 
     if state_path is not None:
         Path(state_path).unlink(missing_ok=True)
+    else:
+        reset_default_state(__file__)
     shutdown_demo_server()
     reset_demo_port()
 

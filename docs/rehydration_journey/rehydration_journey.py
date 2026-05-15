@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from journeysdk import branch, journey, step
+from docs._reset_state import reset_default_state
 
 EVENTS: list[str] = []
 _EXTERNAL_SEED_COUNTER = 0
@@ -11,6 +12,7 @@ _EXTERNAL_SEED_COUNTER = 0
 def reset_demo_state() -> None:
     global _EXTERNAL_SEED_COUNTER
     EVENTS.clear()
+    reset_default_state(__file__)
     _EXTERNAL_SEED_COUNTER = 0
 
 

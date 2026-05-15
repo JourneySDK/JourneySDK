@@ -768,7 +768,7 @@ def test_open_page_opens_url_string_and_cleans_returned_page(
     def journey():
         journey_sdk.step(open_login)
 
-    journey_sdk.execute(journey)
+    journey_sdk.execute(journey, no_state=True)
 
     assert events == [
         "playwright_enter",
@@ -801,7 +801,7 @@ def test_open_page_cleans_unreturned_page_at_step_exit(monkeypatch):
     def journey():
         journey_sdk.step(assert_login)
 
-    journey_sdk.execute(journey)
+    journey_sdk.execute(journey, no_state=True)
 
     assert events == [
         "playwright_enter",
@@ -877,7 +877,7 @@ def test_open_page_rehydrates_in_expected_order_and_cleans_nested_page(monkeypat
     def journey():
         journey_sdk.step(open_dashboard)
 
-    journey_sdk.execute(journey)
+    journey_sdk.execute(journey, no_state=True)
 
     assert events == [
         "playwright_enter",
@@ -931,7 +931,7 @@ def test_open_page_installs_missing_browser_automatically(monkeypatch, tmp_path:
     def journey():
         journey_sdk.step(open_login)
 
-    journey_sdk.execute(journey)
+    journey_sdk.execute(journey, no_state=True)
 
     assert install_commands == [
         [sys.executable, "-m", "playwright", "install", "chromium"]

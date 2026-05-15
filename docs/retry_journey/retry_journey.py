@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from journeysdk import journey, step
+from docs._reset_state import reset_default_state
 
 EVENTS: list[str] = []
 _ATTEMPTS = {
@@ -15,6 +16,7 @@ _ATTEMPTS = {
 
 def reset_demo_state() -> None:
     EVENTS.clear()
+    reset_default_state(__file__)
     for key in _ATTEMPTS:
         _ATTEMPTS[key] = 0
 

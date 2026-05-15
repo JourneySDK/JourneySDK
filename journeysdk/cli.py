@@ -38,7 +38,12 @@ from .models import (
     StepNode,
 )
 from .planner import compile_journey
-from .state import load_execution_state
+from .state import (
+    default_execution_state_path,
+    delete_artifact_root,
+    load_execution_state,
+    prepare_execution_state_storage,
+)
 from .types import JourneyEntrypoint
 
 _CLI_LOGGER = get_logger("cli")
@@ -824,27 +829,6 @@ def _compile_targets(
     return compiled, errors
 
 
-def _state_selection_errors(
-    args: argparse.Namespace,
-    targets: list[DiscoveredJourney],
-) -> list[_CommandError]:
-    if args.state is None or len(targets) == 1:
-        return []
-
-    return [
-        _error_from_exception(
-            JourneySelectionError(
-                "Resuming with --state requires exactly one selected journey.",
-                hint=(
-                    "Pass `--file`, `--journey`, `--step`, or `--develop-step` "
-                    "to narrow the selection to one journey."
-                ),
-            ),
-            phase="plan",
-        )
-    ]
-
-
 def _locate_step_matches(plan: JourneyPlan, step: str) -> list[tuple[CasePlan, int]]:
     matches: list[tuple[CasePlan, int]] = []
     for case in plan.case_plans:
@@ -972,11 +956,17 @@ def _temporary_pause_state_path() -> Path:
     with tempfile.NamedTemporaryFile(
         delete=False,
         prefix=".journey-pause.",
-        suffix=".state",
+        suffix=".json",
     ) as handle:
         path = Path(handle.name)
     path.unlink(missing_ok=True)
     return path
+
+
+def _default_state_path_for_target(
+    selected: _CompiledJourney,
+) -> Path:
+    return default_execution_state_path(selected.file_path)
 
 
 def _selected_develop_match(
@@ -1047,7 +1037,8 @@ def _execute_all_targets(
     *,
     root: Path,
     fail_fast: bool,
-    state: str | None = None,
+    no_state: bool = False,
+    no_state_update: bool = False,
     stream_live: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
@@ -1077,8 +1068,10 @@ def _execute_all_targets(
             report = _execute_plan(
                 item.function,
                 plan=item.plan,
-                state=state,
+                state=None,
                 observer=observer,
+                no_state=no_state,
+                no_state_update=no_state_update,
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 prompt_memory_root=item.file_path.parent,
@@ -1132,7 +1125,8 @@ def _execute_target_step(
     *,
     root: Path,
     step: str,
-    state: str | None = None,
+    no_state: bool = False,
+    no_state_update: bool = False,
     stream_live: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
@@ -1164,8 +1158,10 @@ def _execute_target_step(
             selected.function,
             plan=selected.plan,
             step=step,
-            state=state,
+            state=None,
             observer=observer,
+            no_state=no_state,
+            no_state_update=no_state_update,
             no_memory=no_memory,
             no_memory_update=no_memory_update,
             prompt_memory_root=selected.file_path.parent,
@@ -1258,7 +1254,8 @@ def _execute_target_pause(
     *,
     root: Path,
     develop_step: str,
-    state: str | None = None,
+    no_state: bool = False,
+    no_state_update: bool = False,
     stream_live: bool = False,
     interactive: bool = False,
     no_memory: bool = False,
@@ -1268,8 +1265,21 @@ def _execute_target_pause(
     if selected is None:
         return [], errors
 
-    managed_state = Path(state) if state is not None else _temporary_pause_state_path()
-    cleanup_state = state is None
+    default_state_path = _default_state_path_for_target(selected)
+    state_arg: str | Path | None = None
+    cleanup_state = False
+    cleanup_root: Path | None = None
+
+    if no_state:
+        state_arg = _temporary_pause_state_path()
+        cleanup_state = True
+    elif no_state_update:
+        storage = prepare_execution_state_storage(
+            default_state_path,
+            update_enabled=False,
+        )
+        state_arg = storage.run_path or _temporary_pause_state_path()
+        cleanup_root = storage.cleanup_root
 
     try:
         _CLI_LOGGER.info(
@@ -1294,9 +1304,9 @@ def _execute_target_pause(
         pause_action: str | None = None
 
         if not interactive:
-            if state is not None:
+            if not no_state:
                 pause_action = _infer_develop_pause_action(
-                    Path(state),
+                    Path(state_arg) if state_arg is not None else default_state_path,
                     selected=selected,
                     develop_step=develop_step,
                 )
@@ -1305,8 +1315,10 @@ def _execute_target_pause(
                 plan=selected.plan,
                 develop_step=develop_step,
                 pause_action=pause_action,
-                state=str(managed_state),
+                state=state_arg,
                 observer=observer,
+                no_state=False,
+                no_state_update=False,
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 prompt_memory_root=selected.file_path.parent,
@@ -1352,8 +1364,10 @@ def _execute_target_pause(
                 plan=selected.plan,
                 develop_step=develop_step,
                 pause_action=pause_action,
-                state=str(managed_state),
+                state=state_arg,
                 observer=observer,
+                no_state=False,
+                no_state_update=False,
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 prompt_memory_root=selected.file_path.parent,
@@ -1445,7 +1459,12 @@ def _execute_target_pause(
         ]
     finally:
         if cleanup_state:
-            managed_state.unlink(missing_ok=True)
+            assert state_arg is not None
+            state_path = Path(state_arg)
+            state_path.unlink(missing_ok=True)
+            delete_artifact_root(state_path.parent / f"{state_path.name}.artifacts")
+        if cleanup_root is not None:
+            delete_artifact_root(cleanup_root)
 
 
 def _emit_plan_output(
@@ -1591,7 +1610,7 @@ def _emit_execution_section() -> None:
     )
 
 
-def _emit_interrupt_output(*, state: str | None) -> None:
+def _emit_interrupt_output(*, resumable: bool) -> None:
     _CLI_LOGGER.warning(
         "execution_interrupted",
         "journey execution was interrupted",
@@ -1599,22 +1618,21 @@ def _emit_interrupt_output(*, state: str | None) -> None:
             "Interrupted: Journey execution was interrupted before it finished.",
             style="warning",
         ),
-        state=state,
+        resumable=resumable,
     )
     hint = (
-        f"Run the same command again with --state {state} to resume from saved progress."
-        if state is not None
+        "Run the same command again to resume from saved progress."
+        if resumable
         else (
-            "This run was interrupted without --state, so it cannot resume. "
-            "Run the same command again to start over, or rerun with --state <path> "
-            "next time to make Ctrl-C resumable."
+            "This run could not save new progress, so it cannot resume from this interruption. "
+            "Run the same command again to start over, or allow state updates next time to make Ctrl-C resumable."
         )
     )
     _CLI_LOGGER.warning(
         "interrupt_summary",
         "Interrupted.",
         pretty=pretty_line(f"Hint: {hint}", style="warning"),
-        state=state,
+        resumable=resumable,
         interrupted=True,
         hint=hint,
     )
@@ -1622,17 +1640,17 @@ def _emit_interrupt_output(*, state: str | None) -> None:
         "interrupt_message",
         "What happened: Journey execution was interrupted before it finished.",
         pretty=False,
-        state=state,
+        resumable=resumable,
         interrupted=True,
         hint=hint,
     )
-    if state is None:
+    if not resumable:
         return
     _CLI_LOGGER.warning(
         "interrupt_hint",
         f"Try this: {hint}",
         pretty=False,
-        state=state,
+        resumable=resumable,
     )
 
 
@@ -1656,19 +1674,6 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     executed: list[_ExecutedJourney] = []
     run_errors: list[_CommandError] = []
 
-    if state_errors := _state_selection_errors(args, targets):
-        errors.extend(state_errors)
-        _emit_plan_output(root, [], errors)
-        _emit_execution_section()
-        _emit_execute_output(
-            root,
-            [],
-            [],
-            result_errors=errors,
-            failure_count=len(errors),
-        )
-        return 1
-
     compiled, compile_errors = _compile_targets(
         targets,
         fail_fast=args.fail_fast,
@@ -1679,7 +1684,8 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     _emit_execution_section()
 
     try:
-        with _graceful_cli_interrupts(args.state is not None):
+        state_updates_enabled = not args.no_state and not args.no_state_update
+        with _graceful_cli_interrupts(state_updates_enabled):
             should_execute = bool(compiled) and not (args.fail_fast and errors)
             if not should_execute:
                 run_errors = []
@@ -1688,7 +1694,8 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     compiled,
                     root=root,
                     fail_fast=args.fail_fast,
-                    state=args.state,
+                    no_state=args.no_state,
+                    no_state_update=args.no_state_update,
                     stream_live=True,
                     no_memory=args.no_memory,
                     no_memory_update=args.no_memory_update,
@@ -1700,7 +1707,8 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         compiled,
                         root=root,
                         develop_step=args.develop_step,
-                        state=args.state,
+                        no_state=args.no_state,
+                        no_state_update=args.no_state_update,
                         stream_live=True,
                         interactive=args.interactive,
                         no_memory=args.no_memory,
@@ -1711,14 +1719,15 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         compiled,
                         root=root,
                         step=args.step,
-                        state=args.state,
+                        no_state=args.no_state,
+                        no_state_update=args.no_state_update,
                         stream_live=True,
                         no_memory=args.no_memory,
                         no_memory_update=args.no_memory_update,
                     )
                 executed.extend(run_results)
     except KeyboardInterrupt:
-        _emit_interrupt_output(state=args.state)
+        _emit_interrupt_output(resumable=state_updates_enabled)
         return 130
 
     all_errors = [*errors, *run_errors]
@@ -1756,7 +1765,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Prompt to continue or retry after each --develop-step pause",
     )
-    parser.add_argument("--state", help="Persist and resume execution state in one file")
+    parser.add_argument(
+        "--no-state",
+        action="store_true",
+        help="Disable execution-state reads and writes for this run",
+    )
+    parser.add_argument(
+        "--no-state-update",
+        action="store_true",
+        help="Disable execution-state writes while still allowing reads for this run",
+    )
     parser.add_argument(
         "--no-memory",
         action="store_true",

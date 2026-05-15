@@ -41,15 +41,18 @@ from .session import use_session
 from .state import (
     STATE_FORMAT_VERSION,
     ActiveCaseState,
+    ExecutionStateStorage,
     ExecutionStateEnvelope,
     PausedStepState,
     RuntimeSnapshotState,
     SelectedCaseState,
     StepBindingState,
     artifact_root_for_state,
+    default_execution_state_path,
     delete_artifact_root,
     delete_execution_state,
     load_execution_state,
+    prepare_execution_state_storage,
     save_execution_state,
 )
 from .rehydration import (
@@ -880,7 +883,7 @@ def _add_cleanup_failure_notes(exc: BaseException, failures: list[BaseException]
 class _StateController:
     def __init__(
         self,
-        path: Path | None,
+        storage: ExecutionStateStorage,
         *,
         journey_plan: JourneyPlan,
         step: str | None,
@@ -888,13 +891,16 @@ class _StateController:
         selected_cases: list[_SelectedCase],
         allow_stale_develop_pause: bool = False,
     ) -> None:
-        self.path = path
+        self.path = storage.display_path
+        self._run_path = storage.run_path
+        self._cleanup_root = storage.cleanup_root
         self.journey_plan = journey_plan
         self.step = step
         self.develop_step = develop_step
         self.selected_cases = list(selected_cases)
         self._allow_stale_develop_pause = allow_stale_develop_pause
-        self.artifact_root, self._artifact_root_is_temporary = artifact_root_for_state(path)
+        self.artifact_root = storage.artifact_root
+        self._artifact_root_is_temporary = storage.artifact_root_is_temporary
         self.plan_signature = _plan_signature(
             journey_plan,
             self.selected_cases,
@@ -903,8 +909,8 @@ class _StateController:
         )
 
         loaded: ExecutionStateEnvelope | None = None
-        if path is not None:
-            loaded = load_execution_state(path)
+        if self._run_path is not None:
+            loaded = load_execution_state(self._run_path)
 
         if loaded is None:
             loaded = ExecutionStateEnvelope(
@@ -1059,18 +1065,21 @@ class _StateController:
         self._write_state()
 
     def clear(self) -> None:
-        if self.path is not None:
-            delete_execution_state(self.path)
+        if self._run_path is not None and self._run_path == self.path:
+            delete_execution_state(self._run_path)
         delete_artifact_root(self.artifact_root)
 
     def cleanup(self) -> None:
+        if self._cleanup_root is not None:
+            delete_artifact_root(self._cleanup_root)
+            return
         if self._artifact_root_is_temporary:
             delete_artifact_root(self.artifact_root)
 
     def _write_state(self) -> None:
-        if self.path is None:
+        if self._run_path is None:
             return
-        save_execution_state(self.path, self._state)
+        save_execution_state(self._run_path, self._state)
 
     def _validate_loaded_state(self, state: ExecutionStateEnvelope) -> None:
         expected_cases = _selected_case_refs(self.selected_cases)
@@ -3208,6 +3217,13 @@ def _resolve_prompt_memory_root(
     return Path(source_file).resolve().parent
 
 
+def _resolve_default_state_path(
+    journey_fn: JourneyEntrypoint,
+) -> Path:
+    source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
+    return default_execution_state_path(Path(source_file))
+
+
 def _execute_plan(
     journey_fn: JourneyEntrypoint,
     *,
@@ -3217,24 +3233,39 @@ def _execute_plan(
     pause_action: str | None = None,
     state: str | Path | None = None,
     observer: _ExecutionObserver | None = None,
+    no_state: bool = False,
+    no_state_update: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
     prompt_memory_root: str | Path | None = None,
 ) -> ExecutionReport | _PausedExecution:
+    if no_state and state is not None:
+        raise ValueError("execute(...) cannot combine a custom state path with disabled state.")
     target_step = develop_step if develop_step is not None else step
     selected_cases = _select_cases(plan, target_step)
     validation = validate_journey(journey_fn)
     execution_observer = observer or _LoggingExecutionObserver()
     execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
+    using_default_state = not no_state and state is None
+    state_path = (
+        None
+        if no_state
+        else Path(state)
+        if state is not None
+        else _resolve_default_state_path(journey_fn)
+    )
+    state_storage = prepare_execution_state_storage(
+        state_path,
+        update_enabled=not no_state_update,
+    )
     rehydration_enabled = _needs_rehydration(
         selected_cases,
         step=step,
         develop_step=develop_step,
-        state=state,
+        state=state_storage.run_path,
     )
-    state_path = Path(state) if state is not None else None
     develop_refresh = _refresh_develop_state_for_plan(
-        state_path,
+        state_storage.run_path,
         journey_plan=plan,
         step=step,
         develop_step=develop_step,
@@ -3246,7 +3277,7 @@ def _execute_plan(
         None if develop_refresh.restarted_case_id is not None else pause_action
     )
     state_controller = _StateController(
-        state_path,
+        state_storage,
         journey_plan=plan,
         step=step,
         develop_step=develop_step,
@@ -3386,6 +3417,8 @@ def _execute_plan(
             case_reports=case_reports,
         )
         execution_observer.on_journey_complete(report=result)
+        if using_default_state:
+            state_controller.clear()
     except KeyboardInterrupt:
         raise
     except Exception:
@@ -3402,6 +3435,8 @@ def execute(
     *,
     step: str | None = None,
     state: str | Path | None = None,
+    no_state: bool = False,
+    no_state_update: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
 ) -> ExecutionReport:
@@ -3410,7 +3445,9 @@ def execute(
     Args:
         journey_fn: Journey entrypoint to compile and execute.
         step: Optional target step label.
-        state: Optional state file for replay and resume.
+        state: Optional custom state file for replay and resume.
+        no_state: Disable persistent state reads and writes for this run.
+        no_state_update: Disable persistent state writes while still allowing reads.
         no_memory: Disable prompt-memory reads and writes for this run.
         no_memory_update: Disable prompt-memory writes while still allowing reads.
     """
@@ -3421,6 +3458,8 @@ def execute(
         plan=plan,
         step=step,
         state=state,
+        no_state=no_state,
+        no_state_update=no_state_update,
         no_memory=no_memory,
         no_memory_update=no_memory_update,
     )

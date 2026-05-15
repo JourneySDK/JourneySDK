@@ -113,11 +113,10 @@ A good local debugging sequence usually looks like this:
 ## What To Notice
 
 - Journey failures are step-oriented. You do not have to guess which part of the flow broke.
-- With `--state`, first Ctrl-C logs that Journey is finishing the active step, then resumes after that completed step.
+- With default state, first Ctrl-C logs that Journey is finishing the active step, then resumes after that completed step.
   A second Ctrl-C logs that Journey is stopping now, interrupts the dirty step, and restarts that step from saved
   inputs later instead of resuming inside the function body.
-- Without `--state`, Ctrl-C is not resumable. The interrupted summary says to rerun the command to start over or use
-  `--state <path>` next time.
+- With `--no-state`, Ctrl-C is not resumable. The interrupted summary says to rerun with state updates enabled next time.
 - Default mode and `--fail-fast` answer different questions. One maximizes coverage per run; the other maximizes speed to the first actionable error.
 - Showing a failure example in the docs matters because this is what local development and CI actually look like.
 

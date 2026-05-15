@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import pickle
 from types import TracebackType
 
@@ -1186,7 +1188,7 @@ def test_execute_protocol_value_replays_from_step_anchor_on_retry():
             retry_from=value,
         )
 
-    journey_sdk.execute(journey)
+    journey_sdk.execute(journey, no_state=True)
 
     assert events == [
         "refresh_seed-1",
@@ -1274,7 +1276,7 @@ def test_execute_nested_returned_step_exit_objects_run_lifo_and_deduplicated():
     def journey():
         journey_sdk.step(allocate)
 
-    journey_sdk.execute(journey)
+    journey_sdk.execute(journey, no_state=True)
 
     assert events == [
         "cleanup_second:None",
@@ -1291,7 +1293,7 @@ def test_execute_step_exit_ignores_return_value_from_exit_method():
     def journey():
         journey_sdk.step(allocate)
 
-    journey_sdk.execute(journey)
+    journey_sdk.execute(journey, no_state=True)
 
     assert events == ["cleanup:None"]
 
@@ -3028,6 +3030,88 @@ def test_execute_state_rejects_corrupt_state_file(tmp_path):
 
     assert "Could not read the journey state file" in str(exc_info.value)
     assert exc_info.value.hint is not None
+
+
+def test_execute_state_rejects_corrupt_json_state_file(tmp_path):
+    state_file = tmp_path / "journey.state"
+    state_file.write_text(
+        '{"format": "journey.execution_state", "version": "bad"}',
+        encoding="utf-8",
+    )
+
+    def step():
+        return True
+
+    def journey():
+        journey_sdk.step(step)
+
+    with pytest.raises(CorruptExecutionStateError) as exc_info:
+        journey_sdk.execute(journey, state=state_file)
+
+    assert "Could not read the journey state file" in str(exc_info.value)
+    assert exc_info.value.hint is not None
+
+
+def test_execute_state_writes_json_with_encoded_runtime_payloads(tmp_path):
+    state_file = tmp_path / "state.json"
+
+    def produce():
+        return {"token": b"abc"}
+
+    def consume(payload):
+        return payload["token"] == b"abc"
+
+    def journey():
+        payload = journey_sdk.step(produce)
+        journey_sdk.step(consume, payload)
+
+    journey_sdk.execute(journey, state=state_file)
+
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    assert payload["format"] == "journey.execution_state"
+    assert payload["version"] == 11
+    encoded_result = payload["completed_case_reports"][0]["records"][0]["result"]
+    assert encoded_result["encoding"] == "pickle-base64"
+    assert base64.b64decode(encoded_result["data"].encode("ascii"))
+
+
+def test_execute_state_writes_active_step_payloads_as_base64_json(tmp_path):
+    state_file = tmp_path / "state.json"
+
+    def produce():
+        return {"token": b"abc"}
+
+    def interrupt(payload):
+        assert payload["token"] == b"abc"
+        raise KeyboardInterrupt()
+
+    def journey():
+        payload = journey_sdk.step(produce)
+        journey_sdk.step(interrupt, payload)
+
+    with pytest.raises(KeyboardInterrupt):
+        journey_sdk.execute(journey, state=state_file)
+
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    active_case = payload["active_case"]
+    bindings = active_case["snapshot"]["step_bindings"]
+    encoded_payloads: list[str] = []
+
+    def collect_pickle_payloads(value: object) -> None:
+        if isinstance(value, dict):
+            if value.get("kind") == "pickle" and isinstance(value.get("payload"), str):
+                encoded_payloads.append(value["payload"])
+            for child in value.values():
+                collect_pickle_payloads(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_pickle_payloads(child)
+
+    collect_pickle_payloads(bindings)
+
+    assert encoded_payloads
+    for encoded in encoded_payloads:
+        assert base64.b64decode(encoded.encode("ascii"))
 
 
 def test_execute_state_rejects_unserializable_step_result(tmp_path):

@@ -8,6 +8,10 @@ import pytest
 from journeysdk.cli import main
 
 import docs.cloud_webhook_journey as cloud_webhook_docs
+import docs.branching_journey as branching_docs
+import docs.first_journey as first_docs
+import docs.retry_journey as retry_docs
+import docs.selection_journeys as selection_docs
 import docs.resume_journey as resume_docs
 from journeysdk.touchpoints._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
@@ -45,6 +49,7 @@ def test_first_journey_readme_commands(
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(_repo_root())
+    first_docs.reset_demo_state()
 
     execute_exit = main(["--file", "docs/first_journey/first_journey.py"])
     execute_capture = capsys.readouterr()
@@ -65,6 +70,7 @@ def test_selection_readme_commands_use_journey_and_jsonl(
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(_repo_root())
+    selection_docs.reset_demo_state()
 
     exit_code = main(
         [
@@ -105,6 +111,7 @@ def test_branching_readme_target_command_reports_replay_anchor(
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(_repo_root())
+    branching_docs.reset_demo_state()
 
     exit_code = main(
         [
@@ -128,6 +135,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(_repo_root())
+    branching_docs.reset_demo_state()
 
     exit_code = main(
         [
@@ -151,6 +159,7 @@ def test_retry_readme_commands_show_retry_behavior(
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(_repo_root())
+    retry_docs.reset_demo_state()
 
     exit_code = main(
         [
@@ -201,13 +210,13 @@ def test_resume_readme_commands_interrupt_then_resume(
     tmp_path: Path,
 ):
     monkeypatch.chdir(_repo_root())
-    state_file = tmp_path / "resume.state"
+    del tmp_path
     pause_seconds = configured_pause_seconds(
         resume_docs.resume_journey,
         step_label="wait_for_resume_signal",
     )
     live_stderr = install_live_stderr(monkeypatch)
-    resume_docs.reset_demo_state(state_path=state_file)
+    resume_docs.reset_demo_state()
     stop_event, interrupt_thread = start_interrupt_on_prompt(
         live_stderr,
         pause_seconds=pause_seconds,
@@ -218,8 +227,6 @@ def test_resume_readme_commands_interrupt_then_resume(
             [
                 "--file",
                 "docs/resume_journey/resume_journey.py",
-                "--state",
-                str(state_file),
             ]
         )
     finally:
@@ -233,7 +240,7 @@ def test_resume_readme_commands_interrupt_then_resume(
     assert first_exit == 130
     assert live_stderr.prompt_seen.is_set()
     assert "Interrupted: Journey execution was interrupted before it finished." in first_output
-    assert "Hint: Run the same command again with --state" in first_output
+    assert "Hint: Run the same command again to resume from saved progress." in first_output
     assert "Loaded support ticket ticket-001" in first_error
     assert INTERRUPT_PROMPT_PREFIX in first_error
     assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_error
@@ -244,8 +251,6 @@ def test_resume_readme_commands_interrupt_then_resume(
         [
             "--file",
             "docs/resume_journey/resume_journey.py",
-            "--state",
-            str(state_file),
         ]
     )
     second_capture = capsys.readouterr()
@@ -307,13 +312,13 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
         pytest.skip(f"Playwright browser unavailable: {exc}")
 
     monkeypatch.chdir(_repo_root())
-    state_file = tmp_path / "browser-resume.state"
+    del tmp_path
     pause_seconds = configured_pause_seconds(
         browser_resume_example.browser_resume_journey,
         step_label="continue_authenticated_dashboard",
     )
     live_stderr = install_live_stderr(monkeypatch)
-    browser_resume_example.reset_demo_state(state_path=state_file)
+    browser_resume_example.reset_demo_state()
     stop_event, interrupt_thread = start_interrupt_on_prompt(
         live_stderr,
         pause_seconds=pause_seconds,
@@ -325,8 +330,6 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
                 [
                     "--file",
                     "docs/browser_resume_journey/browser_resume_journey.py",
-                    "--state",
-                    str(state_file),
                 ]
             )
         finally:
@@ -350,15 +353,13 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
             [
                 "--file",
                 "docs/browser_resume_journey/browser_resume_journey.py",
-                "--state",
-                str(state_file),
             ]
         )
         second_capture = capsys.readouterr()
         second_output = second_capture.out
         second_error = second_capture.out
     finally:
-        browser_resume_example.reset_demo_state(state_path=state_file)
+        browser_resume_example.reset_demo_state()
 
     assert second_exit == 0
     assert "case_1 resume" in second_error

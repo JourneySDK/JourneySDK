@@ -1,6 +1,6 @@
 ---
 name: journey-developer
-description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives or official journeysdk.touchpoints integrations, running Journey CLI full or targeted step executions, iterating with --develop-step and --state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
+description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives or official journeysdk.touchpoints integrations, running Journey CLI full or targeted step executions, iterating with --develop-step and default state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
 ---
 
 # Journey Developer
@@ -21,7 +21,7 @@ Do not use this skill for generic Python scripts, generic unit tests, or unrelat
 Official touchpoints live under `journeysdk.touchpoints`. They are ordinary Python helpers that return step callables or
 serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted
 resources while steps execute, and make returned values serializable or rehydratable when they cross replay boundaries
-for retry, branch, or `--state` behavior.
+for retry, branch, or persistent-state behavior.
 
 - `journeysdk.touchpoints.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
 - `journeysdk.touchpoints.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
@@ -90,13 +90,14 @@ Journey-owned output goes through `journeysdk.logger` and writes to stdout. The 
 use `--output structured` for `[journey]` logfmt records or `--output jsonl` for JSON Lines. Use
 `--log-level debug|info|warning|error|off` to tune visibility; default `info` is usually best for local and agent runs.
 
-Use `--state PATH` whenever a run may need to resume after interruption or preserve successful step bindings. In CLI
-runs, first Ctrl-C lets the active step finish storage, exit returned handles, and stop at post-exit; rerunning resumes
-after that step. Press Ctrl-C again to stop now; the dirty step later restarts from the top with saved inputs. Without
-`--state`, Ctrl-C cannot resume:
+Journey persists execution state by default whenever a run may need to resume after interruption or preserve successful
+step bindings. In CLI runs, first Ctrl-C lets the active step finish storage, exit returned handles, and stop at
+post-exit; rerunning resumes after that step. Press Ctrl-C again to stop now; the dirty step later restarts from the top
+with saved inputs. Use `--no-state` for one-off runs that should not resume, and `--no-state-update` when a run should
+read existing state without writing updates:
 
 ```bash
-uv run journey --file docs/resume_journey/resume_journey.py --state .journey/run.state
+uv run journey --file docs/resume_journey/resume_journey.py
 ```
 
 Use `--no-memory` when a journey contains AI-driven prompts but the run should not read or update prompt-memory files:
@@ -113,19 +114,18 @@ uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py --no
 
 ## Develop One Step
 
-Use `--develop-step LABEL --state .journey/develop-step.state` for agent-friendly edit-run loops. Noninteractive
+Use `--develop-step LABEL` for agent-friendly edit-run loops. Noninteractive
 develop-step runs execute the target case, pause after the target step boundary, store state, print the paused result,
 and exit:
 
 ```bash
-uv run journey --file path/to/journey.py --develop-step target_label --state .journey/develop-step.state
+uv run journey --file path/to/journey.py --develop-step target_label
 ```
 
-After editing code, retry the same paused step by rerunning the same command with the same `--develop-step` label and
-`--state` file. To continue after a successful pause, target the next step label with the same state file:
+After editing code, retry the same paused step by rerunning the same command with the same `--develop-step` label:
 
 ```bash
-uv run journey --file path/to/journey.py --develop-step next_label --state .journey/develop-step.state
+uv run journey --file path/to/journey.py --develop-step target_label
 ```
 
 If the paused step failed, retry the same paused step first; continuing to a later label is invalid until the failed

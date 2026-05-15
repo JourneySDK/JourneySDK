@@ -18,6 +18,7 @@ from journeysdk.cli import (
     main,
 )
 from journeysdk.logger import configure_logging
+from journeysdk.state import default_execution_state_path
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +50,12 @@ def _event_lines(path: Path) -> list[str]:
     if not path.exists():
         return []
     return path.read_text(encoding="utf-8").splitlines()
+
+
+def _state_path(
+    flow_file: Path,
+) -> Path:
+    return default_execution_state_path(flow_file)
 
 
 def _jsonl_events(output: str) -> list[dict[str, object]]:
@@ -169,13 +176,13 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "alpha",
             "--step",
             "target",
-            "--state",
-            "run.state",
             "--output",
             "structured",
             "--log-level",
             "debug",
             "--fail-fast",
+            "--no-state",
+            "--no-state-update",
             "--no-memory",
             "--no-memory-update",
         ]
@@ -183,10 +190,11 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.file == "journeys.py"
     assert execute_args.journey == "alpha"
     assert execute_args.step == "target"
-    assert execute_args.state == "run.state"
     assert execute_args.output == "structured"
     assert execute_args.log_level == "debug"
     assert execute_args.fail_fast is True
+    assert execute_args.no_state is True
+    assert execute_args.no_state_update is True
     assert execute_args.no_memory is True
     assert execute_args.no_memory_update is True
 
@@ -219,6 +227,9 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
         parser.parse_args(["--step", "target", "--develop-step", "target"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--json"])
+    removed_flag = "--" + "state"
+    with pytest.raises(SystemExit):
+        parser.parse_args([removed_flag, "run.json"])
 
     assert parser.parse_args(["--output", "pretty"]).output == "pretty"
     assert parser.parse_args(["--output", "structured"]).output == "structured"
@@ -261,12 +272,13 @@ def test_execute_forwards_no_memory_update_flag(
         *,
         root: Path,
         fail_fast: bool,
-        state: str | None = None,
+        no_state: bool = False,
+        no_state_update: bool = False,
         stream_live: bool = False,
         no_memory: bool = False,
         no_memory_update: bool = False,
     ) -> tuple[list[object], list[object]]:
-        del compiled, root, fail_fast, state, stream_live
+        del compiled, root, fail_fast, no_state, no_state_update, stream_live
         assert no_memory is False
         captured_flags.append(no_memory_update)
         return [], []
@@ -1005,7 +1017,9 @@ def test_execute_develop_step_steps_forward_with_continue(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(
+        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+    )
 
     captured = capsys.readouterr()
     output = captured.out
@@ -1073,10 +1087,11 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "dev.state"
+    flow_file = tmp_path / "flow.py"
+    state_file = _state_path(flow_file)
     events_file = tmp_path / "events.log"
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         f"""
         import journeysdk as journey
         from pathlib import Path
@@ -1108,9 +1123,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(
-        ["--file", "flow.py", "--develop-step", "publish", "--state", str(state_file)]
-    )
+    first_exit = main(["--file", "flow.py", "--develop-step", "publish"])
     first_capture = capsys.readouterr()
     first_output = first_capture.out
     first_logs = first_capture.out
@@ -1119,23 +1132,24 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     assert "Development mode stopped after step publish attempt=1 ok." in first_logs
     assert _event_lines(events_file) == ["prepare", "publish"]
 
-    second_exit = main(
-        ["--file", "flow.py", "--develop-step", "publish", "--state", str(state_file)]
-    )
+    second_exit = main(["--file", "flow.py", "--develop-step", "publish"])
     second_logs = capsys.readouterr().out
 
     assert second_exit == 0
     assert "Development mode stopped after step publish attempt=2 ok." in second_logs
     assert _event_lines(events_file) == ["prepare", "publish", "publish"]
 
-    third_exit = main(
-        ["--file", "flow.py", "--develop-step", "cleanup", "--state", str(state_file)]
-    )
+    third_exit = main(["--file", "flow.py", "--develop-step", "cleanup"])
     third_logs = capsys.readouterr().out
 
     assert third_exit == 0
     assert "Development mode stopped after step cleanup attempt=1 ok." in third_logs
-    assert _event_lines(events_file) == ["prepare", "publish", "publish", "cleanup"]
+    assert _event_lines(events_file) == [
+        "prepare",
+        "publish",
+        "publish",
+        "cleanup",
+    ]
 
 
 def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
@@ -1143,10 +1157,11 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "dev.state"
+    flow_file = tmp_path / "flow.py"
+    state_file = _state_path(flow_file)
     attempts_file = tmp_path / "attempts.count"
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         f"""
         import journeysdk as journey
         from pathlib import Path
@@ -1172,9 +1187,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(
-        ["--file", "flow.py", "--develop-step", "poll", "--state", str(state_file)]
-    )
+    first_exit = main(["--file", "flow.py", "--develop-step", "poll"])
     first_capture = capsys.readouterr()
     first_output = first_capture.out
     first_logs = first_capture.out
@@ -1184,9 +1197,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     assert "retry attempts were exhausted" not in first_output
     assert state_file.exists()
 
-    second_exit = main(
-        ["--file", "flow.py", "--develop-step", "poll", "--state", str(state_file)]
-    )
+    second_exit = main(["--file", "flow.py", "--develop-step", "poll"])
     second_logs = capsys.readouterr().out
 
     assert second_exit == 0
@@ -1198,9 +1209,9 @@ def test_execute_develop_step_cannot_continue_later_from_failed_pause(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "dev.state"
+    flow_file = tmp_path / "flow.py"
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         """
         import journeysdk as journey
 
@@ -1218,21 +1229,17 @@ def test_execute_develop_step_cannot_continue_later_from_failed_pause(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(
-        ["--file", "flow.py", "--develop-step", "poll", "--state", str(state_file)]
-    )
+    first_exit = main(["--file", "flow.py", "--develop-step", "poll"])
     capsys.readouterr()
 
     assert first_exit == 1
 
-    second_exit = main(
-        ["--file", "flow.py", "--develop-step", "finish", "--state", str(state_file)]
-    )
+    second_exit = main(["--file", "flow.py", "--develop-step", "finish"])
     second_output = capsys.readouterr().out
 
     assert second_exit == 1
     assert "cannot continue to develop step 'finish'" in second_output
-    assert "Rerun the same --develop-step target to retry the failed step" in second_output
+    assert "retry the failed step" in second_output
 
 
 def test_execute_develop_step_closes_returned_handles_after_continue_prompt(
@@ -1264,7 +1271,9 @@ def test_execute_develop_step_closes_returned_handles_after_continue_prompt(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(
+        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+    )
 
     capsys.readouterr()
     assert exit_code == 0
@@ -1303,7 +1312,9 @@ def test_execute_develop_step_closes_returned_handles_after_retry_prompt(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(
+        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+    )
 
     capsys.readouterr()
     assert exit_code == 0
@@ -1346,12 +1357,14 @@ def test_execute_develop_step_closes_returned_handles_when_prompt_is_interrupted
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(
+        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+    )
 
     output = capsys.readouterr().out
     assert exit_code == 130
     assert "Interrupted: Journey execution was interrupted before it finished." in output
-    assert "This run was interrupted without --state, so it cannot resume." in output
+    assert "This run could not save new progress, so it cannot resume" in output
     lines = _event_lines(events_file)
     assert lines.index("prompt_interrupt") < lines.index("exit_publish")
 
@@ -1393,9 +1406,10 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "pause.state"
+    flow_file = tmp_path / "flow.py"
+    state_file = _state_path(flow_file)
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         """
         import journeysdk as journey
         def prepare():
@@ -1430,8 +1444,6 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
             "flow.py",
             "--develop-step",
             "publish",
-            "--state",
-            str(state_file),
             "--interactive",
         ]
     )
@@ -1449,8 +1461,6 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
             "flow.py",
             "--develop-step",
             "publish",
-            "--state",
-            str(state_file),
             "--interactive",
         ]
     )
@@ -1884,7 +1894,7 @@ def test_execute_develop_step_state_resume_reloads_future_change(
     capsys: pytest.CaptureFixture[str],
 ):
     flow_file = tmp_path / "flow.py"
-    state_file = tmp_path / "pause.state"
+    state_file = _state_path(flow_file)
     events_file = tmp_path / "events.log"
     _write(
         flow_file,
@@ -1930,8 +1940,6 @@ def test_execute_develop_step_state_resume_reloads_future_change(
             "flow.py",
             "--develop-step",
             "publish",
-            "--state",
-            str(state_file),
             "--interactive",
         ]
     )
@@ -1985,8 +1993,6 @@ def test_execute_develop_step_state_resume_reloads_future_change(
             "flow.py",
             "--develop-step",
             "publish",
-            "--state",
-            str(state_file),
             "--interactive",
         ]
     )
@@ -2220,13 +2226,14 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in output
 
 
-def test_execute_state_requires_exactly_one_journey(
+def test_execute_default_state_uses_single_file_and_clears_after_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ):
+    alpha_file = tmp_path / "a.py"
+    beta_file = tmp_path / "b.py"
     _write(
-        tmp_path / "a.py",
+        alpha_file,
         """
         import journeysdk as journey
         def first():
@@ -2238,7 +2245,7 @@ def test_execute_state_requires_exactly_one_journey(
         """,
     )
     _write(
-        tmp_path / "b.py",
+        beta_file,
         """
         import journeysdk as journey
         def second():
@@ -2251,11 +2258,99 @@ def test_execute_state_requires_exactly_one_journey(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--state", "resume.state"])
+    exit_code = main(["--log-level", "off"])
 
-    output = capsys.readouterr().out
-    assert exit_code == 1
-    assert "What happened: Resuming with --state requires exactly one selected journey." in output
+    assert exit_code == 0
+    assert not _state_path(alpha_file).exists()
+    assert _state_path(alpha_file) == _state_path(beta_file)
+
+
+def test_execute_no_state_skips_default_state_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    flow_file = tmp_path / "flow.py"
+    _write(
+        flow_file,
+        """
+        import journeysdk as journey
+        def finish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(finish)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    exit_code = main(["--file", "flow.py", "--no-state", "--log-level", "off"])
+
+    assert exit_code == 0
+    assert not _state_path(flow_file).exists()
+
+
+def test_execute_no_state_update_reads_without_persisting_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    flow_file = tmp_path / "flow.py"
+    marker_file = tmp_path / "marker.flag"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        MARKER = Path({str(marker_file)!r})
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare")
+            return {{"token": "ready"}}
+
+        def work(payload):
+            _append(f"work_{{payload['token']}}")
+            if not MARKER.exists():
+                MARKER.write_text("ready", encoding="utf-8")
+                raise KeyboardInterrupt()
+            return True
+
+        def finish():
+            _append("finish")
+            return True
+
+        @journey.journey
+        def flow():
+            payload = journey.step(prepare)
+            journey.step(work, payload)
+            journey.step(finish)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    first_exit = main(["--file", "flow.py", "--log-level", "off"])
+    state_file = _state_path(flow_file)
+    before = state_file.read_bytes()
+
+    second_exit = main(
+        ["--file", "flow.py", "--no-state-update", "--log-level", "off"]
+    )
+
+    assert first_exit == 130
+    assert second_exit == 0
+    assert state_file.read_bytes() == before
+    assert _event_lines(events_file) == [
+        "prepare",
+        "work_ready",
+        "work_ready",
+        "finish",
+    ]
 
 
 def test_execute_state_interrupts_and_resumes_via_cli(
@@ -2263,11 +2358,12 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "resume.state"
+    flow_file = tmp_path / "flow.py"
+    state_file = _state_path(flow_file)
     marker_file = tmp_path / "resume.flag"
 
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         f"""
         import journeysdk as journey
         from pathlib import Path
@@ -2288,20 +2384,18 @@ def test_execute_state_interrupts_and_resumes_via_cli(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py"])
     first_output = capsys.readouterr().out
 
     assert first_exit == 130
     assert "Interrupted: Journey execution was interrupted before it finished." in first_output
-    assert "Hint: Run the same command again with --state" in first_output
+    assert "Hint: Run the same command again to resume from saved progress." in first_output
     assert state_file.exists()
 
     second_exit = main(
         [
             "--file",
             "flow.py",
-            "--state",
-            str(state_file),
             "--output",
             "jsonl",
         ]
@@ -2312,7 +2406,7 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     assert [item["journey_name"] for item in payload["journeys"]] == ["flow"]
     assert "plan" not in payload["journeys"][0]
     assert payload["errors"] == []
-    assert state_file.exists()
+    assert not state_file.exists()
 
 
 def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
@@ -2320,12 +2414,12 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "resume.state"
+    flow_file = tmp_path / "flow.py"
     marker_file = tmp_path / "sent.flag"
     events_file = tmp_path / "events.log"
 
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         f"""
         import signal
         import journeysdk as journey
@@ -2379,7 +2473,7 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py"])
     first_capture = capsys.readouterr()
 
     assert first_exit == 130
@@ -2397,7 +2491,7 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
         "store_closed",
     ]
 
-    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    second_exit = main(["--file", "flow.py"])
     second_capture = capsys.readouterr()
 
     assert second_exit == 0
@@ -2422,13 +2516,13 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "resume.state"
+    flow_file = tmp_path / "flow.py"
     marker_file = tmp_path / "sent.flag"
     seed_file = tmp_path / "seed.count"
     events_file = tmp_path / "events.log"
 
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         f"""
         import signal
         import journeysdk as journey
@@ -2471,7 +2565,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py"])
     first_capture = capsys.readouterr()
 
     assert first_exit == 130
@@ -2485,7 +2579,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
         "after_first_signal",
     ]
 
-    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    second_exit = main(["--file", "flow.py"])
     second_capture = capsys.readouterr()
 
     assert second_exit == 0
@@ -2505,11 +2599,11 @@ def test_execute_state_resume_streams_case_resume_in_pretty_mode(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "resume.state"
+    flow_file = tmp_path / "flow.py"
     marker_file = tmp_path / "resume.flag"
 
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         f"""
         import journeysdk as journey
         from pathlib import Path
@@ -2530,14 +2624,14 @@ def test_execute_state_resume_streams_case_resume_in_pretty_mode(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py"])
     first_capture = capsys.readouterr()
     first_logs = first_capture.out
 
     assert first_exit == 130
     assert "Warning: maybe_interrupt interrupted after" in first_logs
 
-    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    second_exit = main(["--file", "flow.py"])
     second_capture = capsys.readouterr()
     second_logs = second_capture.out
 
@@ -2554,13 +2648,14 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    state_file = tmp_path / "resume.state"
+    flow_file = tmp_path / "flow.py"
+    state_file = _state_path(flow_file)
     seed_counter_file = tmp_path / "seed.count"
     attempt_counter_file = tmp_path / "attempt.count"
     events_file = tmp_path / "events.log"
 
     _write(
-        tmp_path / "flow.py",
+        flow_file,
         f"""
         import journeysdk as journey
         from pathlib import Path
@@ -2605,7 +2700,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    first_exit = main(["--file", "flow.py"])
     first_capture = capsys.readouterr()
     first_logs = first_capture.out
 
@@ -2613,7 +2708,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
     assert "Warning: poll interrupted after" in first_logs
     assert state_file.exists()
 
-    second_exit = main(["--file", "flow.py", "--state", str(state_file)])
+    second_exit = main(["--file", "flow.py"])
     second_capture = capsys.readouterr()
     second_logs = second_capture.out
 

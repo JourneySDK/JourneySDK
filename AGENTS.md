@@ -4,7 +4,7 @@
 
 Journey SDK is an AI-assisted workflow-as-code QA toolkit for long, branching, async, cross-system user journeys.
 Authors write one journey spec in ordinary Python, compile user paths with `branch()`, replay from saved step
-boundaries with `branch(start_from=...)`, interrupt long waits with `--state`, use cloud touchpoints from
+boundaries with `branch(start_from=...)`, interrupt long waits with default persistent state, use cloud touchpoints from
 `journeysdk.touchpoints`, and describe browser work with `page.prompt(...)`.
 
 See `README.md` for the deeper product description, use cases, tutorial context, and glossary. Keep the
@@ -44,8 +44,8 @@ controls visibility with `--log-level debug|info|warning|error|off`.
 ## Core principles
 
 - **Developer-centric**: The developer-facing interfaces (API and CLI) must be straightforward and intuitive.
-- **Resumable tests**: With CLI `--state`, first Ctrl-C is graceful and resumes after the completed step; second
-  Ctrl-C stops now and later restarts the dirty step from saved inputs. Without `--state`, Ctrl-C cannot resume.
+- **Resumable tests**: With default CLI state, first Ctrl-C is graceful and resumes after the completed step; second
+  Ctrl-C stops now and later restarts the dirty step from saved inputs. With `--no-state`, Ctrl-C cannot resume.
 - **Extensible design**: There are official touchpoints, and everyone is welcome to add their own. Adding new touchpoints must be
   straightforward and intuitive.
 - **Clear documentation**: To make it developer-friendly, all docs must be written in plain English, with enough
