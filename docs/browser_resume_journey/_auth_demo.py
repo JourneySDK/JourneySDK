@@ -61,7 +61,7 @@ class _AuthDemoHandler(BaseHTTPRequestHandler):
         self._send_json({"status": "Protected action complete"})
 
     def log_message(self, format: str, *args: object) -> None:
-        del format, args
+        pass
 
     def _send_html(self, body: str) -> None:
         encoded = body.encode("utf-8")

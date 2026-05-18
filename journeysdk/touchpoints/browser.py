@@ -383,7 +383,6 @@ class JourneyBrowserPage(PlaywrightPage):
     def __store__(self, context: JourneyStoreContext) -> object:
         """Store the current page state for Journey replay."""
 
-        del context
         return self._snapshot_for_storage().to_payload()
 
     @classmethod
@@ -394,7 +393,6 @@ class JourneyBrowserPage(PlaywrightPage):
     ) -> JourneyBrowserPage:
         """Restore a saved page handle for explicit reopening in a later step."""
 
-        del context
         return cls._from_snapshot(_PageSnapshot.from_payload(payload))
 
     def __reduce__(self) -> tuple[object, tuple[object]]:
@@ -435,19 +433,16 @@ class JourneyBrowserPage(PlaywrightPage):
             )
         frame = inspect.currentframe()
         caller_frame = frame.f_back if frame is not None else None
-        try:
-            return prompt_page(
-                self,
-                instruction=instruction,
-                model=model,
-                max_steps=max_steps,
-                action_timeout_seconds=action_timeout_seconds,
-                memory=memory,
-                caller_frame=caller_frame,
-                output=output,
-            )
-        finally:
-            del frame
+        return prompt_page(
+            self,
+            instruction=instruction,
+            model=model,
+            max_steps=max_steps,
+            action_timeout_seconds=action_timeout_seconds,
+            memory=memory,
+            caller_frame=caller_frame,
+            output=output,
+        )
 
 
 def open_page(

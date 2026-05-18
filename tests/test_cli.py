@@ -133,18 +133,15 @@ def _write_develop_lifecycle_flow(
                 self.closed = closed
 
             def __store__(self, context):
-                del context
                 state = "closed" if self.closed else "open"
                 _append(f"store_{{self.name}}_{{state}}")
                 return {{"name": self.name, "closed": self.closed}}
 
             @classmethod
             def __restore__(cls, payload, context):
-                del context
                 return cls(payload["name"], closed=payload["closed"])
 
             def __exit__(self, exc_type, exc, traceback):
-                del exc_type, exc, traceback
                 if self.closed:
                     return
                 self.closed = True
@@ -279,7 +276,6 @@ def test_execute_forwards_no_memory_update_flag(
         no_memory: bool = False,
         no_memory_update: bool = False,
     ) -> tuple[list[object], list[object]]:
-        del compiled, root, fail_fast, no_state, no_state_update, stream_live
         assert no_memory is False
         captured_flags.append(no_memory_update)
         return [], []
@@ -444,7 +440,6 @@ def test_pause_choice_reads_one_key_from_tty(
         return object()
 
     def fake_tcsetattr(fd: int, when: int, settings: object) -> None:
-        del settings
         calls.append(("set", fd, when))
 
     def fake_setcbreak(fd: int) -> None:
@@ -2541,18 +2536,15 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
                 self.closed = closed
 
             def __store__(self, context):
-                del context
                 state = "closed" if self.closed else "open"
                 _append(f"store_{{state}}")
                 return {{"closed": self.closed}}
 
             @classmethod
             def __restore__(cls, payload, context):
-                del context
                 return cls(closed=payload["closed"])
 
             def __exit__(self, exc_type, exc, traceback):
-                del exc_type, exc, traceback
                 self.closed = True
                 _append("exit")
 

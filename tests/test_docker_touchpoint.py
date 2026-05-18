@@ -723,7 +723,6 @@ def test_execute_step_started_branches_restore_docker_snapshot(
     def increment_counter(
         stack: journey_docker.DockerComposeStack,
     ) -> dict[str, int]:
-        del stack
         before = counter["value"]
         counter["value"] += 1
         events.append(f"increment_{before}_{counter['value']}")

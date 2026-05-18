@@ -34,7 +34,6 @@ class _FakeHTTPResponse:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        del exc_type, exc, tb
         return False
 
     def read(self) -> bytes:

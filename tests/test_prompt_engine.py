@@ -59,7 +59,6 @@ class _FakeAgent:
         *,
         config: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        del config
         raw_messages = payload.get("messages")
         assert isinstance(raw_messages, list)
         messages: list[object] = [
@@ -107,7 +106,6 @@ class _FailingAgent:
         *,
         config: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        del payload, config
         raise RuntimeError(
             "Could not resolve authentication method. Expected one of api_key, "
             "auth_token, or credentials to be set."
@@ -130,7 +128,6 @@ def _failing_create_agent(
     tools: list[object],
     system_prompt: str,
 ) -> _FailingAgent:
-    del model, tools, system_prompt
     return _FailingAgent()
 
 
@@ -541,7 +538,6 @@ def test_prompt_memory_write_cleans_tmp_file_when_replace_fails(
     temp_paths: list[Path] = []
 
     def fail_replace(source: object, target: object) -> None:
-        del target
         temp_paths.append(Path(source))
         raise OSError("replace failed")
 

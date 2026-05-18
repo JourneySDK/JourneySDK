@@ -441,7 +441,6 @@ class _FakeLangChainAgent:
         *,
         config: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        del config
         raw_messages = payload.get("messages")
         assert isinstance(raw_messages, list)
         messages: list[object] = [
@@ -1035,7 +1034,7 @@ def test_open_page_playwright_abort_after_forced_interrupt_is_keyboard_interrupt
 
     class ForcedInterruptController:
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
-            del phase
+            pass
 
         def is_step_interrupt_pending(self) -> bool:
             return False
@@ -1078,7 +1077,7 @@ def test_open_page_forced_interrupt_without_cleanup_keeps_playwright_failure(
 
     class ForcedInterruptController:
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
-            del phase
+            pass
 
         def is_step_interrupt_pending(self) -> bool:
             return False
@@ -1120,7 +1119,7 @@ def test_open_page_pending_interrupt_keeps_real_playwright_failure(
 
     class PendingInterruptController:
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
-            del phase
+            pass
 
         def is_step_interrupt_pending(self) -> bool:
             return True
@@ -1191,7 +1190,7 @@ def test_open_page_forced_interrupt_keeps_non_playwright_failure(
 
     class ForcedInterruptController:
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
-            del phase
+            pass
 
         def is_step_interrupt_pending(self) -> bool:
             return False
@@ -1261,7 +1260,7 @@ def test_browser_registers_forced_interrupt_cleanup_that_stops_playwright_driver
             self.callbacks: list[Callable[[], None]] = []
 
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
-            del phase
+            pass
 
         def is_step_interrupt_pending(self) -> bool:
             return False
@@ -1277,7 +1276,6 @@ def test_browser_registers_forced_interrupt_cleanup_that_stops_playwright_driver
             name: str,
             callback: Callable[[], None],
         ) -> Callable[[], None]:
-            del name
             self.callbacks.append(callback)
             return lambda: None
 
@@ -1331,7 +1329,7 @@ def test_browser_prompt_forced_cleanup_playwright_error_is_keyboard_interrupt():
 def test_browser_prompt_forced_interrupt_without_cleanup_keeps_playwright_error():
     class FakeController:
         def on_step_lifecycle_phase(self, phase: str | None) -> None:
-            del phase
+            pass
 
         def is_step_interrupt_pending(self) -> bool:
             return False
@@ -1572,7 +1570,6 @@ def test_journey_browser_prompt_reports_langchain_model_initialization_failure(
     context.pages.append(page)
 
     def fail_init_chat_model(*args: object, **kwargs: object) -> object:
-        del args, kwargs
         raise RuntimeError("missing provider package")
 
     monkeypatch.setattr(
@@ -1600,7 +1597,6 @@ def test_journey_browser_prompt_model_initialization_auth_failure_has_hint(
     context.pages.append(page)
 
     def fail_init_chat_model(*args: object, **kwargs: object) -> object:
-        del args, kwargs
         raise RuntimeError(
             "Could not resolve authentication method. Expected one of api_key, "
             "auth_token, or credentials to be set."
@@ -2243,7 +2239,6 @@ def test_journey_browser_prompt_compiles_and_replays_named_memory(
     replay_page._fake_prompt_click_handlers["#submit"] = submit_replay_login
 
     def fail_model_load(model: str) -> object:
-        del model
         raise AssertionError("replay should not load or call a model")
 
     monkeypatch.setattr(
@@ -2482,7 +2477,6 @@ def test_journey_browser_prompt_respects_execute_no_memory(monkeypatch):
     )
 
     def fail_memory_access(*args: object, **kwargs: object) -> object:
-        del args, kwargs
         raise AssertionError("prompt memory should be disabled")
 
     monkeypatch.setattr(
@@ -2584,7 +2578,6 @@ def test_journey_browser_prompt_memory_none_disables_callsite_memory(
     )
 
     def fail_memory_access(*args: object, **kwargs: object) -> object:
-        del args, kwargs
         raise AssertionError("prompt memory should be disabled")
 
     monkeypatch.setattr(
@@ -2670,7 +2663,6 @@ def test_journey_browser_prompt_respects_execute_no_memory_update(
         )
 
     def fail_memory_write(*args: object, **kwargs: object) -> object:
-        del kwargs
         write_calls.append(args)
         raise AssertionError("prompt memory updates should be disabled")
 
@@ -2682,7 +2674,6 @@ def test_journey_browser_prompt_respects_execute_no_memory_update(
     )
 
     def fail_model_load(model_name: str) -> object:
-        del model_name
         raise AssertionError("readonly replay should not require a model")
 
     monkeypatch.setattr(journey_browser_prompt, "_load_langchain_model", fail_model_load)

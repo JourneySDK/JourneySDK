@@ -228,7 +228,7 @@ class _CloudStubHandler(BaseHTTPRequestHandler):
         self._handle_request()
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A003
-        del format, args
+        pass
 
     def _handle_request(self) -> None:
         parsed = urlsplit(self.path)

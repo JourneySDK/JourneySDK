@@ -210,7 +210,6 @@ def test_resume_readme_commands_interrupt_then_resume(
     tmp_path: Path,
 ):
     monkeypatch.chdir(_repo_root())
-    del tmp_path
     pause_seconds = configured_pause_seconds(
         resume_docs.resume_journey,
         step_label="wait_for_resume_signal",
@@ -312,7 +311,6 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
         pytest.skip(f"Playwright browser unavailable: {exc}")
 
     monkeypatch.chdir(_repo_root())
-    del tmp_path
     pause_seconds = configured_pause_seconds(
         browser_resume_example.browser_resume_journey,
         step_label="continue_authenticated_dashboard",

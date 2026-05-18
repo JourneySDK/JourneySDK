@@ -704,7 +704,6 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         report: CaseExecutionReport,
         duration_seconds: float,
     ) -> None:
-        del case_plan
         parts = [
             f"- {report.case_id}",
             "ok",
@@ -2367,7 +2366,6 @@ class _RunSession:
         retry_from: StepRetryFrom = None,
         **kwargs: P.kwargs,
     ) -> R:
-        del retry, retry_delay, retry_from
         self._ensure_no_active_step_lifecycle()
         node_index = self.cursor
         node = self._consume(StepNode)

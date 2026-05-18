@@ -59,7 +59,6 @@ _GRACEFUL_INTERRUPT_PHASES = {
 
 class _JourneyArgumentParser(argparse.ArgumentParser):
     def _print_message(self, message: str, file: object | None = None) -> None:
-        del file
         stripped = message.rstrip()
         if not stripped:
             return
@@ -110,7 +109,6 @@ class _CliStepInterruptController:
         raise KeyboardInterrupt()
 
     def handle_sigint(self, signum: int, frame: object) -> None:
-        del signum, frame
         if (
             self._graceful
             and self._phase in _GRACEFUL_INTERRUPT_PHASES
@@ -315,7 +313,6 @@ class _LiveTextReporter(_ExecutionObserver):
         self._journey_name = journey_name
         self._journey_started = False
         self._logger = get_logger("executor")
-        del needs_separator
 
     def on_journey_start(
         self,
@@ -597,7 +594,6 @@ class _LiveTextReporter(_ExecutionObserver):
         report: CaseExecutionReport,
         duration_seconds: float,
     ) -> None:
-        del case_plan
         parts = [
             f"- {report.case_id}",
             "ok",

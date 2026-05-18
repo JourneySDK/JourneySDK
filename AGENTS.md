@@ -52,6 +52,8 @@ controls visibility with `--log-level debug|info|warning|error|off`.
   context to understand it, even by non-senior engineers.
 - **Consistent cloud semantics**: Official cloud touchpoints should share the same auth and ownership rules across resource
   types.
+- **Simple local lifetimes**: Do not add explicit deletion cleanup for ordinary local variables, including frames from
+  `inspect.currentframe()`, unless there is a concrete resource or lifecycle reason. Prefer normal Python scope.
 
 ## Cloud touchpoint pattern
 

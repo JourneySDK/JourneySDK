@@ -108,7 +108,6 @@ class _StepExitValue:
         self.closed = False
 
     def __store__(self, context) -> object:
-        del context
         state = "closed" if self.closed else "open"
         self._events.append(f"{self._name}:store_{state}")
         return {
@@ -118,7 +117,6 @@ class _StepExitValue:
 
     @classmethod
     def __restore__(cls, payload: object, context) -> "_StepExitValue":
-        del context
         if not isinstance(payload, dict):
             raise TypeError("payload must be a dict")
         value = cls([], str(payload["name"]))
@@ -131,7 +129,6 @@ class _StepExitValue:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> bool:
-        del exc, traceback
         suffix = exc_type.__name__ if exc_type is not None else "None"
         self._events.append(f"{self._name}:{suffix}")
         self.closed = True
@@ -149,13 +146,11 @@ class _RecordingObserver(journey_executor._ExecutionObserver):
         self.events: list[tuple[object, ...]] = []
 
     def on_journey_start(self, *, plan, selected_cases) -> None:
-        del plan
         self.events.append(
             ("journey_start", [item.case_plan.case_id for item in selected_cases])
         )
 
     def on_case_start(self, *, case_plan, stop_after_index, replay_anchor) -> None:
-        del stop_after_index, replay_anchor
         self.events.append(("case_start", case_plan.case_id))
 
     def on_case_resume(
@@ -166,15 +161,12 @@ class _RecordingObserver(journey_executor._ExecutionObserver):
         replay_anchor,
         replay_from_index,
     ) -> None:
-        del stop_after_index, replay_anchor
         self.events.append(("case_resume", case_plan.case_id, replay_from_index))
 
     def on_step_start(self, *, case_plan, node, node_index, attempt) -> None:
-        del case_plan, node_index
         self.events.append(("step_start", node.label, attempt))
 
     def on_branch(self, *, case_plan, node, node_index) -> None:
-        del case_plan, node_index
         self.events.append(("branch", node.group_id, node.active_key))
 
     def on_retry(
@@ -189,7 +181,6 @@ class _RecordingObserver(journey_executor._ExecutionObserver):
         remaining_retries,
         error,
     ) -> None:
-        del case_plan, node_index
         self.events.append(
             (
                 "retry",
@@ -211,7 +202,6 @@ class _RecordingObserver(journey_executor._ExecutionObserver):
         attempt,
         duration_seconds,
     ) -> None:
-        del case_plan, node_index
         self.events.append(("step_ok", node.label, attempt, duration_seconds >= 0))
 
     def on_step_failure(
@@ -224,7 +214,6 @@ class _RecordingObserver(journey_executor._ExecutionObserver):
         duration_seconds,
         error,
     ) -> None:
-        del case_plan, node_index
         self.events.append(
             (
                 "step_failed",
@@ -245,7 +234,6 @@ class _RecordingObserver(journey_executor._ExecutionObserver):
         duration_seconds,
         error,
     ) -> None:
-        del case_plan, node_index
         self.events.append(
             (
                 "step_interrupted",
@@ -257,7 +245,6 @@ class _RecordingObserver(journey_executor._ExecutionObserver):
         )
 
     def on_case_complete(self, *, case_plan, report, duration_seconds) -> None:
-        del case_plan
         self.events.append(
             (
                 "case_complete",
@@ -3244,7 +3231,6 @@ def test_execute_state_rejects_old_state_format_version(tmp_path):
 
 def test_execute_legacy_ctx_step_fails_with_callable_error():
     def legacy_step(ctx):
-        del ctx
         return True
 
     def journey():

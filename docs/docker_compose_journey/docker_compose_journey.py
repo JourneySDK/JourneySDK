@@ -172,7 +172,6 @@ def capture_baseline_state(stack: DockerComposeStack) -> dict[str, object]:
 def increment_counter(stack: DockerComposeStack) -> dict[str, int]:
     """Mutate the app+db state in one branch."""
 
-    del stack
     return _parse_increment_payload(
         _fetch_json("/counter/increment", method="POST"),
         owner="increment_counter",
@@ -182,7 +181,6 @@ def increment_counter(stack: DockerComposeStack) -> dict[str, int]:
 def read_counter_state(stack: DockerComposeStack) -> dict[str, object]:
     """Read the counter after Journey restores the saved Docker snapshot."""
 
-    del stack
     return _parse_counter_payload(
         _fetch_json("/counter"),
         owner="read_counter_state",
