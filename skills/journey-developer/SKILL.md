@@ -28,9 +28,9 @@ for retry, branch, or persistent-state behavior.
 - `journeysdk.touchpoints.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
 - `journeysdk.touchpoints.browser`: open browser pages and return resumable `JourneyBrowserPage` values that later steps can reopen.
 
-Prompt-capable official touchpoints use named prompt memory and optional structured output. Pass a literal, unique
-`memory="name"` to a touchpoint's `prompt(...)` method when prior successful runs should teach later runs replayable fast
-paths. Journey stores `.journey/name.memory.md` under the journey source directory. Use `--no-memory` for runs that should ignore and avoid
+Prompt-capable official touchpoints use prompt memory and optional structured output. Omit `memory` to use a generated
+callsite memory file, pass a literal unique `memory="name"` to choose the memory file, or pass `memory=None` to disable
+memory for one prompt. Journey stores `.journey/name.memory.md` under the journey source directory. Use `--no-memory` for runs that should ignore and avoid
 updating those files. Prompt methods return a result object with `result.output`. Omit `output` when that field should
 contain plain text; pass `output={"field": "description"}` or JSON-schema field fragments when it should contain a
 provider-validated `dict[str, object]`. If the requested browser task cannot complete because the page shows a blocking

@@ -2505,6 +2505,116 @@ def test_journey_browser_prompt_respects_execute_no_memory(monkeypatch):
     journey_sdk.execute(memory_journey, no_memory=True)
 
 
+def test_journey_browser_prompt_uses_generated_callsite_memory_by_default(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    fake_model = _FakeLangChainPromptModel(
+        [
+            "Done.",
+            "\n".join(
+                [
+                    "## Replay code",
+                    "```python",
+                    "page.wait_for_timeout(1)",
+                    "```",
+                    "",
+                    "## Success check code",
+                    "```python",
+                    "page.wait_for_timeout(1)",
+                    "```",
+                    "",
+                    "## Notes",
+                    "No-op prompt memory for test.",
+                ]
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    def run_prompt() -> str | dict[str, object]:
+        return page.prompt("finish", model="openai:gpt-4.1-mini")
+
+    def memory_journey() -> None:
+        journey_sdk.step(run_prompt)
+
+    plan = journey_sdk.compile_journey(memory_journey)
+    journey_executor._execute_plan(
+        memory_journey,
+        plan=plan,
+        no_state=True,
+        prompt_memory_root=tmp_path,
+    )
+
+    assert _prompt_memory_path(tmp_path, "run-prompt-prompt-1").exists()
+
+
+def test_journey_browser_prompt_memory_none_disables_callsite_memory(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel(["Done."]),
+    )
+
+    def fail_memory_access(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("prompt memory should be disabled")
+
+    monkeypatch.setattr(
+        journey_prompt_engine,
+        "load_prompt_memory_entry",
+        fail_memory_access,
+    )
+    monkeypatch.setattr(
+        journey_prompt_engine,
+        "write_prompt_memory_entry",
+        fail_memory_access,
+    )
+
+    def run_prompt() -> str | dict[str, object]:
+        return page.prompt("finish", model="openai:gpt-4.1-mini", memory=None)
+
+    def memory_journey() -> None:
+        journey_sdk.step(run_prompt)
+
+    plan = journey_sdk.compile_journey(memory_journey)
+    journey_executor._execute_plan(
+        memory_journey,
+        plan=plan,
+        no_state=True,
+        prompt_memory_root=tmp_path,
+    )
+
+    assert not list((tmp_path / PROMPT_MEMORY_DIR).glob("*.memory.md"))
+
+
 def test_journey_browser_prompt_respects_execute_no_memory_update(
     monkeypatch,
     tmp_path: Path,

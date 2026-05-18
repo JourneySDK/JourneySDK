@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
 from typing import TypeAlias
 
 from .errors import InvalidBranchUsageError
@@ -30,6 +31,17 @@ _FENCE_PATTERN = re.compile(
     r"^```(?P<language>[A-Za-z0-9_-]*)\n(?P<body>.*?)\n```",
     re.MULTILINE | re.DOTALL,
 )
+_PROMPT_MEMORY_SLUG_PATTERN = re.compile(r"[^a-z0-9._-]+")
+_PROMPT_MEMORY_DASH_PATTERN = re.compile(r"-+")
+
+
+class _PromptMemoryAuto:
+    def __repr__(self) -> str:
+        return "PROMPT_MEMORY_AUTO"
+
+
+PROMPT_MEMORY_AUTO = _PromptMemoryAuto()
+PromptMemorySpec: TypeAlias = str | None | _PromptMemoryAuto
 
 
 @dataclass(frozen=True)
@@ -76,7 +88,7 @@ _PROMPT_MEMORY_PLANNING_STATE_KEY = "prompt_memory"
 
 
 def collect_prompt_memory_references(fn: object) -> tuple[PromptMemoryReference, ...]:
-    """Return literal prompt-memory references found in one step callable."""
+    """Return prompt-memory references found in one step callable."""
 
     try:
         source_lines, source_start_line = inspect.getsourcelines(fn)
@@ -94,40 +106,46 @@ def collect_prompt_memory_references(fn: object) -> tuple[PromptMemoryReference,
         return ()
 
     owner = callable_ref(fn)
+    step_label = getattr(fn, "__name__", "<step>")
     references: list[PromptMemoryReference] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_prompt_call(node):
-            continue
+    for prompt_index, node in enumerate(_prompt_call_nodes(tree), start=1):
         memory_keyword = next(
             (keyword for keyword in node.keywords if keyword.arg == "memory"),
             None,
         )
         if memory_keyword is None:
-            continue
-        value = memory_keyword.value
-        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
-            raise InvalidBranchUsageError(
-                "prompt(..., memory=...) must use a non-empty string literal "
-                f"in step '{owner}'.",
-                hint=(
-                    "Use a stable literal such as "
-                    "`page.prompt(..., memory=\"sign-in-popup\")` so Journey can "
-                    "validate memory names during planning."
-                ),
-            )
-        try:
-            name = normalize_prompt_memory_name(value.value, owner="prompt")
-        except ValueError as exc:
-            raise InvalidBranchUsageError(
-                f"prompt(..., memory=...) in step '{owner}' is invalid: {exc}",
-                hint="Use a non-empty filename-safe memory name.",
-            ) from exc
+            name = _implicit_prompt_memory_name(step_label, prompt_index)
+            line = source_start_line + node.lineno - 1
+            column = source_col_offset + node.col_offset
+        else:
+            value = memory_keyword.value
+            if isinstance(value, ast.Constant) and value.value is None:
+                continue
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                raise InvalidBranchUsageError(
+                    "prompt(..., memory=...) must use a string literal or None "
+                    f"in step '{owner}'.",
+                    hint=(
+                        "Omit `memory` for generated callsite memory, pass "
+                        "`memory=None` to disable memory, or use a stable literal "
+                        "such as `page.prompt(..., memory=\"sign-in-popup\")`."
+                    ),
+                )
+            try:
+                name = normalize_prompt_memory_name(value.value, owner="prompt")
+            except ValueError as exc:
+                raise InvalidBranchUsageError(
+                    f"prompt(..., memory=...) in step '{owner}' is invalid: {exc}",
+                    hint="Use a non-empty filename-safe memory name.",
+                ) from exc
+            line = source_start_line + value.lineno - 1
+            column = source_col_offset + value.col_offset
         references.append(
             PromptMemoryReference(
                 name=name,
                 file_path=source_file,
-                line=source_start_line + value.lineno - 1,
-                column=source_col_offset + value.col_offset,
+                line=line,
+                column=column,
                 owner=owner,
             )
         )
@@ -209,17 +227,31 @@ def normalize_prompt_memory_name(name: object, *, owner: str) -> str:
 
 
 def resolve_prompt_memory_path(
-    memory: str | None,
+    memory: PromptMemorySpec,
     *,
     owner: str,
+    caller_frame: FrameType | None = None,
 ) -> Path | None:
     if memory is None:
         return None
-    name = normalize_prompt_memory_name(memory, owner=owner)
     session = get_session()
     disabled = getattr(session, "prompt_memory_disabled", None)
     if callable(disabled) and disabled():
         return None
+    if memory is PROMPT_MEMORY_AUTO:
+        if not _is_executing_journey_step(session):
+            return None
+        name = _implicit_prompt_memory_name_for_frame(caller_frame)
+        if name is None:
+            raise InvalidBranchUsageError(
+                f"{owner} could not determine a generated prompt memory name.",
+                hint=(
+                    "Pass an explicit memory name such as `memory=\"sign-in\"`, "
+                    "or pass `memory=None` to disable memory for this prompt."
+                ),
+            )
+    else:
+        name = normalize_prompt_memory_name(memory, owner=owner)
 
     root: Path | None = None
     root_resolver = getattr(session, "prompt_memory_root", None)
@@ -571,12 +603,77 @@ def truncate_prompt_memory_text(value: object) -> str:
     return text[: MAX_PROMPT_MEMORY_TEXT_LENGTH - 3] + "..."
 
 
+def _prompt_call_nodes(tree: ast.AST) -> tuple[ast.Call, ...]:
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _is_prompt_call(node)
+    ]
+    return tuple(
+        sorted(
+            calls,
+            key=lambda node: (
+                getattr(node, "lineno", 0),
+                getattr(node, "col_offset", 0),
+            ),
+        )
+    )
+
+
 def _is_prompt_call(call: ast.Call) -> bool:
     if isinstance(call.func, ast.Attribute):
         return call.func.attr == "prompt"
     if isinstance(call.func, ast.Name):
         return call.func.id == "prompt"
     return False
+
+
+def _implicit_prompt_memory_name(step_label: object, prompt_index: int) -> str:
+    base = _slugify_prompt_memory_name(str(step_label))
+    return normalize_prompt_memory_name(
+        f"{base}-prompt-{prompt_index}",
+        owner="generated prompt",
+    )
+
+
+def _slugify_prompt_memory_name(value: str) -> str:
+    slug = value.strip().replace("_", "-").lower()
+    slug = _PROMPT_MEMORY_SLUG_PATTERN.sub("-", slug)
+    slug = _PROMPT_MEMORY_DASH_PATTERN.sub("-", slug).strip("-.")
+    return slug or "prompt"
+
+
+def _is_executing_journey_step(session: object | None) -> bool:
+    is_step_executing = getattr(session, "_is_step_executing", None)
+    return bool(callable(is_step_executing) and is_step_executing())
+
+
+def _implicit_prompt_memory_name_for_frame(frame: FrameType | None) -> str | None:
+    if frame is None:
+        return None
+    try:
+        source_lines, source_start_line = inspect.getsourcelines(frame)
+    except (OSError, TypeError):
+        return None
+
+    source = "".join(source_lines)
+    source = textwrap.dedent(source)
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    relative_lineno = frame.f_lineno - source_start_line + 1
+    for prompt_index, node in enumerate(_prompt_call_nodes(tree), start=1):
+        start_line = getattr(node, "lineno", None)
+        end_line = getattr(node, "end_lineno", start_line)
+        if (
+            isinstance(start_line, int)
+            and isinstance(end_line, int)
+            and start_line <= relative_lineno <= end_line
+        ):
+            return _implicit_prompt_memory_name(frame.f_code.co_name, prompt_index)
+    return None
 
 
 def _write_prompt_memory_file(path: Path, text: str) -> None:

@@ -19,4 +19,4 @@ def start_chatting(saved_page: JourneyBrowserPage) -> JourneyBrowserPage:
 @journey
 def browser_resume_journey() -> None:
     page = step(sign_in)
-    # step(start_chatting, page)
+    step(start_chatting, page)

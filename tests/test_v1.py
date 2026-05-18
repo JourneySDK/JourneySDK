@@ -631,6 +631,52 @@ def test_compile_rejects_repeated_prompt_memory_invocation():
     )
 
 
+def test_compile_allows_implicit_prompt_memory_names():
+    def first_prompt_step():
+        page.prompt("first")
+
+    def second_prompt_step():
+        page.prompt("second")
+
+    def journey():
+        journey_sdk.step(first_prompt_step)
+        journey_sdk.step(second_prompt_step)
+
+    plan = journey_sdk.compile_journey(journey)
+
+    assert _labels(plan.case_plans[0]) == ["first_prompt_step", "second_prompt_step"]
+
+
+def test_compile_rejects_repeated_implicit_prompt_memory_invocation():
+    def prompt_step():
+        page.prompt("first")
+
+    def journey():
+        journey_sdk.step(prompt_step)
+        journey_sdk.step(prompt_step)
+
+    with pytest.raises(InvalidBranchUsageError) as exc_info:
+        journey_sdk.compile_journey(journey)
+
+    assert (
+        "Prompt memory name 'prompt-step-prompt-1' is used by more than one "
+        "prompt(...) call"
+    ) in str(exc_info.value)
+
+
+def test_compile_treats_prompt_memory_none_as_disabled():
+    def prompt_step():
+        page.prompt("first", memory=None)
+
+    def journey():
+        journey_sdk.step(prompt_step)
+        journey_sdk.step(prompt_step)
+
+    plan = journey_sdk.compile_journey(journey)
+
+    assert _labels(plan.case_plans[0]) == ["prompt_step", "prompt_step"]
+
+
 def test_compile_allows_shared_prompt_memory_before_branch_cases():
     def prompt_step():
         page.prompt("first", memory="shared")
@@ -667,7 +713,7 @@ def test_compile_rejects_dynamic_prompt_memory_names():
     with pytest.raises(InvalidBranchUsageError) as exc_info:
         journey_sdk.compile_journey(journey)
 
-    assert "prompt(..., memory=...) must use a non-empty string literal" in str(
+    assert "prompt(..., memory=...) must use a string literal or None" in str(
         exc_info.value
     )
 

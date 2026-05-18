@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import inspect
 import os
 import signal
 import subprocess
@@ -14,6 +15,7 @@ from types import TracebackType
 from typing import Literal, TypedDict, cast
 
 from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_row
+from journeysdk._prompt_memory import PROMPT_MEMORY_AUTO, PromptMemorySpec
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import _register_step_exit_object, _require_executing_step
 from journeysdk.executor import (
@@ -405,7 +407,7 @@ class JourneyBrowserPage(PlaywrightPage):
         model: str | None = None,
         max_steps: int = 15,
         action_timeout_seconds: float = 5.0,
-        memory: str | None = None,
+        memory: PromptMemorySpec = PROMPT_MEMORY_AUTO,
         output: Mapping[str, str | Mapping[str, object]] | None = None,
     ) -> str | dict[str, object]:
         """Use an LLM to inspect and interact with the live page.
@@ -418,6 +420,8 @@ class JourneyBrowserPage(PlaywrightPage):
             max_steps: Maximum generated Python snippets before failing.
             action_timeout_seconds: Timeout passed to generated Playwright actions.
             memory: Optional named prompt memory stored as `.journey/[memory].memory.md`.
+                When omitted inside a journey step, Journey generates a stable
+                callsite memory name. Pass `None` to disable memory for this prompt.
             output: Optional structured-output fields. String values are field
                 descriptions for string output fields; mapping values are
                 JSON-schema property fragments. When omitted, the return value is
@@ -429,15 +433,21 @@ class JourneyBrowserPage(PlaywrightPage):
                 "JourneyBrowserPage.prompt(...) requires a live browser page. "
                 "Call open_page(saved_page) first."
             )
-        return prompt_page(
-            self,
-            instruction=instruction,
-            model=model,
-            max_steps=max_steps,
-            action_timeout_seconds=action_timeout_seconds,
-            memory=memory,
-            output=output,
-        )
+        frame = inspect.currentframe()
+        caller_frame = frame.f_back if frame is not None else None
+        try:
+            return prompt_page(
+                self,
+                instruction=instruction,
+                model=model,
+                max_steps=max_steps,
+                action_timeout_seconds=action_timeout_seconds,
+                memory=memory,
+                caller_frame=caller_frame,
+                output=output,
+            )
+        finally:
+            del frame
 
 
 def open_page(

@@ -434,9 +434,11 @@ def capture_popup_title() -> dict[str, object]:
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
 `ANTHROPIC_API_KEY`. Browser prompts default to `anthropic:claude-sonnet-4-6`; override that by passing a LangChain
 model identifier like `model="anthropic:claude-sonnet-4-5"` or by setting `JOURNEY_BROWSER_PROMPT_MODEL`.
-The optional `memory="sign-in-popup"` argument stores a replayable fast path from successful runs in
-`.journey/sign-in-popup.memory.md` under the journey source directory; pass `--no-memory` when you want a run to ignore and avoid
-updating prompt memory, or `--no-memory-update` when you want to read existing memory without writing new updates.
+By default, each `page.prompt(...)` inside a journey step stores a replayable fast path from successful runs in a
+generated callsite memory file under `.journey/`. Pass `memory="sign-in-popup"` to choose a stable name such as
+`.journey/sign-in-popup.memory.md`, or pass `memory=None` to disable memory for one prompt. Pass `--no-memory` when you
+want a run to ignore and avoid updating prompt memory, or `--no-memory-update` when you want to read existing memory
+without writing new updates.
 The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
 `dict[str, object]` return value instead of plain text.
 If the browser task cannot be completed because the page shows a blocking app state, such as a locked account or

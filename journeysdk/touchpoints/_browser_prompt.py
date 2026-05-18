@@ -7,6 +7,7 @@ import base64
 import json
 import re
 from pathlib import Path
+from types import FrameType
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -21,7 +22,9 @@ from journeysdk.logger import (
     pretty_row,
 )
 from journeysdk._prompt_memory import (
+    PROMPT_MEMORY_AUTO,
     PromptMemoryEntry,
+    PromptMemorySpec,
     PromptMemorySection,
     resolve_prompt_memory_path,
 )
@@ -864,7 +867,8 @@ def prompt_page(
     model: str | None,
     max_steps: int,
     action_timeout_seconds: float,
-    memory: str | None = None,
+    memory: PromptMemorySpec = PROMPT_MEMORY_AUTO,
+    caller_frame: FrameType | None = None,
     output: PromptOutputSpec | None = None,
 ) -> str | dict[str, object]:
     normalized_instruction = _require_text_value(
@@ -877,6 +881,7 @@ def prompt_page(
     memory_path = resolve_prompt_memory_path(
         memory,
         owner="JourneyBrowserPage.prompt(...)",
+        caller_frame=caller_frame,
     )
     output_schema = normalize_prompt_output_spec(
         output,

@@ -66,20 +66,21 @@ controls visibility with `--log-level debug|info|warning|error|off`.
 
 ## Prompt memory pattern
 
-- Official touchpoints with AI-driven `prompt(...)` methods should accept `memory: str | None = None` and use the shared
-  helpers in `journeysdk._prompt_memory`.
+- Official touchpoints with AI-driven `prompt(...)` methods should accept a `memory` option and use the shared helpers
+  in `journeysdk._prompt_memory`. Omitted `memory` should use generated callsite memory, a string should override the
+  memory name, and `memory=None` should disable memory for that prompt.
 - Official touchpoints with AI-driven `prompt(...)` methods should accept `output=...` for optional structured output and
   use the shared helpers in `journeysdk._prompt_output`. Omitted `output` stores plain text on `result.output`;
   explicit `output` uses native model structured-output support and stores a dictionary on `result.output`.
 - If an AI-driven `prompt(...)` cannot complete the requested task because the observed app state blocks it, the prompt
   should raise instead of returning a successful result that merely summarizes the failure.
 - Memory files are named `.journey/[memory].memory.md`, live under the journey source file's `.journey` folder, and are intended to be
-  reviewable replay fast paths in version control.
+  reviewable replay fast paths in version control. Generated names should be stable and callsite-based.
 - `--no-memory` and `execute(..., no_memory=True)` must disable all prompt-memory reads and writes.
 - `--no-memory-update` and `execute(..., no_memory_update=True)` must still allow prompt-memory reads but skip writes.
 - Store compact replay code and checks from successful runs only. Do not persist screenshots, rendered HTML, full model
   prompts, or raw observations.
-- Keep memory names literal and unique within a compiled journey so planning can report mistakes before execution.
+- Keep explicit and generated memory names unique within a compiled journey so planning can report mistakes before execution.
 
 ## Core dependency rule
 
