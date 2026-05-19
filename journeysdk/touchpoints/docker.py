@@ -168,21 +168,25 @@ def run_docker(
         up_command = ["up", "-d", "--wait"]
         if normalized_wait_timeout is not None:
             up_command.extend(["--wait-timeout", str(normalized_wait_timeout)])
-        _run_cli(
-            _compose_command(
-                compose_file=resolved_compose_path,
-                project_name=resolved_project_name,
-                subcommand=up_command,
-            ),
-            owner="run_docker",
-        )
-
         stack = DockerComposeStack(
             compose_file=str(original_compose_path),
             resolved_compose_file=str(resolved_compose_path),
             project_name=resolved_project_name,
             cache_root=str(_CACHE_ROOT),
         )
+        try:
+            _run_cli(
+                _compose_command(
+                    compose_file=resolved_compose_path,
+                    project_name=resolved_project_name,
+                    subcommand=up_command,
+                ),
+                owner="run_docker",
+            )
+        except RuntimeError:
+            if not _compose_wait_failure_is_successful_one_shot(stack):
+                raise
+
         _LOGGER.info(
             "compose_success",
             "Docker Compose stack started",
@@ -546,6 +550,41 @@ def _load_live_logs(stack: DockerComposeStack) -> dict[str, str]:
     return logs
 
 
+def _compose_wait_failure_is_successful_one_shot(stack: DockerComposeStack) -> bool:
+    try:
+        compose_config = _load_compose_config(stack, owner="run_docker")
+        live_containers = _load_live_containers(
+            stack,
+            owner="run_docker",
+            include_all=True,
+        )
+        _require_declared_services_present(
+            compose_config=compose_config,
+            live_containers=live_containers,
+            owner="run_docker",
+        )
+    except Exception:
+        return False
+
+    if not live_containers:
+        return False
+    return all(
+        _container_started_successfully_after_wait_failure(live_container)
+        for live_container in live_containers
+    )
+
+
+def _container_started_successfully_after_wait_failure(
+    live_container: _LiveContainer,
+) -> bool:
+    status = live_container.status
+    if status.state == "running":
+        return status.health in {None, "healthy"}
+    if status.state == "exited":
+        return status.exit_code == 0
+    return False
+
+
 def _require_stack(*, stack: DockerComposeStack, owner: str) -> DockerComposeStack:
     if not isinstance(stack, DockerComposeStack):
         raise TypeError(f"{owner}(...) expects a DockerComposeStack step result.")
@@ -754,11 +793,11 @@ def _load_live_containers(
             label="docker compose ps container id",
             value=_lookup(row, "ID", "Id"),
         )
-        inspect_row = inspect_by_id.get(container_id)
-        if inspect_row is None:
-            raise RuntimeError(
-                f"{owner}(...) could not inspect Docker container '{container_id}'."
-            )
+        inspect_row = _inspect_row_for_container_id(
+            owner=owner,
+            inspect_by_id=inspect_by_id,
+            container_id=container_id,
+        )
         service = _service_name_from_rows(ps_row=row, inspect_row=inspect_row, owner=owner)
         container_name = _container_name_from_rows(
             ps_row=row,
@@ -840,6 +879,33 @@ def _load_live_containers(
     return sorted(
         live_containers,
         key=lambda item: (item.status.service, item.container_index, item.status.container_name),
+    )
+
+
+def _inspect_row_for_container_id(
+    *,
+    owner: str,
+    inspect_by_id: Mapping[str, dict[str, Any]],
+    container_id: str,
+) -> dict[str, Any]:
+    inspect_row = inspect_by_id.get(container_id)
+    if inspect_row is not None:
+        return inspect_row
+
+    matches = [
+        row
+        for inspected_id, row in inspect_by_id.items()
+        if inspected_id.startswith(container_id) or container_id.startswith(inspected_id)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise RuntimeError(
+            f"{owner}(...) received ambiguous Docker inspect metadata for "
+            f"container '{container_id}'."
+        )
+    raise RuntimeError(
+        f"{owner}(...) could not inspect Docker container '{container_id}'."
     )
 
 
@@ -932,9 +998,11 @@ def _build_volume_entry(
         label=f"mount type for '{live_container.status.container_name}'",
         value=mount.get("Type"),
     )
+    if mount_type == "bind":
+        return None
     if mount_type != "volume":
         raise RuntimeError(
-            "store_docker(...) only supports Docker-managed volumes. "
+            "store_docker(...) only supports Docker-managed volumes and bind mounts. "
             f"Container '{live_container.status.container_name}' mounted unsupported type {mount_type!r}."
         )
     volume_name = _require_string(
@@ -1136,14 +1204,15 @@ def _remove_volume_if_exists(*, owner: str, volume_name: str) -> None:
 
 
 def _parse_compose_ps_json(*, owner: str, payload: str) -> list[dict[str, Any]]:
-    if not payload.strip():
+    stripped = payload.strip()
+    if not stripped:
         return []
     try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"{owner}(...) could not parse `docker compose ps --format json` output."
-        ) from exc
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return _parse_json_lines(owner=owner, payload=stripped, label="compose ps")
+    if isinstance(parsed, Mapping):
+        return [dict(parsed)]
     if not isinstance(parsed, list):
         raise RuntimeError(f"{owner}(...) received invalid `docker compose ps` JSON.")
     return [dict(item) for item in parsed if isinstance(item, Mapping)]

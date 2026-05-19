@@ -65,6 +65,7 @@ def _inspect_row(
     destination: str = "/data",
     mount_type: str = "volume",
     read_write: bool = True,
+    exit_code: int = 0,
     health: str | None = "healthy",
     mounts: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
@@ -83,7 +84,7 @@ def _inspect_row(
         },
         "State": {
             "Status": state,
-            "ExitCode": 0,
+            "ExitCode": exit_code,
             "StartedAt": "2026-04-14T10:00:00Z",
             "FinishedAt": "0001-01-01T00:00:00Z",
             "Health": health_block,
@@ -339,6 +340,66 @@ def test_run_docker_executes_compose_config_and_up(
     assert "Docker Compose stack started" in log_output
 
 
+def test_run_docker_accepts_wait_failure_when_one_shot_service_exits_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime(
+        compose_config={
+            "services": {
+                "setup": {"image": "demo-setup:latest"},
+                "web": {"image": "demo-web:latest"},
+            },
+            "volumes": {"demo_data": {}},
+        },
+        compose_config_yaml=(
+            "services:\n"
+            "  setup:\n"
+            "    image: demo-setup:latest\n"
+            "  web:\n"
+            "    image: demo-web:latest\n"
+        ),
+        live_ps_rows=[
+            _ps_row("setup-container-1", "demo-setup-1", "setup"),
+            _ps_row("web-container-1", "demo-web-1", "web"),
+        ],
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="setup-container-1",
+                name="demo-setup-1",
+                service="setup",
+                image="demo-setup:latest",
+                state="exited",
+                health=None,
+            ),
+            _inspect_row(
+                container_id="web-container-1",
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+            ),
+        ],
+    )
+
+    def run_cli(args: object, *, owner: str) -> str:
+        output = runtime(args, owner=owner)
+        if isinstance(args, list) and args[:2] == ["docker", "compose"] and "up" in args:
+            raise RuntimeError("container demo-setup-1 exited (0)")
+        return output
+
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", run_cli)
+
+    stack = journey_docker.run_docker(
+        compose_file=compose_file,
+        project_name="demo-project",
+        wait_timeout=15,
+    )()
+
+    assert stack.project_name == "demo-project"
+
+
 def test_docker_run_cli_logs_subprocess_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -429,6 +490,63 @@ def test_docker_stack_statuses_and_logs_use_live_docker_metadata(
     }
 
 
+def test_store_docker_accepts_compose_ps_json_lines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+
+    def run_cli(args: object, *, owner: str) -> str:
+        output = runtime(args, owner=owner)
+        if isinstance(args, list) and args[:2] == ["docker", "compose"] and "ps" in args:
+            rows = json.loads(output)
+            return "\n".join(json.dumps(row) for row in rows) + "\n"
+        return output
+
+    monkeypatch.setattr(journey_docker, "_run_cli", run_cli)
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+
+    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["containers"][0]["container_id"] == "web-container-1"
+
+
+def test_store_docker_matches_abbreviated_compose_ps_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    full_container_id = "13fb39470b3b9dc76db53057f52029e388cb8a47f1271a64b07d7b84ac0f88c2"
+    runtime = _FakeDockerRuntime(
+        live_ps_rows=[
+            _ps_row(full_container_id[:12], "demo-web-1", "web"),
+        ],
+        live_inspect_rows=[
+            _inspect_row(
+                container_id=full_container_id,
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+            ),
+        ],
+    )
+
+    def run_cli(args: object, *, owner: str) -> str:
+        if isinstance(args, list) and args[:2] == ["docker", "inspect"]:
+            return json.dumps(list(runtime.live_inspect_rows.values()))
+        return runtime(args, owner=owner)
+
+    monkeypatch.setattr(journey_docker, "_run_cli", run_cli)
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+
+    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["containers"][0]["container_id"] == full_container_id[:12]
+
+
 def test_docker_compose_stack_is_pickle_serializable(tmp_path: Path):
     stack = _build_stack(tmp_path)
     restored = pickle.loads(pickle.dumps(stack))
@@ -463,10 +581,54 @@ def test_store_docker_creates_manifest_and_volume_backup(
     )
 
 
+def test_store_docker_ignores_bind_mounts_and_snapshots_managed_volumes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime(
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="web-container-1",
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+                mounts=[
+                    {
+                        "Type": "bind",
+                        "Source": "/host/config.json",
+                        "Destination": "/app/config.json",
+                        "Mode": "ro",
+                        "RW": False,
+                    },
+                    {
+                        "Type": "volume",
+                        "Name": "demo_demo_data",
+                        "Destination": "/data",
+                        "Mode": "",
+                        "RW": True,
+                    },
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+
+    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert [volume["volume_name"] for volume in manifest["volumes"]] == ["demo_demo_data"]
+    assert all(
+        command[:3] != ["docker", "cp", "-a"] or ":/app/config.json" not in command[3]
+        for _, command in runtime.commands
+    )
+
+
 @pytest.mark.parametrize(
     ("mount_type", "state", "external", "read_write", "message"),
     [
-        ("bind", "running", False, True, "Docker-managed volumes"),
+        ("tmpfs", "running", False, True, "unsupported type"),
         ("volume", "paused", False, True, "cannot snapshot"),
         ("volume", "running", True, True, "external volume"),
         ("volume", "running", False, False, "read-only volume mount"),

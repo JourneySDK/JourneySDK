@@ -375,8 +375,9 @@ elif branch(start_from=baseline):
     step(assert_compose_logs, stack)
 ```
 
-Current Docker snapshots are intentionally strict: bind mounts, external volumes, read-only mounts, and multi-container
-services are rejected so restore can stay exact and predictable.
+Current Docker snapshots restore container filesystems plus Docker-managed volume contents. Bind mounts are allowed but
+treated as external host state and are not copied or restored; external volumes, read-only volume mounts, unsupported
+mount types, and multi-container services are rejected so managed Docker state can stay predictable.
 
 ```python
 from journeysdk import step
