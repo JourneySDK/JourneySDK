@@ -242,6 +242,66 @@ def _record_labels(plan: journey_sdk.JourneyPlan) -> list[str]:
     ]
 
 
+def _docker_jsonl_records(output: str) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for line in output.splitlines():
+        if not line.startswith("{"):
+            continue
+        record = json.loads(line)
+        if record.get("component") == "docker":
+            records.append(record)
+    return records
+
+
+def _write_restore_snapshot(
+    stack: journey_docker.DockerComposeStack,
+    *,
+    snapshot_name: str = "after_boot",
+) -> Path:
+    snapshot_dir = Path(stack.cache_root) / stack.project_name / snapshot_name
+    backup_dir = snapshot_dir / "volumes" / "demo-demo-data"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    (backup_dir / "snapshot.txt").write_text("saved", encoding="utf-8")
+    manifest = {
+        "format": 1,
+        "project_name": stack.project_name,
+        "compose_file": stack.compose_file,
+        "resolved_compose_file": stack.resolved_compose_file,
+        "snapshot_name": snapshot_name,
+        "containers": [
+            {
+                "service": "web",
+                "container_id": "web-container-1",
+                "container_name": "demo-web-1",
+                "container_index": 1,
+                "state": "running",
+                "health": "healthy",
+                "exit_code": 0,
+                "image": "demo-web:latest",
+                "started_at": "2026-04-14T10:00:00Z",
+                "finished_at": "0001-01-01T00:00:00Z",
+                "snapshot_image": "journey-sdk-snapshot:demo-after-boot-web-1",
+            }
+        ],
+        "volumes": [
+            {
+                "volume_name": "demo_demo_data",
+                "service": "web",
+                "container_index": 1,
+                "container_name": "demo-web-1",
+                "target_path": "/data",
+                "backup_relpath": "volumes/demo-demo-data",
+                "mode": "",
+            }
+        ],
+    }
+    (snapshot_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
+    return snapshot_dir
+
+
 def test_run_docker_validates_factory_arguments(tmp_path: Path):
     with pytest.raises(TypeError):
         journey_docker.run_docker(compose_file=object())
@@ -581,6 +641,81 @@ def test_store_docker_creates_manifest_and_volume_backup(
     )
 
 
+def test_store_docker_logs_snapshot_phase_timings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("info", output_format="jsonl")
+    try:
+        journey_docker.store_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    records = _docker_jsonl_records(capsys.readouterr().out)
+    records_by_event = {record["event"]: record for record in records}
+    for event in [
+        "snapshot_store_prepare_snapshot_dir_success",
+        "snapshot_store_compose_config_success",
+        "snapshot_store_live_containers_success",
+        "snapshot_store_validate_snapshot_success",
+        "snapshot_store_manifest_write_success",
+        "snapshot_store_success",
+    ]:
+        assert event in records_by_event
+        assert isinstance(records_by_event[event]["duration_ms"], int | float)
+
+    commit_record = next(
+        record
+        for record in records
+        if record["event"] == "snapshot_store_container_commit_success"
+    )
+    assert commit_record["service"] == "web"
+    assert commit_record["container_id"] == "web-container-1"
+    assert isinstance(commit_record["duration_ms"], int | float)
+
+    volume_record = next(
+        record
+        for record in records
+        if record["event"] == "snapshot_store_volume_backup_success"
+    )
+    assert volume_record["volume"] == "demo_demo_data"
+    assert volume_record["target_path"] == "/data"
+    assert isinstance(volume_record["duration_ms"], int | float)
+
+
+def test_store_docker_pretty_logs_identify_containers_and_volumes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("info", output_format="pretty")
+    try:
+        journey_docker.store_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    output = capsys.readouterr().out
+    assert (
+        "committing Docker container snapshot: service=web container=demo-web-1 "
+        "id=web-container-1 snapshot_image=journey-sdk-snapshot:demo-after_boot-web-1"
+    ) in output
+    assert (
+        "copying Docker volume to snapshot: volume=demo_demo_data service=web "
+        "container=demo-web-1 id=web-container-1 from=/data to=volumes/"
+    ) in output
+    assert "stored Docker Compose snapshot" in output
+    assert "containers=1 volumes=1" in output
+
+
 def test_store_docker_ignores_bind_mounts_and_snapshots_managed_volumes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -774,6 +909,77 @@ def test_restore_docker_recreates_stack_and_restores_backups(
         ] and "start" in command
         for _, command in runtime.commands
     )
+
+
+def test_restore_docker_logs_snapshot_phase_timings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    _write_restore_snapshot(stack)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("info", output_format="jsonl")
+    try:
+        journey_docker.restore_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    records = _docker_jsonl_records(capsys.readouterr().out)
+    records_by_event = {record["event"]: record for record in records}
+    for event in [
+        "snapshot_restore_manifest_load_success",
+        "snapshot_restore_override_write_success",
+        "snapshot_restore_compose_down_success",
+        "snapshot_restore_volume_remove_success",
+        "snapshot_restore_compose_create_success",
+        "snapshot_restore_recreated_containers_success",
+        "snapshot_restore_volume_restore_success",
+        "snapshot_restore_start_services_success",
+        "snapshot_restore_success",
+    ]:
+        assert event in records_by_event
+        assert isinstance(records_by_event[event]["duration_ms"], int | float)
+
+    assert records_by_event["snapshot_restore_volume_remove_success"]["removed"] is True
+    assert records_by_event["snapshot_restore_start_services_success"]["services"] == ["web"]
+    assert records_by_event["snapshot_restore_volume_restore_success"]["volume"] == (
+        "demo_demo_data"
+    )
+
+
+def test_restore_docker_pretty_logs_identify_volumes_and_services(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    _write_restore_snapshot(stack)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("info", output_format="pretty")
+    try:
+        journey_docker.restore_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    output = capsys.readouterr().out
+    assert (
+        "removing Docker volume before restore: volume=demo_demo_data service=web "
+        "container=demo-web-1"
+    ) in output
+    assert (
+        "checked Docker volume before restore" in output
+        and "volume=demo_demo_data service=web container=demo-web-1 removed=true" in output
+    )
+    assert (
+        "restoring Docker volume contents: volume=demo_demo_data service=web "
+        "container=demo-web-1 id=web-container-2 from=volumes/demo-demo-data to=/data"
+    ) in output
+    assert "starting restored Docker Compose services: services=web count=1" in output
 
 
 def test_restore_docker_requires_existing_snapshot(tmp_path: Path):
