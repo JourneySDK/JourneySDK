@@ -12,6 +12,9 @@ one journey when you need script-friendly JSONL output.
 - Add steps with `step(...)`.
 - Pass step results explicitly into later steps.
 - Treat every step as a boundary where Journey can save progress, stop, retry, or resume.
+- Size steps around durable procedures, not individual clicks, API calls, and assertions. A step should usually perform
+  one end-to-end piece of the user journey and verify the outcome it owns, because every boundary can save state,
+  rehydrate touchpoints, and create artifacts such as Docker snapshots.
 - Use touchpoints when a step needs to interact with another system, such as a browser, inbox, webhook endpoint, CRM,
   payment provider, or back-office process.
 - Use `journey` to compile and run the authored flow as linear executable cases.

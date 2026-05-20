@@ -35,30 +35,6 @@ TOILET_CHAT_TOPIC = "fix a toilet"
 ROOF_CHAT_TOPIC = "repair a leaking roof"
 
 
-def start_chatting_about_toilet(
-    _stack: DockerComposeStack,
-    saved_page: JourneyBrowserPage,
-) -> JourneyBrowserPage:
-    page = open_page(saved_page, headless=False)
-    page.prompt(
-        f"start chatting with Alfie - say you need to {TOILET_CHAT_TOPIC}",
-        memory="start-chatting-about-toilet",
-    )
-    return page
-
-
-def start_chatting_about_roof_leak(
-    _stack: DockerComposeStack,
-    saved_page: JourneyBrowserPage,
-) -> JourneyBrowserPage:
-    page = open_page(saved_page, headless=False)
-    page.prompt(
-        f"start chatting with Alfie - say you need to {ROOF_CHAT_TOPIC}",
-        memory="start-chatting-about-roof-leak",
-    )
-    return page
-
-
 def _assert_toilet_chat_visibility(
     page: JourneyBrowserPage,
     *,
@@ -92,43 +68,43 @@ def _assert_toilet_chat_visibility(
         raise AssertionError(f"Expected {expectation}, got: {result!r}")
 
 
-def assert_toilet_chat_seen_in_side_panel(
+def run_toilet_chat_history_check(
     _stack: DockerComposeStack,
     saved_page: JourneyBrowserPage,
-) -> JourneyBrowserPage:
+) -> bool:
     page = open_page(saved_page, headless=False)
+    page.prompt(
+        f"start chatting with Alfie - say you need to {TOILET_CHAT_TOPIC}",
+        memory="start-chatting-about-toilet",
+    )
     _assert_toilet_chat_visibility(
         page,
         expected_visible=True,
         memory="assert-toilet-chat-seen",
     )
-    return page
+    return True
 
 
-def assert_toilet_chat_not_seen_in_side_panel_before_roof_chat(
+def run_roof_chat_isolation_check(
     _stack: DockerComposeStack,
     saved_page: JourneyBrowserPage,
-) -> JourneyBrowserPage:
+) -> bool:
     page = open_page(saved_page, headless=False)
     _assert_toilet_chat_visibility(
         page,
         expected_visible=False,
         memory="assert-toilet-chat-not-seen-before-roof-chat",
     )
-    return page
-
-
-def assert_toilet_chat_not_seen_in_side_panel_after_roof_chat(
-    _stack: DockerComposeStack,
-    saved_page: JourneyBrowserPage,
-) -> JourneyBrowserPage:
-    page = open_page(saved_page, headless=False)
+    page.prompt(
+        f"start chatting with Alfie - say you need to {ROOF_CHAT_TOPIC}",
+        memory="start-chatting-about-roof-leak",
+    )
     _assert_toilet_chat_visibility(
         page,
         expected_visible=False,
         memory="assert-toilet-chat-not-seen-after-roof-chat",
     )
-    return page
+    return True
 
 
 @journey
@@ -137,17 +113,6 @@ def browser_resume_journey() -> None:
     page = step(sign_in, stack)
 
     if branch(start_from=page):
-        toilet_page = step(start_chatting_about_toilet, stack, page)
-        step(assert_toilet_chat_seen_in_side_panel, stack, toilet_page)
+        step(run_toilet_chat_history_check, stack, page)
     elif branch(start_from=page):
-        restored_page = step(
-            assert_toilet_chat_not_seen_in_side_panel_before_roof_chat,
-            stack,
-            page,
-        )
-        roof_page = step(start_chatting_about_roof_leak, stack, restored_page)
-        step(
-            assert_toilet_chat_not_seen_in_side_panel_after_roof_chat,
-            stack,
-            roof_page,
-        )
+        step(run_roof_chat_isolation_check, stack, page)

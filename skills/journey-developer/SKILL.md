@@ -65,6 +65,12 @@ def account_journey() -> None:
     step(assert_account_ready, account)
 ```
 
+Choose step boundaries around meaningful durable procedures, not tiny "do" and "assert" fragments. A step should
+usually complete one end-to-end unit of the user journey and verify the outcome it owns. This matters most for browser
+and Docker touchpoints, because every boundary can save browser state, rehydrate values, and create Docker snapshot
+artifacts. Use a separate assertion step only when that assertion is its own replayable procedure or a later step needs
+its result.
+
 Prefer stable function names because default step labels come from function names. When a label appears in docs, tests, state files, or CLI examples, keep it stable or update every reference in the same change.
 
 Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay. Use
