@@ -25,7 +25,7 @@ for retry, branch, or persistent-state behavior.
 
 - `journeysdk.touchpoints.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
 - `journeysdk.touchpoints.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
-- `journeysdk.touchpoints.docker`: start local Docker Compose apps and pair step anchors with exact snapshots for supported container and volume state.
+- `journeysdk.touchpoints.docker`: start local Docker Compose apps and pair step anchors with snapshots for supported Docker-managed volume state.
 - `journeysdk.touchpoints.browser`: open browser pages and return resumable `JourneyBrowserPage` values that later steps can reopen.
 
 Prompt-capable official touchpoints use prompt memory and optional structured output. Omit `memory` to use a generated

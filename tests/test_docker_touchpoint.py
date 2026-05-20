@@ -156,7 +156,7 @@ class _FakeDockerRuntime:
                         container_id="web-container-2",
                         name="demo-web-1",
                         service="web",
-                        image="journey-sdk-snapshot:demo-after-boot-web-1",
+                        image="demo-web:latest",
                     )
                 ]
             )
@@ -164,10 +164,13 @@ class _FakeDockerRuntime:
         self.logs_by_service = logs_by_service or {
             "web": "web-1  | 2026-04-14T10:00:00Z booted\n",
         }
-        self.volume_names = {"demo_demo_data"}
+        self.volume_names = {"demo_demo_data", "demo_demo_data_snapshot"}
+        self.volume_labels: dict[str, dict[str, str]] = {}
         self.phase = "live"
         self.commands: list[tuple[str, list[str]]] = []
-        self.restored_copies: list[tuple[str, str]] = []
+        self.volume_copies: list[tuple[str, str]] = []
+        self.stopped_container_ids: list[str] = []
+        self.started_container_ids: list[str] = []
 
     def __call__(self, args: object, *, owner: str) -> str:
         assert isinstance(args, list)
@@ -196,19 +199,44 @@ class _FakeDockerRuntime:
         if args[:2] == ["docker", "commit"]:
             return f"sha256:{args[-1]}"
 
-        if args[:3] == ["docker", "cp", "-a"]:
-            source = args[3]
-            destination = args[4]
-            if source.startswith("web-container-") or source.startswith("db-container-"):
-                backup_dir = Path(destination)
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                (backup_dir / "snapshot.txt").write_text(
-                    f"saved from {source}",
-                    encoding="utf-8",
-                )
-            else:
-                self.restored_copies.append((source, destination))
+        if args[:3] == ["docker", "run", "--rm"]:
+            mount_values = [
+                args[index + 1]
+                for index, item in enumerate(args)
+                if item == "--mount"
+            ]
+            mounts = [_mount_parts(value) for value in mount_values]
+            source = next(
+                mount["source"]
+                for mount in mounts
+                if mount.get("target") == "/from"
+            )
+            destination = next(
+                mount["source"]
+                for mount in mounts
+                if mount.get("target") == "/to"
+            )
+            self.volume_copies.append((source, destination))
             return ""
+
+        if args[:3] == ["docker", "ps", "-q"]:
+            volume_filter = args[args.index("--filter") + 1]
+            _, volume_name = volume_filter.split("=", 1)
+            rows = self.live_inspect_rows if self.phase != "restored" else self.restored_inspect_rows
+            container_ids = [
+                container_id
+                for container_id, row in rows.items()
+                if _inspect_row_uses_volume(row, volume_name)
+            ]
+            return "\n".join(container_ids) + ("\n" if container_ids else "")
+
+        if args[:2] == ["docker", "stop"]:
+            self.stopped_container_ids.extend(args[2:])
+            return "\n".join(args[2:])
+
+        if args[:2] == ["docker", "start"] and args[:3] != ["docker", "start", "-a"]:
+            self.started_container_ids.extend(args[2:])
+            return "\n".join(args[2:])
 
         if args[:3] == ["docker", "volume", "ls"]:
             return "\n".join(
@@ -216,8 +244,20 @@ class _FakeDockerRuntime:
                 for name in sorted(self.volume_names)
             )
 
+        if args[:3] == ["docker", "volume", "create"]:
+            volume_name = args[-1]
+            labels: dict[str, str] = {}
+            for index, item in enumerate(args):
+                if item == "--label":
+                    key, value = args[index + 1].split("=", 1)
+                    labels[key] = value
+            self.volume_names.add(volume_name)
+            self.volume_labels[volume_name] = labels
+            return volume_name + "\n"
+
         if args[:3] == ["docker", "volume", "rm"]:
             self.volume_names.discard(args[3])
+            self.volume_labels.pop(args[3], None)
             return args[3]
 
         if args[:2] == ["docker", "compose"] and "down" in args:
@@ -226,6 +266,7 @@ class _FakeDockerRuntime:
 
         if args[:2] == ["docker", "compose"] and "create" in args:
             self.phase = "restored"
+            self.volume_names.add("demo_demo_data")
             return ""
 
         if args[:2] == ["docker", "compose"] and ("up" in args or "start" in args):
@@ -253,17 +294,31 @@ def _docker_jsonl_records(output: str) -> list[dict[str, object]]:
     return records
 
 
+def _mount_parts(value: str) -> dict[str, str]:
+    return dict(part.split("=", 1) for part in value.split(",") if "=" in part)
+
+
+def _inspect_row_uses_volume(row: dict[str, object], volume_name: str) -> bool:
+    mounts = row.get("Mounts")
+    if not isinstance(mounts, list):
+        return False
+    return any(
+        isinstance(mount, dict)
+        and mount.get("Type") == "volume"
+        and mount.get("Name") == volume_name
+        for mount in mounts
+    )
+
+
 def _write_restore_snapshot(
     stack: journey_docker.DockerComposeStack,
     *,
     snapshot_name: str = "after_boot",
 ) -> Path:
     snapshot_dir = Path(stack.cache_root) / stack.project_name / snapshot_name
-    backup_dir = snapshot_dir / "volumes" / "demo-demo-data"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    (backup_dir / "snapshot.txt").write_text("saved", encoding="utf-8")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "format": 1,
+        "format": 3,
         "project_name": stack.project_name,
         "compose_file": stack.compose_file,
         "resolved_compose_file": stack.resolved_compose_file,
@@ -280,7 +335,6 @@ def _write_restore_snapshot(
                 "image": "demo-web:latest",
                 "started_at": "2026-04-14T10:00:00Z",
                 "finished_at": "0001-01-01T00:00:00Z",
-                "snapshot_image": "journey-sdk-snapshot:demo-after-boot-web-1",
             }
         ],
         "volumes": [
@@ -290,7 +344,7 @@ def _write_restore_snapshot(
                 "container_index": 1,
                 "container_name": "demo-web-1",
                 "target_path": "/data",
-                "backup_relpath": "volumes/demo-demo-data",
+                "snapshot_volume_name": "demo_demo_data_snapshot",
                 "mode": "",
             }
         ],
@@ -626,19 +680,62 @@ def test_store_docker_creates_manifest_and_volume_backup(
     snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
 
+    volume_entry = manifest["volumes"][0]
     assert manifest["project_name"] == "demo"
     assert manifest["snapshot_name"] == "after_boot"
-    assert manifest["containers"][0]["snapshot_image"].startswith("journey-sdk-snapshot:")
-    assert manifest["volumes"][0]["volume_name"] == "demo_demo_data"
-    assert (snapshot_dir / manifest["volumes"][0]["backup_relpath"] / "snapshot.txt").exists()
-    assert any(
-        command[:3] == ["docker", "commit", "web-container-1"]
+    assert manifest["format"] == 3
+    assert "snapshot_image" not in manifest["containers"][0]
+    assert volume_entry["volume_name"] == "demo_demo_data"
+    assert volume_entry["snapshot_volume_name"].startswith("journey-snapshot-demo-")
+    assert volume_entry["snapshot_volume_name"] in runtime.volume_names
+    assert not any(
+        command[:2] == ["docker", "commit"]
         for _, command in runtime.commands
     )
     assert any(
-        command[:3] == ["docker", "cp", "-a"] and command[3].startswith("web-container-1:/data")
+        command[:3] == ["docker", "run", "--rm"]
+        and any(
+            "cp -a --reflink=auto --sparse=always /from/. /to/" in item
+            for item in command
+        )
         for _, command in runtime.commands
     )
+    assert ("demo_demo_data", volume_entry["snapshot_volume_name"]) in runtime.volume_copies
+    assert runtime.stopped_container_ids == ["web-container-1"]
+    assert runtime.started_container_ids == ["web-container-1"]
+    assert not any(
+        command[:2] == ["docker", "cp"]
+        for _, command in runtime.commands
+    )
+
+
+def test_store_docker_removes_replaced_snapshot_volumes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "format": 3,
+                "volumes": [{"snapshot_volume_name": "old_demo_snapshot"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = _FakeDockerRuntime()
+    runtime.volume_names.add("old_demo_snapshot")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+
+    assert any(
+        command == ["docker", "volume", "rm", "old_demo_snapshot"]
+        for _, command in runtime.commands
+    )
+    assert "old_demo_snapshot" not in runtime.volume_names
 
 
 def test_store_docker_logs_snapshot_phase_timings(
@@ -669,14 +766,7 @@ def test_store_docker_logs_snapshot_phase_timings(
         assert event in records_by_event
         assert isinstance(records_by_event[event]["duration_ms"], int | float)
 
-    commit_record = next(
-        record
-        for record in records
-        if record["event"] == "snapshot_store_container_commit_success"
-    )
-    assert commit_record["service"] == "web"
-    assert commit_record["container_id"] == "web-container-1"
-    assert isinstance(commit_record["duration_ms"], int | float)
+    assert "snapshot_store_container_commit_success" not in records_by_event
 
     volume_record = next(
         record
@@ -704,14 +794,12 @@ def test_store_docker_pretty_logs_identify_containers_and_volumes(
         configure_logging("info")
 
     output = capsys.readouterr().out
-    assert (
-        "committing Docker container snapshot: service=web container=demo-web-1 "
-        "id=web-container-1 snapshot_image=journey-sdk-snapshot:demo-after_boot-web-1"
-    ) in output
+    assert "committing Docker container snapshot" not in output
     assert (
         "copying Docker volume to snapshot: volume=demo_demo_data service=web "
-        "container=demo-web-1 id=web-container-1 from=/data to=volumes/"
+        "container=demo-web-1 from=demo_demo_data to=journey-snapshot-demo-"
     ) in output
+    assert ".tar" not in output
     assert "stored Docker Compose snapshot" in output
     assert "containers=1 volumes=1" in output
 
@@ -755,7 +843,7 @@ def test_store_docker_ignores_bind_mounts_and_snapshots_managed_volumes(
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert [volume["volume_name"] for volume in manifest["volumes"]] == ["demo_demo_data"]
     assert all(
-        command[:3] != ["docker", "cp", "-a"] or ":/app/config.json" not in command[3]
+        command[:2] != ["docker", "create"] or "/app/config.json" not in command
         for _, command in runtime.commands
     )
 
@@ -805,6 +893,47 @@ def test_store_docker_rejects_unsupported_snapshot_shapes(
     assert message in str(exc_info.value)
 
 
+def test_restarting_containers_are_treated_as_started_services(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime(
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="web-container-1",
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+                state="restarting",
+                mounts=[],
+            )
+        ],
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+    journey_docker.restore_docker(stack, snapshot_name="after_boot")
+
+    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["containers"][0]["state"] == "restarting"
+    assert manifest["volumes"] == []
+    assert any(
+        command == [
+            "docker",
+            "compose",
+            "-f",
+            stack.resolved_compose_file,
+            "-p",
+            stack.project_name,
+            "start",
+            "web",
+        ]
+        for _, command in runtime.commands
+    )
+
+
 def test_store_docker_rejects_multi_container_service(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -839,6 +968,52 @@ def test_store_docker_rejects_multi_container_service(
 
 
 def test_restore_docker_recreates_stack_and_restores_backups(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    _write_restore_snapshot(stack)
+
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.restore_docker(stack, snapshot_name="after_boot")
+
+    override_path = Path(stack.cache_root) / stack.project_name / "restore-after_boot.override.yml"
+    assert not override_path.exists()
+    assert ("demo_demo_data_snapshot", "demo_demo_data") in runtime.volume_copies
+    assert any(
+        command[:3] == ["docker", "run", "--rm"]
+        and any(
+            "cp -a --reflink=auto --sparse=always /from/. /to/" in item
+            for item in command
+        )
+        for _, command in runtime.commands
+    )
+    assert not any(
+        command[:2] == ["docker", "cp"]
+        for _, command in runtime.commands
+    )
+    assert any(
+        command == [
+            "docker",
+            "compose",
+            "-f",
+            stack.resolved_compose_file,
+            "-p",
+            stack.project_name,
+            "start",
+            "web",
+        ]
+        for _, command in runtime.commands
+    )
+    assert not any(
+        str(override_path) in command
+        for _, command in runtime.commands
+    )
+
+
+def test_restore_docker_rejects_legacy_manifest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -888,27 +1063,10 @@ def test_restore_docker_recreates_stack_and_restores_backups(
     runtime = _FakeDockerRuntime()
     monkeypatch.setattr(journey_docker, "_run_cli", runtime)
 
-    journey_docker.restore_docker(stack, snapshot_name="after_boot")
+    with pytest.raises(RuntimeError) as exc_info:
+        journey_docker.restore_docker(stack, snapshot_name="after_boot")
 
-    override_path = Path(stack.cache_root) / stack.project_name / "restore-after_boot.override.yml"
-    assert override_path.exists()
-    assert "journey-sdk-snapshot:demo-after-boot-web-1" in override_path.read_text(
-        encoding="utf-8"
-    )
-    assert runtime.restored_copies == [
-        (str(backup_dir) + "/.", "web-container-2:/data"),
-    ]
-    assert any(
-        command[:6] == [
-            "docker",
-            "compose",
-            "-f",
-            stack.resolved_compose_file,
-            "-f",
-            str(override_path),
-        ] and "start" in command
-        for _, command in runtime.commands
-    )
+    assert "only restores format 3 volume-clone snapshots" in str(exc_info.value)
 
 
 def test_restore_docker_logs_snapshot_phase_timings(
@@ -931,7 +1089,6 @@ def test_restore_docker_logs_snapshot_phase_timings(
     records_by_event = {record["event"]: record for record in records}
     for event in [
         "snapshot_restore_manifest_load_success",
-        "snapshot_restore_override_write_success",
         "snapshot_restore_compose_down_success",
         "snapshot_restore_volume_remove_success",
         "snapshot_restore_compose_create_success",
@@ -943,6 +1100,7 @@ def test_restore_docker_logs_snapshot_phase_timings(
         assert event in records_by_event
         assert isinstance(records_by_event[event]["duration_ms"], int | float)
 
+    assert "snapshot_restore_override_write_success" not in records_by_event
     assert records_by_event["snapshot_restore_volume_remove_success"]["removed"] is True
     assert records_by_event["snapshot_restore_start_services_success"]["services"] == ["web"]
     assert records_by_event["snapshot_restore_volume_restore_success"]["volume"] == (
@@ -977,7 +1135,8 @@ def test_restore_docker_pretty_logs_identify_volumes_and_services(
     )
     assert (
         "restoring Docker volume contents: volume=demo_demo_data service=web "
-        "container=demo-web-1 id=web-container-2 from=volumes/demo-demo-data to=/data"
+        "container=demo-web-1 id=web-container-2 from=demo_demo_data_snapshot "
+        "to=demo_demo_data target=/data"
     ) in output
     assert "starting restored Docker Compose services: services=web count=1" in output
 
@@ -1043,14 +1202,14 @@ def test_execute_step_started_branches_restore_docker_snapshot(
                 container_id="app-container-2",
                 name="demo-app-1",
                 service="app",
-                image="journey-sdk-snapshot:demo-cp-1-app-1",
+                image="demo-app:latest",
                 mounts=[],
             ),
             _inspect_row(
                 container_id="db-container-2",
                 name="demo-db-1",
                 service="db",
-                image="journey-sdk-snapshot:demo-cp-1-db-1",
+                image="postgres:16-alpine",
                 volume_name="demo_db_data",
                 destination="/var/lib/postgresql/data",
             ),
@@ -1171,7 +1330,14 @@ def test_execute_step_started_branches_restore_docker_snapshot(
     assert sum(
         1
         for owner, command in runtime.commands
-        if owner == "store_docker" and "commit" in command
+        if owner == "store_docker" and command[:2] == ["docker", "commit"]
+    ) == 0
+    assert sum(
+        1
+        for owner, command in runtime.commands
+        if owner == "store_docker"
+        and command[:3] == ["docker", "run", "--rm"]
+        and any("cp -a --reflink=auto --sparse=always" in item for item in command)
     ) >= 2
     assert sum(
         1

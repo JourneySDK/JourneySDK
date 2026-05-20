@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -20,8 +21,11 @@ from journeysdk.logger import PrettyLine, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
-_SUPPORTED_CONTAINER_STATES = {"running", "created", "exited"}
-_UNSUPPORTED_CONTAINER_STATES = {"paused", "restarting", "removing", "dead"}
+_CURRENT_SNAPSHOT_FORMAT = 3
+_VOLUME_COPY_IMAGE = "debian:bookworm-slim"
+_SUPPORTED_CONTAINER_STATES = {"running", "restarting", "created", "exited"}
+_STARTED_CONTAINER_STATES = {"running", "restarting"}
+_UNSUPPORTED_CONTAINER_STATES = {"paused", "removing", "dead"}
 _LOGGER = get_logger("docker")
 
 
@@ -363,8 +367,12 @@ def _store_docker_snapshot(
         replacing=snapshot_dir.exists(),
     )
     if snapshot_dir.exists():
+        _remove_snapshot_volumes_from_manifest(
+            owner="store_docker",
+            manifest_path=snapshot_dir / "manifest.json",
+        )
         shutil.rmtree(snapshot_dir)
-    (snapshot_dir / "volumes").mkdir(parents=True, exist_ok=True)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
     _log_snapshot_phase_success(
         prefix="snapshot_store",
         phase="prepare_snapshot_dir",
@@ -459,51 +467,6 @@ def _store_docker_snapshot(
             live_container=live_container,
             owner="store_docker",
         )
-        snapshot_image = _snapshot_image_ref(
-            project_name=validated_stack.project_name,
-            snapshot_name=normalized_snapshot_name,
-            service=live_container.status.service,
-            container_index=live_container.container_index,
-        )
-        commit_detail = _pretty_kv(
-            [
-                ("service", live_container.status.service),
-                ("container", live_container.status.container_name),
-                ("id", live_container.status.container_id),
-                ("snapshot_image", snapshot_image),
-            ]
-        )
-        commit_started_at = _log_snapshot_phase_start(
-            prefix="snapshot_store",
-            phase="container_commit",
-            message="committing Docker container snapshot",
-            project_name=validated_stack.project_name,
-            snapshot_name=normalized_snapshot_name,
-            pretty_detail=commit_detail,
-            service=live_container.status.service,
-            container=live_container.status.container_name,
-            container_id=live_container.status.container_id,
-            container_index=live_container.container_index,
-            snapshot_image=snapshot_image,
-        )
-        _run_cli(
-            ["docker", "commit", live_container.status.container_id, snapshot_image],
-            owner="store_docker",
-        )
-        _log_snapshot_phase_success(
-            prefix="snapshot_store",
-            phase="container_commit",
-            started_at=commit_started_at,
-            message="committed Docker container snapshot",
-            project_name=validated_stack.project_name,
-            snapshot_name=normalized_snapshot_name,
-            pretty_detail=commit_detail,
-            service=live_container.status.service,
-            container=live_container.status.container_name,
-            container_id=live_container.status.container_id,
-            container_index=live_container.container_index,
-            snapshot_image=snapshot_image,
-        )
         container_entries.append(
             {
                 "service": live_container.status.service,
@@ -516,12 +479,10 @@ def _store_docker_snapshot(
                 "image": live_container.status.image,
                 "started_at": live_container.status.started_at,
                 "finished_at": live_container.status.finished_at,
-                "snapshot_image": snapshot_image,
             }
         )
         for mount in live_container.mounts:
             volume_entry = _build_volume_entry(
-                stack=validated_stack,
                 live_container=live_container,
                 mount=mount,
                 external_volume_names=external_volume_names,
@@ -531,16 +492,36 @@ def _store_docker_snapshot(
             existing = volume_entries_by_name.get(volume_entry["volume_name"])
             if existing is not None:
                 continue
-            backup_dir = snapshot_dir / volume_entry["backup_relpath"]
-            backup_dir.mkdir(parents=True, exist_ok=True)
+            volume_entry["snapshot_volume_name"] = _snapshot_volume_name(
+                project_name=validated_stack.project_name,
+                snapshot_name=normalized_snapshot_name,
+                source_volume_name=volume_entry["volume_name"],
+                target_path=volume_entry["target_path"],
+                snapshot_dir=snapshot_dir,
+            )
+            volume_entries_by_name[volume_entry["volume_name"]] = volume_entry
+
+    volume_entries = list(volume_entries_by_name.values())
+    stopped_container_ids: list[str] = []
+    try:
+        if volume_entries:
+            source_volume_names = [entry["volume_name"] for entry in volume_entries]
+            stopped_container_ids = _containers_using_volumes(
+                owner="store_docker",
+                volume_names=source_volume_names,
+            )
+            _stop_containers(
+                owner="store_docker",
+                container_ids=stopped_container_ids,
+            )
+        for volume_entry in volume_entries:
             backup_detail = _pretty_kv(
                 [
                     ("volume", volume_entry["volume_name"]),
                     ("service", volume_entry["service"]),
                     ("container", volume_entry["container_name"]),
-                    ("id", live_container.status.container_id),
-                    ("from", volume_entry["target_path"]),
-                    ("to", volume_entry["backup_relpath"]),
+                    ("from", volume_entry["volume_name"]),
+                    ("to", volume_entry["snapshot_volume_name"]),
                 ]
             )
             backup_started_at = _log_snapshot_phase_start(
@@ -552,16 +533,20 @@ def _store_docker_snapshot(
                 pretty_detail=backup_detail,
                 service=volume_entry["service"],
                 container=volume_entry["container_name"],
-                container_id=live_container.status.container_id,
                 volume=volume_entry["volume_name"],
+                snapshot_volume=volume_entry["snapshot_volume_name"],
                 target_path=volume_entry["target_path"],
-                backup_relpath=volume_entry["backup_relpath"],
             )
-            _copy_container_path_to_local(
+            _replace_volume_clone(
                 owner="store_docker",
-                container_id=live_container.status.container_id,
-                container_path=volume_entry["target_path"],
-                local_path=backup_dir,
+                source_volume_name=volume_entry["volume_name"],
+                destination_volume_name=volume_entry["snapshot_volume_name"],
+                labels={
+                    "journeysdk.snapshot": "true",
+                    "journeysdk.project": validated_stack.project_name,
+                    "journeysdk.snapshot_name": normalized_snapshot_name,
+                    "journeysdk.source_volume": volume_entry["volume_name"],
+                },
             )
             _log_snapshot_phase_success(
                 prefix="snapshot_store",
@@ -573,21 +558,24 @@ def _store_docker_snapshot(
                 pretty_detail=backup_detail,
                 service=volume_entry["service"],
                 container=volume_entry["container_name"],
-                container_id=live_container.status.container_id,
                 volume=volume_entry["volume_name"],
+                snapshot_volume=volume_entry["snapshot_volume_name"],
                 target_path=volume_entry["target_path"],
-                backup_relpath=volume_entry["backup_relpath"],
             )
-            volume_entries_by_name[volume_entry["volume_name"]] = volume_entry
+    finally:
+        _start_containers(
+            owner="store_docker",
+            container_ids=stopped_container_ids,
+        )
 
     manifest = {
-        "format": 1,
+        "format": _CURRENT_SNAPSHOT_FORMAT,
         "project_name": validated_stack.project_name,
         "compose_file": validated_stack.compose_file,
         "resolved_compose_file": validated_stack.resolved_compose_file,
         "snapshot_name": normalized_snapshot_name,
         "containers": container_entries,
-        "volumes": list(volume_entries_by_name.values()),
+        "volumes": volume_entries,
     }
     manifest_path = snapshot_dir / "manifest.json"
     manifest_detail = _pretty_kv(
@@ -723,6 +711,7 @@ def _restore_docker_snapshot(
         stack=validated_stack,
         snapshot_name=normalized_snapshot_name,
     )
+    _manifest_format(manifest)
     container_entries = _manifest_container_entries(manifest)
     volume_entries = _manifest_volume_entries(manifest)
 
@@ -750,37 +739,12 @@ def _restore_docker_snapshot(
         volumes=len(volume_entries),
     )
 
-    override_detail = _pretty_kv([("containers", len(container_entries))])
-    override_started_at = _log_snapshot_phase_start(
-        prefix="snapshot_restore",
-        phase="override_write",
-        message="writing Docker restore override",
-        project_name=validated_stack.project_name,
-        snapshot_name=normalized_snapshot_name,
-        pretty_detail=override_detail,
-        containers=len(container_entries),
-    )
-    override_path = _write_restore_override(
-        stack=validated_stack,
-        snapshot_name=normalized_snapshot_name,
-        container_entries=container_entries,
-    )
-    _log_snapshot_phase_success(
-        prefix="snapshot_restore",
-        phase="override_write",
-        started_at=override_started_at,
-        message="wrote Docker restore override",
-        project_name=validated_stack.project_name,
-        snapshot_name=normalized_snapshot_name,
-        pretty_detail=_pretty_kv(
-            [
-                ("path", override_path),
-                ("containers", len(container_entries)),
-            ]
-        ),
-        override_path=override_path,
-        containers=len(container_entries),
-    )
+    compose_files = [Path(validated_stack.resolved_compose_file)]
+    for volume_entry in volume_entries:
+        _require_volume_exists(
+            owner="restore_docker",
+            volume_name=_manifest_volume_snapshot_name(volume_entry),
+        )
 
     compose_down_detail = _pretty_kv([("project", validated_stack.project_name)])
     down_started_at = _log_snapshot_phase_start(
@@ -865,10 +829,7 @@ def _restore_docker_snapshot(
     )
     _run_cli(
         _compose_multi_file_command(
-            compose_files=[
-                Path(validated_stack.resolved_compose_file),
-                override_path,
-            ],
+            compose_files=compose_files,
             project_name=validated_stack.project_name,
             subcommand=["create", "--force-recreate"],
         ),
@@ -891,13 +852,13 @@ def _restore_docker_snapshot(
         message="loading recreated Docker container metadata",
         project_name=validated_stack.project_name,
         snapshot_name=normalized_snapshot_name,
-        pretty_detail=_pretty_kv([("override", override_path)]),
+        pretty_detail=_pretty_kv([("compose_files", len(compose_files))]),
     )
     recreated_containers = _load_live_containers(
         validated_stack,
         owner="restore_docker",
         include_all=True,
-        extra_compose_files=(override_path,),
+        extra_compose_files=tuple(compose_files[1:]),
     )
     _log_snapshot_phase_success(
         prefix="snapshot_restore",
@@ -922,20 +883,21 @@ def _restore_docker_snapshot(
                 "restore_docker(...) could not find the recreated container for "
                 f"service '{volume_entry['service']}' index {volume_entry['container_index']}."
             )
-        backup_dir = snapshot_dir / volume_entry["backup_relpath"]
-        if not backup_dir.exists():
-            raise FileNotFoundError(
-                "restore_docker(...) could not find the backed-up volume contents at "
-                f"'{backup_dir}'."
-            )
+        snapshot_volume_name = _manifest_volume_snapshot_name(volume_entry)
+        destination_volume_name = _container_volume_name_for_target(
+            live_container=live_container,
+            target_path=volume_entry["target_path"],
+            owner="restore_docker",
+        )
         restore_detail = _pretty_kv(
             [
                 ("volume", volume_entry["volume_name"]),
                 ("service", volume_entry["service"]),
                 ("container", live_container.status.container_name),
                 ("id", live_container.status.container_id),
-                ("from", volume_entry["backup_relpath"]),
-                ("to", volume_entry["target_path"]),
+                ("from", snapshot_volume_name),
+                ("to", destination_volume_name),
+                ("target", volume_entry["target_path"]),
             ]
         )
         restore_volume_started_at = _log_snapshot_phase_start(
@@ -949,14 +911,14 @@ def _restore_docker_snapshot(
             container=live_container.status.container_name,
             container_id=live_container.status.container_id,
             volume=volume_entry["volume_name"],
+            snapshot_volume=snapshot_volume_name,
+            destination_volume=destination_volume_name,
             target_path=volume_entry["target_path"],
-            backup_relpath=volume_entry["backup_relpath"],
         )
-        _copy_local_path_to_container(
+        _copy_volume_contents(
             owner="restore_docker",
-            local_path=backup_dir,
-            container_id=live_container.status.container_id,
-            container_path=volume_entry["target_path"],
+            source_volume_name=snapshot_volume_name,
+            destination_volume_name=destination_volume_name,
         )
         _log_snapshot_phase_success(
             prefix="snapshot_restore",
@@ -970,15 +932,16 @@ def _restore_docker_snapshot(
             container=live_container.status.container_name,
             container_id=live_container.status.container_id,
             volume=volume_entry["volume_name"],
+            snapshot_volume=snapshot_volume_name,
+            destination_volume=destination_volume_name,
             target_path=volume_entry["target_path"],
-            backup_relpath=volume_entry["backup_relpath"],
         )
 
     running_services = sorted(
         {
             container_entry["service"]
             for container_entry in container_entries
-            if container_entry["state"] == "running"
+            if container_entry["state"] in _STARTED_CONTAINER_STATES
         }
     )
     if running_services:
@@ -1000,10 +963,7 @@ def _restore_docker_snapshot(
         )
         _run_cli(
             _compose_multi_file_command(
-                compose_files=[
-                    Path(validated_stack.resolved_compose_file),
-                    override_path,
-                ],
+                compose_files=compose_files,
                 project_name=validated_stack.project_name,
                 subcommand=["start", *running_services],
             ),
@@ -1545,7 +1505,6 @@ def _external_volume_names(compose_config: Mapping[str, Any]) -> set[str]:
 
 def _build_volume_entry(
     *,
-    stack: DockerComposeStack,
     live_container: _LiveContainer,
     mount: Mapping[str, Any],
     external_volume_names: set[str],
@@ -1582,56 +1541,201 @@ def _build_volume_entry(
             "store_docker(...) cannot guarantee exact restore for read-only volume mount "
             f"'{volume_name}' on container '{live_container.status.container_name}'."
         )
-    volume_dir_name = (
-        f"volumes/{_slugify(volume_name)}-{abs(hash((stack.project_name, volume_name, destination))) % 10_000_000}"
-    )
     return {
         "volume_name": volume_name,
         "service": live_container.status.service,
         "container_index": live_container.container_index,
         "container_name": live_container.status.container_name,
         "target_path": destination,
-        "backup_relpath": volume_dir_name,
         "mode": _optional_string(mount.get("Mode")),
     }
 
 
-def _copy_container_path_to_local(
+def _snapshot_volume_name(
+    *,
+    project_name: str,
+    snapshot_name: str,
+    source_volume_name: str,
+    target_path: str,
+    snapshot_dir: Path,
+) -> str:
+    digest = hashlib.sha256(
+        "|".join(
+            [
+                str(snapshot_dir),
+                project_name,
+                snapshot_name,
+                source_volume_name,
+                target_path,
+            ]
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return "-".join(
+        [
+            "journey-snapshot",
+            _slugify(project_name)[:32],
+            _slugify(snapshot_name)[:32],
+            _slugify(source_volume_name)[:48],
+            digest,
+        ]
+    )
+
+
+def _replace_volume_clone(
     *,
     owner: str,
-    container_id: str,
-    container_path: str,
-    local_path: Path,
+    source_volume_name: str,
+    destination_volume_name: str,
+    labels: Mapping[str, str],
 ) -> None:
-    local_path.mkdir(parents=True, exist_ok=True)
+    _remove_volume_if_exists(owner=owner, volume_name=destination_volume_name)
+    _create_volume(owner=owner, volume_name=destination_volume_name, labels=labels)
+    _copy_volume_contents(
+        owner=owner,
+        source_volume_name=source_volume_name,
+        destination_volume_name=destination_volume_name,
+    )
+
+
+def _create_volume(
+    *,
+    owner: str,
+    volume_name: str,
+    labels: Mapping[str, str],
+) -> None:
+    command = ["docker", "volume", "create"]
+    for key, value in sorted(labels.items()):
+        command.extend(["--label", f"{key}={value}"])
+    command.append(volume_name)
+    _run_cli(command, owner=owner)
+
+
+def _copy_volume_contents(
+    *,
+    owner: str,
+    source_volume_name: str,
+    destination_volume_name: str,
+) -> None:
     _run_cli(
         [
             "docker",
-            "cp",
-            "-a",
-            f"{container_id}:{_cp_source_path(container_path)}",
-            str(local_path),
+            "run",
+            "--rm",
+            "--mount",
+            f"type=volume,source={source_volume_name},target=/from,readonly",
+            "--mount",
+            f"type=volume,source={destination_volume_name},target=/to",
+            _VOLUME_COPY_IMAGE,
+            "sh",
+            "-ec",
+            (
+                "cp -a --reflink=auto --sparse=always /from/. /to/\n"
+                "chown --reference=/from /to\n"
+                "chmod --reference=/from /to"
+            ),
         ],
         owner=owner,
     )
 
 
-def _copy_local_path_to_container(
+def _containers_using_volumes(
     *,
     owner: str,
-    local_path: Path,
-    container_id: str,
-    container_path: str,
+    volume_names: Sequence[str],
+) -> list[str]:
+    container_ids: list[str] = []
+    for volume_name in volume_names:
+        output = _run_cli(
+            ["docker", "ps", "-q", "--filter", f"volume={volume_name}"],
+            owner=owner,
+        )
+        container_ids.extend(line.strip() for line in output.splitlines() if line.strip())
+    return _unique_strings(container_ids)
+
+
+def _stop_containers(
+    *,
+    owner: str,
+    container_ids: Sequence[str],
 ) -> None:
-    _run_cli(
-        [
-            "docker",
-            "cp",
-            "-a",
-            _local_cp_source_path(local_path),
-            f"{container_id}:{container_path}",
-        ],
+    if container_ids:
+        _run_cli(["docker", "stop", *container_ids], owner=owner)
+
+
+def _start_containers(
+    *,
+    owner: str,
+    container_ids: Sequence[str],
+) -> None:
+    if container_ids:
+        _run_cli(["docker", "start", *container_ids], owner=owner)
+
+
+def _unique_strings(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _remove_snapshot_volumes_from_manifest(
+    *,
+    owner: str,
+    manifest_path: Path,
+) -> None:
+    if not manifest_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(manifest, Mapping):
+        return
+    for volume_name in _snapshot_volume_names_from_manifest(manifest):
+        _remove_volume_if_exists(owner=owner, volume_name=volume_name)
+
+
+def _snapshot_volume_names_from_manifest(manifest: Mapping[str, Any]) -> list[str]:
+    volume_entries = manifest.get("volumes")
+    if not isinstance(volume_entries, list):
+        return []
+    return _unique_strings(
+        volume_name
+        for volume_entry in volume_entries
+        if isinstance(volume_entry, Mapping)
+        and isinstance((volume_name := volume_entry.get("snapshot_volume_name")), str)
+        and volume_name
+    )
+
+
+def _container_volume_name_for_target(
+    *,
+    live_container: _LiveContainer,
+    target_path: object,
+    owner: str,
+) -> str:
+    target = _require_string(
         owner=owner,
+        label=f"volume target path for '{live_container.status.container_name}'",
+        value=target_path,
+    )
+    for mount in live_container.mounts:
+        if mount.get("Type") == "volume" and mount.get("Destination") == target:
+            return _require_string(
+                owner=owner,
+                label=(
+                    "Docker volume name for "
+                    f"'{live_container.status.container_name}' mounted at '{target}'"
+                ),
+                value=mount.get("Name"),
+            )
+    raise RuntimeError(
+        f"{owner}(...) could not find a Docker volume mounted at '{target}' "
+        f"for container '{live_container.status.container_name}'."
     )
 
 
@@ -1669,6 +1773,17 @@ def _validate_manifest_matches_stack(
         )
 
 
+def _manifest_format(manifest: Mapping[str, Any]) -> int:
+    value = manifest.get("format")
+    if value != _CURRENT_SNAPSHOT_FORMAT:
+        raise RuntimeError(
+            "restore_docker(...) received an unsupported Docker snapshot manifest "
+            f"format {value!r}. This version only restores format "
+            f"{_CURRENT_SNAPSHOT_FORMAT} volume-clone snapshots; regenerate the snapshot."
+        )
+    return value
+
+
 def _manifest_container_entries(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     entries = manifest.get("containers")
     if not isinstance(entries, list) or not all(isinstance(item, Mapping) for item in entries):
@@ -1685,6 +1800,15 @@ def _manifest_volume_entries(manifest: Mapping[str, Any]) -> list[dict[str, Any]
             "restore_docker(...) received invalid volume metadata in the snapshot manifest."
         )
     return [dict(item) for item in entries]
+
+
+def _manifest_volume_snapshot_name(entry: Mapping[str, Any]) -> str:
+    value = entry.get("snapshot_volume_name")
+    return _require_string(
+        owner="restore_docker",
+        label="volume snapshot_volume_name",
+        value=value,
+    )
 
 
 def _require_single_container_manifest(
@@ -1705,60 +1829,33 @@ def _require_single_container_manifest(
         )
 
 
-def _write_restore_override(
-    *,
-    stack: DockerComposeStack,
-    snapshot_name: str,
-    container_entries: Sequence[Mapping[str, Any]],
-) -> Path:
-    project_cache_dir = _project_cache_dir(
-        cache_root=Path(stack.cache_root),
-        project_name=stack.project_name,
-    )
-    project_cache_dir.mkdir(parents=True, exist_ok=True)
-    override_path = project_cache_dir / f"restore-{_slugify(snapshot_name)}.override.yml"
-    lines = ["services:"]
-    for entry in sorted(
-        container_entries,
-        key=lambda item: _require_string(
-            owner="restore_docker",
-            label="service name",
-            value=item.get("service"),
-        ),
-    ):
-        service = _require_string(
-            owner="restore_docker",
-            label="service name",
-            value=entry.get("service"),
-        )
-        image = _require_string(
-            owner="restore_docker",
-            label=f"snapshot image for '{service}'",
-            value=entry.get("snapshot_image"),
-        )
-        lines.append(f"  {service}:")
-        lines.append(f"    image: {_yaml_quote(image)}")
-        lines.append("    pull_policy: never")
-    override_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return override_path
-
-
 def _remove_volume_if_exists(*, owner: str, volume_name: str) -> bool:
-    output = _run_cli(
-        ["docker", "volume", "ls", "--format", "json"],
-        owner=owner,
-    )
-    volume_rows = _parse_json_lines(owner=owner, payload=output, label="volume ls")
-    if not any(
-        isinstance(row, Mapping) and row.get("Name") == volume_name
-        for row in volume_rows
-    ):
+    if not _volume_exists(owner=owner, volume_name=volume_name):
         return False
     _run_cli(
         ["docker", "volume", "rm", volume_name],
         owner=owner,
     )
     return True
+
+
+def _require_volume_exists(*, owner: str, volume_name: str) -> None:
+    if not _volume_exists(owner=owner, volume_name=volume_name):
+        raise FileNotFoundError(
+            f"{owner}(...) could not find Docker snapshot volume '{volume_name}'."
+        )
+
+
+def _volume_exists(*, owner: str, volume_name: str) -> bool:
+    output = _run_cli(
+        ["docker", "volume", "ls", "--format", "json"],
+        owner=owner,
+    )
+    volume_rows = _parse_json_lines(owner=owner, payload=output, label="volume ls")
+    return any(
+        isinstance(row, Mapping) and row.get("Name") == volume_name
+        for row in volume_rows
+    )
 
 
 def _parse_compose_ps_json(*, owner: str, payload: str) -> list[dict[str, Any]]:
@@ -1954,41 +2051,6 @@ def _optional_string(value: object) -> str | None:
 
 def _display_command(args: Sequence[str]) -> str:
     return " ".join(str(item) for item in args)
-
-
-def _yaml_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def _snapshot_image_ref(
-    *,
-    project_name: str,
-    snapshot_name: str,
-    service: str,
-    container_index: int,
-) -> str:
-    tag = "-".join(
-        [
-            _slugify(project_name),
-            _slugify(snapshot_name),
-            _slugify(service),
-            str(container_index),
-        ]
-    )
-    return f"journey-sdk-snapshot:{tag}"
-
-
-def _cp_source_path(container_path: str) -> str:
-    if container_path.endswith("/"):
-        return f"{container_path}."
-    return f"{container_path}/."
-
-
-def _local_cp_source_path(local_path: Path) -> str:
-    path_text = str(local_path)
-    if path_text.endswith("/"):
-        return f"{path_text}."
-    return f"{path_text}/."
 
 
 def _set_step_metadata(

@@ -196,10 +196,12 @@ That targeted run reports `replay_anchor=capture_baseline_state`, so you can foc
 changing the branch behavior. The targeted run reports the replay anchor as metadata; it does not skip directly to the
 anchor unless existing state or retry behavior causes replay.
 
-Docker snapshotting is strict about the state it owns. It rolls back container
-filesystems plus Docker-managed volume contents. Bind mounts are allowed as
-external host state and are not copied or restored; external volumes, read-only
-volume mounts, unsupported mount types, and multi-container services are rejected.
+Docker snapshotting is strict about the state it owns. It rolls back
+Docker-managed volume contents only, so services should keep durable,
+replay-relevant state in managed volumes and tolerate container restarts. Bind
+mounts are allowed as external host state and are not copied or restored;
+external volumes, read-only volume mounts, unsupported mount types, and
+multi-container services are rejected.
 
 ## Capture and Resume a Browser Session
 

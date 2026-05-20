@@ -360,8 +360,8 @@ message = step(
 )
 ```
 
-The Docker touchpoint can start a local Compose app as a step value and pair a step anchor with exact rollback of container
-filesystems plus Docker-managed volume contents. `DockerComposeStack` already implements the rehydration protocol:
+The Docker touchpoint can start a local Compose app as a step value and pair a step anchor with rollback of
+Docker-managed volume contents. `DockerComposeStack` already implements the rehydration protocol:
 
 ```python
 from journeysdk import branch, step
@@ -375,9 +375,10 @@ elif branch(start_from=baseline):
     step(assert_compose_logs, stack)
 ```
 
-Current Docker snapshots restore container filesystems plus Docker-managed volume contents. Bind mounts are allowed but
-treated as external host state and are not copied or restored; external volumes, read-only volume mounts, unsupported
-mount types, and multi-container services are rejected so managed Docker state can stay predictable.
+Current Docker snapshots restore Docker-managed volume contents only. Services should keep durable, replay-relevant
+state in managed volumes so restarted containers can behave correctly after restore. Bind mounts are allowed but treated
+as external host state and are not copied or restored; external volumes, read-only volume mounts, unsupported mount
+types, and multi-container services are rejected so managed Docker state can stay predictable.
 
 ```python
 from journeysdk import step
