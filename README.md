@@ -415,6 +415,12 @@ def assert_dashboard(session: JourneyBrowserPage) -> JourneyBrowserPage:
 `JourneyBrowserPage` extends Playwright's sync `Page`, so ordinary Playwright page methods and locators work on the
 returned object. See the [Playwright Page API](https://playwright.dev/python/docs/api/class-page) for reference.
 
+Browser runs are recorded by default for debugging. Each `open_page()` browser context writes a Playwright trace zip,
+video, and manifest under `.journey/recordings/` with flat sequence-prefixed filenames such as
+`0001-case_1-login-attempt-1-context-1-run-<run-id>.trace.zip`. Open a trace with `playwright show-trace ...` to inspect
+the timeline and DOM snapshots. Use `--no-browser-recording` or `execute(..., no_browser_recording=True)` when traces
+and videos should not be written because page content may be sensitive.
+
 The same live page can also run a bounded LLM action loop. By default, `page.prompt(...)` returns a plain string.
 Pass `output=...` when you want LangChain structured output as a dictionary:
 

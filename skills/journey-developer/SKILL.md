@@ -119,6 +119,10 @@ Use `--no-memory-update` when the run should read existing prompt memory but ski
 uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py --no-memory-update
 ```
 
+Browser recording is enabled by default for `open_page(...)`. Journey stores one flat trace/video/manifest artifact set
+per browser context under `.journey/recordings/`, with sequence-prefixed names that include case, step, attempt,
+context, and run id. Use `--no-browser-recording` for runs that should avoid browser trace and video artifacts.
+
 ## Develop One Step
 
 Use `--develop-step LABEL` for agent-friendly edit-run loops. Noninteractive

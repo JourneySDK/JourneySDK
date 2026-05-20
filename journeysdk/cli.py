@@ -1039,6 +1039,7 @@ def _execute_all_targets(
     stream_live: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
+    no_browser_recording: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     executed: list[_ExecutedJourney] = []
     errors: list[_CommandError] = []
@@ -1071,6 +1072,7 @@ def _execute_all_targets(
                 no_state_update=no_state_update,
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
+                no_browser_recording=no_browser_recording,
                 prompt_memory_root=item.file_path.parent,
             )
         except Exception as exc:
@@ -1127,6 +1129,7 @@ def _execute_target_step(
     stream_live: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
+    no_browser_recording: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     selected, errors = _select_targeted_journey(compiled, step=step)
     if selected is None:
@@ -1161,6 +1164,7 @@ def _execute_target_step(
             no_state_update=no_state_update,
             no_memory=no_memory,
             no_memory_update=no_memory_update,
+            no_browser_recording=no_browser_recording,
             prompt_memory_root=selected.file_path.parent,
         )
     except Exception as exc:
@@ -1257,6 +1261,7 @@ def _execute_target_pause(
     interactive: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
+    no_browser_recording: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     selected, errors = _select_targeted_journey(compiled, step=develop_step)
     if selected is None:
@@ -1318,6 +1323,7 @@ def _execute_target_pause(
                 no_state_update=False,
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
+                no_browser_recording=no_browser_recording,
                 prompt_memory_root=selected.file_path.parent,
             )
             if isinstance(outcome, _PausedExecution):
@@ -1367,6 +1373,7 @@ def _execute_target_pause(
                 no_state_update=False,
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
+                no_browser_recording=no_browser_recording,
                 prompt_memory_root=selected.file_path.parent,
             )
             if isinstance(outcome, _PausedExecution):
@@ -1696,6 +1703,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     stream_live=True,
                     no_memory=args.no_memory,
                     no_memory_update=args.no_memory_update,
+                    no_browser_recording=args.no_browser_recording,
                 )
                 executed.extend(run_results)
             else:
@@ -1710,6 +1718,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         interactive=args.interactive,
                         no_memory=args.no_memory,
                         no_memory_update=args.no_memory_update,
+                        no_browser_recording=args.no_browser_recording,
                     )
                 else:
                     run_results, run_errors = _execute_target_step(
@@ -1721,6 +1730,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         stream_live=True,
                         no_memory=args.no_memory,
                         no_memory_update=args.no_memory_update,
+                        no_browser_recording=args.no_browser_recording,
                     )
                 executed.extend(run_results)
     except KeyboardInterrupt:
@@ -1781,6 +1791,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-memory-update",
         action="store_true",
         help="Disable prompt-memory writes while still allowing reads for this run",
+    )
+    parser.add_argument(
+        "--no-browser-recording",
+        action="store_true",
+        help="Disable browser trace and video artifacts for this run",
     )
     parser.add_argument(
         "--output",

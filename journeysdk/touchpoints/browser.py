@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 import inspect
+import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 from types import TracebackType
-from typing import Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_row
 from journeysdk._prompt_memory import PROMPT_MEMORY_AUTO, PromptMemorySpec
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
-from journeysdk.session import _register_step_exit_object, _require_executing_step
+from journeysdk.session import (
+    _allocate_browser_recording,
+    _register_step_exit_object,
+    _require_executing_step,
+)
 from journeysdk.executor import (
     _is_step_forced_interrupt_requested,
     _register_forced_step_interrupt_callback,
@@ -71,6 +79,273 @@ _LOGGER = get_logger("browser")
 
 def _browser_row(detail: object, *, style: PrettyStyle = "touchpoint") -> PrettyLine:
     return pretty_row("Browser", detail, indent=8, label_width=27, style=style)
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+@dataclass
+class _BrowserRecording:
+    metadata: Any
+    browser: str
+    headless: bool
+    initial_url: str
+    trace_path: Path
+    video_path: Path
+    manifest_path: Path
+    video_temp_dir: Path
+    started_at: str = field(default_factory=_utc_timestamp)
+    stopped_at: str | None = None
+    final_url: str | None = None
+    status: str = "running"
+    trace_started: bool = False
+    trace_saved: bool = False
+    video_saved: bool = False
+    errors: list[str] = field(default_factory=list)
+    _video: object | None = None
+
+    @property
+    def sequence(self) -> int:
+        return cast(int, getattr(self.metadata, "sequence"))
+
+    @property
+    def key(self) -> str:
+        return cast(str, getattr(self.metadata, "key"))
+
+    def start_trace(self, context: object) -> None:
+        try:
+            tracing = getattr(context, "tracing")
+            start = getattr(tracing, "start")
+            start(
+                title=self._trace_title(),
+                screenshots=True,
+                snapshots=True,
+                sources=True,
+            )
+            self.trace_started = True
+            self.write_manifest()
+            _LOGGER.info(
+                "recording_start",
+                "browser recording started",
+                pretty=_browser_row(f"recording {self.key}"),
+                **self._log_fields(),
+            )
+        except BaseException as exc:
+            self._record_failure("trace_start", exc)
+            self.write_manifest()
+            self._log_failure(
+                "recording_start_failure",
+                "browser recording failed to start",
+                exc,
+            )
+
+    def capture_video(self, page: PlaywrightPage) -> None:
+        try:
+            self._video = getattr(page, "_journey_test_video", None)
+            if self._video is None:
+                self._video = getattr(page, "video", None)
+        except BaseException as exc:
+            self._record_failure("video_capture", exc)
+
+    def stop_trace(self, context: object | None) -> None:
+        if not self.trace_started or context is None:
+            return
+        try:
+            tracing = getattr(context, "tracing")
+            stop = getattr(tracing, "stop")
+            stop(path=self.trace_path)
+            self.trace_saved = True
+        except BaseException as exc:
+            self._record_failure("trace_stop", exc)
+            self._log_failure(
+                "recording_trace_stop_failure",
+                "browser recording trace failed to stop",
+                exc,
+            )
+
+    def save_video(self) -> None:
+        video = self._video
+        if video is None:
+            return
+        try:
+            save_as = getattr(video, "save_as")
+            save_as(self.video_path)
+            self.video_saved = True
+        except BaseException as exc:
+            self._record_failure("video_save", exc)
+            self._log_failure(
+                "recording_video_save_failure",
+                "browser recording video failed to save",
+                exc,
+            )
+
+    def finish(self, *, status: str, final_url: str | None) -> None:
+        self.status = status
+        self.final_url = final_url
+        self.stopped_at = _utc_timestamp()
+        self.write_manifest()
+        _LOGGER.info(
+            "recording_success" if not self.errors else "recording_partial",
+            "browser recording finalized",
+            pretty=_browser_row(
+                (
+                    f"recording {'saved' if not self.errors else 'partial'} "
+                    f"{self.key} trace={self.trace_path} "
+                    f"video={self.video_path if self.video_saved else '<not saved>'} "
+                    f"manifest={self.manifest_path}"
+                ),
+                style="touchpoint" if not self.errors else "warning",
+            ),
+            status=self.status,
+            errors=len(self.errors),
+            trace_saved=self.trace_saved,
+            video_saved=self.video_saved,
+            **self._log_fields(),
+        )
+        self.cleanup()
+
+    def abort(self, *, status: str, final_url: str | None, reason: str) -> None:
+        self.status = status
+        self.final_url = final_url
+        self.stopped_at = _utc_timestamp()
+        self.errors.append(reason)
+        self.write_manifest()
+        _LOGGER.warning(
+            "recording_interrupted",
+            "browser recording interrupted before it could be finalized",
+            pretty=_browser_row(
+                f"recording interrupted {self.key} manifest={self.manifest_path}",
+                style="warning",
+            ),
+            status=self.status,
+            reason=reason,
+            **self._log_fields(),
+        )
+        self.cleanup()
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.video_temp_dir, ignore_errors=True)
+
+    def write_manifest(self) -> None:
+        try:
+            self.manifest_path.write_text(
+                json.dumps(self._manifest_payload(), indent=2, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+        except BaseException as exc:
+            self._log_failure(
+                "recording_manifest_failure",
+                "browser recording manifest failed to write",
+                exc,
+            )
+
+    def _record_failure(self, action: str, exc: BaseException) -> None:
+        self.errors.append(f"{action}: {_format_exception(exc)}")
+
+    def _log_failure(self, event: str, message: str, exc: BaseException) -> None:
+        _LOGGER.warning(
+            event,
+            message,
+            pretty=_browser_row(
+                f"{message}: {_format_exception(exc)}",
+                style="warning",
+            ),
+            error=_format_exception(exc),
+            **self._log_fields(),
+        )
+
+    def _trace_title(self) -> str:
+        return (
+            f"Journey {getattr(self.metadata, 'case_id')} "
+            f"{getattr(self.metadata, 'step_name')} "
+            f"attempt {getattr(self.metadata, 'attempt')} "
+            f"context {getattr(self.metadata, 'context_index')}"
+        )
+
+    def _log_fields(self) -> dict[str, object]:
+        return {
+            "recording_sequence": self.sequence,
+            "recording_key": self.key,
+            "recording_dir": str(self.manifest_path.parent),
+            "trace_path": str(self.trace_path),
+            "video_path": str(self.video_path),
+            "manifest_path": str(self.manifest_path),
+            "run_id": getattr(self.metadata, "run_id"),
+            "case": getattr(self.metadata, "case_id"),
+            "step": getattr(self.metadata, "step_name"),
+            "attempt": getattr(self.metadata, "attempt"),
+        }
+
+    def _manifest_payload(self) -> dict[str, object]:
+        return {
+            "format": "journey.browser_recording",
+            "version": 1,
+            "status": self.status,
+            "started_at": self.started_at,
+            "stopped_at": self.stopped_at,
+            "run_id": getattr(self.metadata, "run_id"),
+            "sequence": self.sequence,
+            "recording_key": self.key,
+            "journey_id": getattr(self.metadata, "journey_id"),
+            "function_ref": getattr(self.metadata, "function_ref"),
+            "case_id": getattr(self.metadata, "case_id"),
+            "branch_env": getattr(self.metadata, "branch_env"),
+            "step_id": getattr(self.metadata, "step_id"),
+            "step_label": getattr(self.metadata, "step_label"),
+            "step_name": getattr(self.metadata, "step_name"),
+            "node_index": getattr(self.metadata, "node_index"),
+            "attempt": getattr(self.metadata, "attempt"),
+            "context_index": getattr(self.metadata, "context_index"),
+            "browser": self.browser,
+            "headless": self.headless,
+            "initial_url": self.initial_url,
+            "final_url": self.final_url,
+            "trace_path": str(self.trace_path),
+            "video_path": str(self.video_path),
+            "trace_saved": self.trace_saved,
+            "video_saved": self.video_saved,
+            "errors": list(self.errors),
+            "show_trace": f"playwright show-trace {self.trace_path}",
+        }
+
+
+def _prepare_browser_recording(
+    *,
+    browser: str,
+    headless: bool,
+    initial_url: str,
+) -> _BrowserRecording | None:
+    metadata = _allocate_browser_recording("open_page")
+    if metadata is None:
+        return None
+    try:
+        root = Path(getattr(metadata, "root"))
+        root.mkdir(parents=True, exist_ok=True)
+        stem = str(getattr(metadata, "stem"))
+        video_temp_dir = Path(tempfile.mkdtemp(prefix="journey-browser-video."))
+        return _BrowserRecording(
+            metadata=metadata,
+            browser=browser,
+            headless=headless,
+            initial_url=initial_url,
+            trace_path=root / f"{stem}.trace.zip",
+            video_path=root / f"{stem}.webm",
+            manifest_path=root / f"{stem}.manifest.json",
+            video_temp_dir=video_temp_dir,
+        )
+    except BaseException as exc:
+        _LOGGER.warning(
+            "recording_prepare_failure",
+            "browser recording could not be prepared",
+            pretty=_browser_row(
+                f"browser recording could not be prepared: {_format_exception(exc)}",
+                style="warning",
+            ),
+            error=_format_exception(exc),
+        )
+        return None
 
 
 @dataclass(frozen=True)
@@ -188,6 +463,7 @@ class JourneyBrowserPage(PlaywrightPage):
         self._journey_browser = None
         self._journey_manager = None
         self._journey_exit_started = False
+        self._journey_recording: _BrowserRecording | None = None
         self._journey_forced_interrupt_cleanup_started = False
         self._journey_forced_interrupt_unregister: Callable[[], None] | None = None
 
@@ -235,6 +511,7 @@ class JourneyBrowserPage(PlaywrightPage):
         manager: object | None = None,
         browser: object | None = None,
         context: object | None = None,
+        recording: _BrowserRecording | None = None,
     ) -> None:
         if manager is not None:
             self._journey_manager = manager
@@ -242,6 +519,8 @@ class JourneyBrowserPage(PlaywrightPage):
             self._journey_browser = browser
         if context is not None:
             self._journey_context = context
+        if recording is not None:
+            self._journey_recording = recording
         self._ensure_forced_interrupt_callback()
 
     def _ensure_forced_interrupt_callback(self) -> None:
@@ -262,6 +541,10 @@ class JourneyBrowserPage(PlaywrightPage):
 
     def _force_close_after_forced_interrupt(self) -> None:
         self._journey_forced_interrupt_cleanup_started = True
+        self._abort_recording(
+            status="interrupted",
+            reason="forced interrupt requested",
+        )
         _suppress_playwright_callback_future_noise(self._journey_manager)
         _kill_playwright_driver_process(self._journey_manager)
         self._mark_step_closed()
@@ -279,6 +562,22 @@ class JourneyBrowserPage(PlaywrightPage):
     def _mark_step_closed(self) -> None:
         self._journey_step_closed = True
 
+    def _abort_recording(self, *, status: str, reason: str) -> None:
+        recording = self._journey_recording
+        if recording is None:
+            return
+        self._journey_recording = None
+        recording.abort(status=status, final_url=self._safe_recording_url(), reason=reason)
+
+    def _safe_recording_url(self) -> str | None:
+        try:
+            return self.url
+        except BaseException:
+            snapshot = getattr(self, "_journey_snapshot", None)
+            if isinstance(snapshot, _PageSnapshot):
+                return snapshot.url
+        return None
+
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -291,8 +590,9 @@ class JourneyBrowserPage(PlaywrightPage):
             return
         self._journey_exit_started = True
         self._unregister_forced_interrupt_callback()
-        cleanup_url = self.url
+        cleanup_url = self._safe_recording_url() or "<unknown>"
         was_live = self._is_live
+        recording = self._journey_recording
         _LOGGER.debug(
             "page_cleanup_start",
             "cleaning up browser page resources",
@@ -307,6 +607,10 @@ class JourneyBrowserPage(PlaywrightPage):
 
         if forced_interrupted:
             self._journey_forced_interrupt_cleanup_started = True
+            self._abort_recording(
+                status="interrupted",
+                reason="forced interrupt requested",
+            )
             if self._is_live:
                 self._mark_step_closed()
             _suppress_playwright_callback_future_noise(self._journey_manager)
@@ -319,6 +623,9 @@ class JourneyBrowserPage(PlaywrightPage):
             )
             return
 
+        if recording is not None and self._is_live:
+            recording.capture_video(self)
+
         if self._is_live:
             if interrupted:
                 self._mark_step_closed()
@@ -330,24 +637,43 @@ class JourneyBrowserPage(PlaywrightPage):
                 finally:
                     self._mark_step_closed()
 
-        for resource in (
-            self._journey_context,
-            self._journey_browser,
-        ):
-            close = getattr(resource, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except BaseException as close_exc:  # pragma: no cover - environment dependent
-                    if interrupted:
-                        _LOGGER.debug(
-                            "page_cleanup_interrupt_close_failure",
-                            "ignored browser cleanup failure during interrupt",
-                            url=cleanup_url,
-                            error=_format_exception(close_exc),
-                        )
-                    else:
-                        failures.append(close_exc)
+        if recording is not None:
+            recording.stop_trace(self._journey_context)
+
+        context_close_failed = False
+        context_close = getattr(self._journey_context, "close", None)
+        if callable(context_close):
+            try:
+                context_close()
+            except BaseException as close_exc:  # pragma: no cover - environment dependent
+                context_close_failed = True
+                if interrupted:
+                    _LOGGER.debug(
+                        "page_cleanup_interrupt_close_failure",
+                        "ignored browser cleanup failure during interrupt",
+                        url=cleanup_url,
+                        error=_format_exception(close_exc),
+                    )
+                else:
+                    failures.append(close_exc)
+
+        if recording is not None and not context_close_failed:
+            recording.save_video()
+
+        browser_close = getattr(self._journey_browser, "close", None)
+        if callable(browser_close):
+            try:
+                browser_close()
+            except BaseException as close_exc:  # pragma: no cover - environment dependent
+                if interrupted:
+                    _LOGGER.debug(
+                        "page_cleanup_interrupt_close_failure",
+                        "ignored browser cleanup failure during interrupt",
+                        url=cleanup_url,
+                        error=_format_exception(close_exc),
+                    )
+                else:
+                    failures.append(close_exc)
 
         manager_exit = getattr(self._journey_manager, "__exit__", None)
         if callable(manager_exit):
@@ -365,6 +691,20 @@ class JourneyBrowserPage(PlaywrightPage):
                     )
                 else:
                     failures.append(manager_exc)
+
+        if recording is not None:
+            recording_status = (
+                "interrupted"
+                if interrupted
+                else "failed"
+                if exc_type is not None or failures
+                else "success"
+            )
+            recording.finish(
+                status=recording_status,
+                final_url=self._safe_recording_url() or cleanup_url,
+            )
+            self._journey_recording = None
 
         if failures:
             _LOGGER.error(
@@ -487,8 +827,20 @@ def open_page(
             headless=headless,
         )
         page._set_step_resources(browser=launched_browser)
-        context = launched_browser.new_context()
+        recording = _prepare_browser_recording(
+            browser=browser,
+            headless=headless,
+            initial_url=snapshot.url,
+        )
+        if recording is not None:
+            page._set_step_resources(recording=recording)
+        context_kwargs: dict[str, object] = {}
+        if recording is not None:
+            context_kwargs["record_video_dir"] = recording.video_temp_dir
+        context = launched_browser.new_context(**context_kwargs)
         page._set_step_resources(context=context)
+        if recording is not None:
+            recording.start_trace(context)
         if snapshot.cookies:
             context.add_cookies([dict(cookie) for cookie in snapshot.cookies])
         native_page = context.new_page()

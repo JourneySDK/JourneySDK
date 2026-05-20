@@ -183,6 +183,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "--no-state-update",
             "--no-memory",
             "--no-memory-update",
+            "--no-browser-recording",
         ]
     )
     assert execute_args.file == "journeys.py"
@@ -195,6 +196,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.no_state_update is True
     assert execute_args.no_memory is True
     assert execute_args.no_memory_update is True
+    assert execute_args.no_browser_recording is True
 
     pause_args = parser.parse_args(
         [
@@ -275,8 +277,10 @@ def test_execute_forwards_no_memory_update_flag(
         stream_live: bool = False,
         no_memory: bool = False,
         no_memory_update: bool = False,
+        no_browser_recording: bool = False,
     ) -> tuple[list[object], list[object]]:
         assert no_memory is False
+        assert no_browser_recording is False
         captured_flags.append(no_memory_update)
         return [], []
 
@@ -284,6 +288,51 @@ def test_execute_forwards_no_memory_update_flag(
     monkeypatch.chdir(tmp_path)
 
     exit_code = main(["--file", "flow.py", "--no-memory-update", "--log-level", "off"])
+
+    assert exit_code == 0
+    assert captured_flags == [True]
+
+
+def test_execute_forwards_no_browser_recording_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+
+        def finish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(finish)
+        """,
+    )
+    captured_flags: list[bool] = []
+
+    def fake_execute_all_targets(
+        compiled: object,
+        *,
+        root: Path,
+        fail_fast: bool,
+        no_state: bool = False,
+        no_state_update: bool = False,
+        stream_live: bool = False,
+        no_memory: bool = False,
+        no_memory_update: bool = False,
+        no_browser_recording: bool = False,
+    ) -> tuple[list[object], list[object]]:
+        captured_flags.append(no_browser_recording)
+        return [], []
+
+    monkeypatch.setattr("journeysdk.cli._execute_all_targets", fake_execute_all_targets)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(
+        ["--file", "flow.py", "--no-browser-recording", "--log-level", "off"]
+    )
 
     assert exit_code == 0
     assert captured_flags == [True]

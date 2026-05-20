@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import re
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -13,6 +14,7 @@ from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from types import FrameType, TracebackType
 from typing import Any, NoReturn, ParamSpec, Protocol, TypeVar, cast
+from uuid import uuid4
 
 from ._branch_handle import BranchHandle
 from .errors import (
@@ -279,6 +281,87 @@ class _ReplayPolicy:
     result_indices: frozenset[int]
     input_indices: frozenset[int]
     boundary_starts_after_step: dict[int, int]
+
+
+@dataclass(frozen=True)
+class _BrowserRecordingContext:
+    root: Path
+    run_id: str
+    sequence: int
+    context_index: int
+    key: str
+    stem: str
+    journey_id: str
+    function_ref: str
+    case_id: str
+    branch_env: dict[str, str]
+    step_id: str
+    step_label: str | None
+    step_name: str
+    node_index: int
+    attempt: int
+
+
+_RECORDING_SLUG_RE = re.compile(r"[^A-Za-z0-9_.+-]+")
+
+
+def _recording_slug(value: object, *, fallback: str) -> str:
+    slug = _RECORDING_SLUG_RE.sub("-", str(value)).strip("-._")
+    return (slug or fallback)[:96]
+
+
+class _BrowserRecordingController:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        root: Path,
+    ) -> None:
+        self.enabled = enabled
+        self.root = root
+        self.run_id = uuid4().hex[:12]
+        self._sequence = 0
+
+    def allocate(
+        self,
+        *,
+        journey_plan: JourneyPlan,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        context_index: int,
+    ) -> _BrowserRecordingContext | None:
+        if not self.enabled:
+            return None
+        self._sequence += 1
+        sequence = self._sequence
+        step_name = node.label or node.node_id
+        key = (
+            f"{sequence:04d}-"
+            f"{_recording_slug(case_plan.case_id, fallback='case')}-"
+            f"{_recording_slug(step_name, fallback='step')}-"
+            f"attempt-{attempt}-"
+            f"context-{context_index}-"
+            f"run-{self.run_id}"
+        )
+        return _BrowserRecordingContext(
+            root=self.root,
+            run_id=self.run_id,
+            sequence=sequence,
+            context_index=context_index,
+            key=key,
+            stem=key,
+            journey_id=journey_plan.journey_id,
+            function_ref=journey_plan.function_ref,
+            case_id=case_plan.case_id,
+            branch_env=dict(case_plan.branch_env),
+            step_id=node.node_id,
+            step_label=node.label,
+            step_name=step_name,
+            node_index=node_index,
+            attempt=attempt,
+        )
 
 
 @dataclass(frozen=True)
@@ -1483,6 +1566,7 @@ class _RunSession:
         prompt_memory_root: Path | None = None,
         prompt_memory_disabled: bool = False,
         prompt_memory_update_disabled: bool = False,
+        browser_recording_controller: _BrowserRecordingController | None = None,
     ) -> None:
         self.journey_plan = journey_plan
         self.case_plan = case_plan
@@ -1510,6 +1594,8 @@ class _RunSession:
         self._prompt_memory_root = prompt_memory_root
         self._prompt_memory_disabled = prompt_memory_disabled
         self._prompt_memory_update_disabled = prompt_memory_update_disabled
+        self._browser_recording_controller = browser_recording_controller
+        self._browser_recording_context_counts: dict[tuple[str, int], int] = {}
         self._active_step_lifecycle: _StepLifecycle | None = None
         self._step_key_by_id = _case_rehydration_maps(case_plan)
         self._step_id_by_key = {
@@ -2437,6 +2523,25 @@ class _RunSession:
                 ),
             )
         lifecycle._register_exit_object(value)
+
+    def _allocate_browser_recording(self) -> _BrowserRecordingContext | None:
+        controller = self._browser_recording_controller
+        if controller is None or not controller.enabled:
+            return None
+        lifecycle = self._active_step_lifecycle
+        if lifecycle is None or lifecycle.phase != _STEP_LIFECYCLE_EXECUTION:
+            return None
+        key = (lifecycle.node.node_id, lifecycle.attempt)
+        context_index = self._browser_recording_context_counts.get(key, 0) + 1
+        self._browser_recording_context_counts[key] = context_index
+        return controller.allocate(
+            journey_plan=self.journey_plan,
+            case_plan=self.case_plan,
+            node=lifecycle.node,
+            node_index=lifecycle.node_index,
+            attempt=lifecycle.attempt,
+            context_index=context_index,
+        )
 
     def prompt_memory_root(self) -> Path | None:
         return self._prompt_memory_root
@@ -3454,6 +3559,13 @@ def _resolve_prompt_memory_root(
     return Path(source_file).resolve().parent / DEFAULT_STATE_DIR
 
 
+def _resolve_browser_recording_root(
+    journey_fn: JourneyEntrypoint,
+) -> Path:
+    source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
+    return Path(source_file).resolve().parent / DEFAULT_STATE_DIR / "recordings"
+
+
 def _resolve_default_state_path(
     journey_fn: JourneyEntrypoint,
 ) -> Path:
@@ -3474,6 +3586,7 @@ def _execute_plan(
     no_state_update: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
+    no_browser_recording: bool = False,
     prompt_memory_root: str | Path | None = None,
 ) -> ExecutionReport | _PausedExecution:
     if no_state and state is not None:
@@ -3528,6 +3641,10 @@ def _execute_plan(
         journey_fn,
         prompt_memory_root=prompt_memory_root,
     )
+    browser_recording_controller = _BrowserRecordingController(
+        enabled=not no_browser_recording,
+        root=_resolve_browser_recording_root(journey_fn),
+    )
 
     case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
 
@@ -3570,6 +3687,7 @@ def _execute_plan(
                 prompt_memory_root=resolved_prompt_memory_root,
                 prompt_memory_disabled=no_memory,
                 prompt_memory_update_disabled=no_memory or no_memory_update,
+                browser_recording_controller=browser_recording_controller,
             )
             if restored_state is None:
                 state_controller.begin_case(
@@ -3675,6 +3793,7 @@ def execute(
     no_state_update: bool = False,
     no_memory: bool = False,
     no_memory_update: bool = False,
+    no_browser_recording: bool = False,
 ) -> ExecutionReport:
     """Compile a journey and execute full cases or one targeted step flow.
 
@@ -3686,6 +3805,7 @@ def execute(
         no_state_update: Disable persistent state writes while still allowing reads.
         no_memory: Disable prompt-memory reads and writes for this run.
         no_memory_update: Disable prompt-memory writes while still allowing reads.
+        no_browser_recording: Disable browser trace/video artifacts for this run.
     """
 
     plan = compile_journey(journey_fn)
@@ -3698,4 +3818,5 @@ def execute(
         no_state_update=no_state_update,
         no_memory=no_memory,
         no_memory_update=no_memory_update,
+        no_browser_recording=no_browser_recording,
     )

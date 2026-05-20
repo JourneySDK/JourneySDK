@@ -52,6 +52,17 @@ def _register_step_exit_object(owner: str, value: Any) -> None:
     register(value)
 
 
+def _allocate_browser_recording(owner: str) -> Any | None:
+    """Allocate one browser recording slot for the active step, when enabled."""
+
+    _require_executing_step(owner)
+    session = get_session()
+    allocate = getattr(session, "_allocate_browser_recording", None)
+    if not callable(allocate):
+        return None
+    return allocate()
+
+
 @contextmanager
 def use_session(session: Any) -> Iterator[None]:
     token = _CURRENT_SESSION.set(session)

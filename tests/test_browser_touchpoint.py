@@ -25,12 +25,17 @@ from journeysdk._prompt_memory import (
 )
 from journeysdk import executor as journey_executor
 from journeysdk import _prompt_engine as journey_prompt_engine
+from journeysdk.logger import configure_logging
 from journeysdk.touchpoints import _browser_prompt as journey_browser_prompt
 from journeysdk.touchpoints import browser as journey_browser
 
 
 def _prompt_memory_path(root: Path, name: str) -> Path:
     return root / PROMPT_MEMORY_DIR / f"{name}.memory.md"
+
+
+def _browser_recording_root() -> Path:
+    return Path(__file__).parent / ".journey" / "recordings"
 
 
 def _state_payload(
@@ -60,6 +65,43 @@ class _FakePageImpl:
         return self._page._fake_url
 
 
+class _FakeTracing:
+    def __init__(self, events: list[object], *, record_events: bool) -> None:
+        self._events = events
+        self._record_events = record_events
+        self.started = False
+
+    def start(
+        self,
+        *,
+        title: str,
+        screenshots: bool,
+        snapshots: bool,
+        sources: bool,
+    ) -> None:
+        self.started = True
+        if self._record_events:
+            self._events.append(
+                ("trace_start", title, screenshots, snapshots, sources)
+            )
+
+    def stop(self, *, path: Path) -> None:
+        if self._record_events:
+            self._events.append(("trace_stop", Path(path).name))
+        Path(path).write_text("fake trace", encoding="utf-8")
+
+
+class _FakeVideo:
+    def __init__(self, events: list[object], *, record_events: bool) -> None:
+        self._events = events
+        self._record_events = record_events
+
+    def save_as(self, path: Path) -> None:
+        if self._record_events:
+            self._events.append(("video_save", Path(path).name))
+        Path(path).write_text("fake video", encoding="utf-8")
+
+
 def _attach_fake_live_page(
     page: journey_browser.JourneyBrowserPage,
     native_page: object,
@@ -77,6 +119,7 @@ def _attach_fake_live_page(
     page._fake_url = initial_url
     page._fake_local_storage = {}
     page._impl_obj = _FakePageImpl(page)
+    page._journey_test_video = getattr(context, "video", None)
 
     def goto(self, url: str, *, wait_until: str) -> None:
         if fail_goto is not None:
@@ -130,12 +173,30 @@ class _FakeContext:
         *,
         fail_new_page: bool = False,
         fail_close: BaseException | None = None,
+        record_recording_events: bool = False,
     ) -> None:
         self._events = events
         self._fail_new_page = fail_new_page
         self._fail_close = fail_close
         self.page = _FakeNativePage(self)
         self._cookies: list[dict[str, object]] = []
+        self.tracing = _FakeTracing(
+            events,
+            record_events=record_recording_events,
+        )
+        self.video: _FakeVideo | None = None
+        self._record_recording_events = record_recording_events
+
+    def configure_recording(self, *, record_video_dir: object | None = None) -> None:
+        if record_video_dir is None:
+            self.video = None
+            return
+        if self._record_recording_events:
+            self._events.append(("record_video_dir", Path(record_video_dir).name))
+        self.video = _FakeVideo(
+            self._events,
+            record_events=self._record_recording_events,
+        )
 
     def add_cookies(self, cookies: list[dict[str, object]]) -> None:
         self._cookies = list(cookies)
@@ -164,6 +225,7 @@ class _FakeBrowser:
         fail_new_page: bool = False,
         fail_context_close: BaseException | None = None,
         fail_close: BaseException | None = None,
+        record_recording_events: bool = False,
     ) -> None:
         self._events = events
         self._fail_close = fail_close
@@ -171,10 +233,14 @@ class _FakeBrowser:
             events,
             fail_new_page=fail_new_page,
             fail_close=fail_context_close,
+            record_recording_events=record_recording_events,
         )
 
-    def new_context(self) -> _FakeContext:
+    def new_context(self, **kwargs: object) -> _FakeContext:
         self._events.append("new_context")
+        self.context.configure_recording(
+            record_video_dir=kwargs.get("record_video_dir"),
+        )
         return self.context
 
     def close(self) -> None:
@@ -192,12 +258,14 @@ class _FakeBrowserType:
         fail_context_close: BaseException | None = None,
         fail_browser_close: BaseException | None = None,
         executable_path: str | None = None,
+        record_recording_events: bool = False,
     ) -> None:
         self._events = events
         self._fail_new_page = fail_new_page
         self._fail_context_close = fail_context_close
         self._fail_browser_close = fail_browser_close
         self.executable_path = executable_path
+        self._record_recording_events = record_recording_events
 
     def launch(self, *, headless: bool, handle_sigint: bool) -> _FakeBrowser:
         self._events.append(("launch", headless, handle_sigint))
@@ -206,6 +274,7 @@ class _FakeBrowserType:
             fail_new_page=self._fail_new_page,
             fail_context_close=self._fail_context_close,
             fail_close=self._fail_browser_close,
+            record_recording_events=self._record_recording_events,
         )
 
 
@@ -218,6 +287,7 @@ class _FakePlaywright:
         fail_context_close: BaseException | None = None,
         fail_browser_close: BaseException | None = None,
         executable_path: str | None = None,
+        record_recording_events: bool = False,
     ) -> None:
         self.chromium = _FakeBrowserType(
             events,
@@ -225,6 +295,7 @@ class _FakePlaywright:
             fail_context_close=fail_context_close,
             fail_browser_close=fail_browser_close,
             executable_path=executable_path,
+            record_recording_events=record_recording_events,
         )
 
 
@@ -237,12 +308,14 @@ class _FakeManager:
         fail_context_close: BaseException | None = None,
         fail_browser_close: BaseException | None = None,
         executable_path: str | None = None,
+        record_recording_events: bool = False,
     ) -> None:
         self._events = events
         self._fail_new_page = fail_new_page
         self._fail_context_close = fail_context_close
         self._fail_browser_close = fail_browser_close
         self._executable_path = executable_path
+        self._record_recording_events = record_recording_events
 
     def __enter__(self) -> _FakePlaywright:
         self._events.append("playwright_enter")
@@ -252,6 +325,7 @@ class _FakeManager:
             fail_context_close=self._fail_context_close,
             fail_browser_close=self._fail_browser_close,
             executable_path=self._executable_path,
+            record_recording_events=self._record_recording_events,
         )
 
     def __exit__(self, exc_type, exc, tb) -> bool:
@@ -269,6 +343,7 @@ def _install_fake_playwright(
     fail_context_close: BaseException | None = None,
     fail_browser_close: BaseException | None = None,
     executable_path: str | None = None,
+    record_recording_events: bool = False,
 ) -> None:
     def attach_live_page(
         self: journey_browser.JourneyBrowserPage,
@@ -294,6 +369,7 @@ def _install_fake_playwright(
             fail_context_close=fail_context_close,
             fail_browser_close=fail_browser_close,
             executable_path=executable_path,
+            record_recording_events=record_recording_events,
         ),
     )
     monkeypatch.setattr(
@@ -977,6 +1053,171 @@ def test_open_page_cleans_partial_allocations_on_failure(monkeypatch):
         "browser_close",
         "playwright_exit",
     ]
+
+
+def test_open_page_records_trace_video_and_manifest_by_default(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        record_recording_events=True,
+    )
+
+    def open_login() -> journey_browser.JourneyBrowserPage:
+        return journey_browser.open_page("http://example.test/login")
+
+    def journey():
+        journey_sdk.step(open_login)
+
+    configure_logging("info", output_format="jsonl")
+    try:
+        journey_sdk.execute(journey, no_state=True)
+    finally:
+        configure_logging("info", output_format="pretty")
+
+    root = _browser_recording_root()
+    manifests = sorted(root.glob("*.manifest.json"))
+    traces = sorted(root.glob("*.trace.zip"))
+    videos = sorted(root.glob("*.webm"))
+
+    assert len(manifests) == 1
+    assert len(traces) == 1
+    assert len(videos) == 1
+    assert manifests[0].name.startswith(
+        "0001-case_1-open_login-attempt-1-context-1-run-"
+    )
+    assert traces[0].stem.startswith("0001-case_1-open_login-attempt-1-context-1-run-")
+    assert videos[0].stem.startswith("0001-case_1-open_login-attempt-1-context-1-run-")
+
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["status"] == "success"
+    assert payload["sequence"] == 1
+    assert payload["case_id"] == "case_1"
+    assert payload["step_name"] == "open_login"
+    assert payload["attempt"] == 1
+    assert payload["context_index"] == 1
+    assert payload["initial_url"] == "http://example.test/login"
+    assert payload["final_url"] == "http://example.test/login"
+    assert payload["trace_path"] == str(traces[0])
+    assert payload["video_path"] == str(videos[0])
+    assert payload["trace_saved"] is True
+    assert payload["video_saved"] is True
+    assert payload["show_trace"] == f"playwright show-trace {traces[0]}"
+
+    recording_events = [event[0] for event in events if isinstance(event, tuple)]
+    assert "trace_start" in recording_events
+    assert "trace_stop" in recording_events
+    assert "video_save" in recording_events
+    video_save_index = next(
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, tuple) and event[0] == "video_save"
+    )
+    assert events.index("context_close") < video_save_index
+    assert video_save_index < events.index("browser_close")
+    assert video_save_index < events.index("playwright_exit")
+
+    log_records = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+    recording_logs = [
+        record
+        for record in log_records
+        if record["component"] == "browser"
+        and record["event"] == "recording_success"
+    ]
+    assert len(recording_logs) == 1
+    assert recording_logs[0]["recording_sequence"] == 1
+    assert recording_logs[0]["recording_key"] == payload["recording_key"]
+    assert recording_logs[0]["trace_path"] == str(traces[0])
+    assert recording_logs[0]["video_path"] == str(videos[0])
+    assert recording_logs[0]["manifest_path"] == str(manifests[0])
+
+
+def test_open_page_records_flat_incrementing_files_for_multiple_contexts(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        record_recording_events=True,
+    )
+
+    def open_two_pages() -> tuple[journey_browser.JourneyBrowserPage, journey_browser.JourneyBrowserPage]:
+        first = journey_browser.open_page("http://example.test/one")
+        second = journey_browser.open_page("http://example.test/two")
+        return first, second
+
+    def journey():
+        journey_sdk.step(open_two_pages)
+
+    journey_sdk.execute(journey, no_state=True)
+
+    manifests = sorted(_browser_recording_root().glob("*.manifest.json"))
+    assert [path.name[:4] for path in manifests] == ["0001", "0002"]
+    assert all(path.parent == _browser_recording_root() for path in manifests)
+    payloads = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in manifests
+    ]
+    assert [payload["context_index"] for payload in payloads] == [1, 2]
+    assert [payload["sequence"] for payload in payloads] == [1, 2]
+    assert all(payload["step_name"] == "open_two_pages" for payload in payloads)
+    assert all(payload["status"] == "success" for payload in payloads)
+
+
+def test_execute_can_disable_browser_recording(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        record_recording_events=True,
+    )
+
+    def open_login() -> journey_browser.JourneyBrowserPage:
+        return journey_browser.open_page("http://example.test/login")
+
+    def journey():
+        journey_sdk.step(open_login)
+
+    journey_sdk.execute(journey, no_state=True, no_browser_recording=True)
+
+    assert not _browser_recording_root().exists()
+    assert not any(
+        isinstance(event, tuple) and event[0] in {"trace_start", "trace_stop", "video_save"}
+        for event in events
+    )
+
+
+def test_open_page_finalizes_recording_when_step_fails(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        record_recording_events=True,
+    )
+
+    def assert_login() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        raise RuntimeError("assertion failed")
+
+    def journey():
+        journey_sdk.step(assert_login)
+
+    with pytest.raises(CallableExecutionError):
+        journey_sdk.execute(journey, no_state=True)
+
+    manifests = sorted(_browser_recording_root().glob("*.manifest.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["step_name"] == "assert_login"
+    assert payload["trace_saved"] is True
+    assert payload["video_saved"] is True
 
 
 def test_open_page_keyboard_interrupt_is_not_reported_as_browser_failure(

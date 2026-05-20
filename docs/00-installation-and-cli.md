@@ -81,6 +81,8 @@ should read existing state but leave the state file unchanged.
 
 Playwright and LangChain are included in the default package install. The first Journey browser step automatically
 downloads Chromium in the active environment. That first launch needs network access and can take a moment.
+Browser steps record Playwright traces and videos by default under `.journey/recordings/`. Use
+`--no-browser-recording` when a run should not write browser debugging artifacts.
 
 ## Local Development Installs
 

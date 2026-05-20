@@ -72,6 +72,13 @@ def simple_journey() -> None:
 automatically the first time it is needed in the current environment. That first browser launch needs network access
 and can take a moment.
 
+By default, every browser context opened by `open_page()` records a Playwright trace and video for debugging. Journey
+stores those files under `.journey/recordings/` next to the journey source file, using flat filenames that begin with
+the execution sequence number, case, step, attempt, context, and run id. Open a trace with
+`playwright show-trace .journey/recordings/<recording>.trace.zip` to inspect the action timeline and DOM snapshots.
+Use `--no-browser-recording` when a run should avoid writing browser traces and videos, for example when page content is
+sensitive.
+
 ### Execute Only the File Branch
 
 ```bash
