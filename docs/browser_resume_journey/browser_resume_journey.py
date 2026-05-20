@@ -46,8 +46,8 @@ def login_and_capture_session() -> JourneyBrowserPage:
 
     _tutorial_note(
         "Signed in and returned JourneyBrowserPage for "
-        f"{page.url}. The next step can reopen this authenticated dashboard from "
-        "saved state without logging in again."
+        f"{page.url}. The next step opts into replay with positive retry, so it can "
+        "reopen this authenticated dashboard from saved state without logging in again."
     )
     return page
 
@@ -67,8 +67,8 @@ def continue_authenticated_dashboard(
 
     _tutorial_note(
         "continue_authenticated_dashboard() reopened the saved dashboard at "
-        f"{session.url}. journey resumes at the step boundary, so this step "
-        "restarts from the top on resume with the same saved JourneyBrowserPage."
+        f"{session.url}. Positive retry makes this step an explicit replay boundary, "
+        "so it restarts from the top on resume with the same saved JourneyBrowserPage."
     )
     _tutorial_note(
         f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
@@ -102,10 +102,10 @@ def assert_protected_action_complete(result: dict[str, str]) -> bool:
             f"Expected status 'Protected action complete', got {result.get('status')!r}."
         )
     _tutorial_note(
-        "The protected action completed. After a graceful Ctrl-C, saved completed "
-        "browser steps are reused. After a forceful Ctrl-C, "
-        "continue_authenticated_dashboard() restarts with the same saved "
-        "JourneyBrowserPage instead of logging in again."
+        "The protected action completed. Positive retry made "
+        "continue_authenticated_dashboard() an explicit replay boundary, so interrupted "
+        "runs restart that procedure with the same saved JourneyBrowserPage instead of "
+        "logging in again."
     )
     return True
 
@@ -114,7 +114,13 @@ def assert_protected_action_complete(result: dict[str, str]) -> bool:
 def browser_resume_journey() -> None:
     pause_seconds = 2.0
     session = step(login_and_capture_session)
-    result = step(continue_authenticated_dashboard, session, pause_seconds)
+    result = step(
+        continue_authenticated_dashboard,
+        session,
+        pause_seconds,
+        retry=1,
+        retry_delay=0,
+    )
     step(assert_protected_action_complete, result)
 
 

@@ -258,7 +258,9 @@ def test_resume_readme_commands_interrupt_then_resume(
 
     assert second_exit == 0
     assert "case_1 resume" in second_error
-    assert "wait_for_resume_signal                       start attempt=2" not in second_error
+    assert "load_support_ticket" in second_error
+    assert "wait_for_resume_signal" in second_error
+    assert "start attempt=2" in second_error
     assert "assert_resumed_ticket" in second_error
     assert "ok attempt=1 duration=" in second_error
     assert "The journey finished." in second_error
@@ -361,7 +363,8 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
 
     assert second_exit == 0
     assert "case_1 resume" in second_error
-    assert "continue_authenticated_dashboard                       start attempt=2" not in second_error
+    assert "continue_authenticated_dashboard" in second_error
+    assert "start attempt=2" in second_error
     assert "assert_protected_action_complete" in second_error
     assert "ok attempt=1 duration=" in second_error
     assert "The protected action completed." in second_error

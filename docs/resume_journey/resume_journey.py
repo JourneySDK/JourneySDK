@@ -28,8 +28,8 @@ def load_support_ticket() -> dict[str, str]:
     }
     _tutorial_note(
         "Loaded support ticket "
-        f"{ticket['ticket_id']} and saved it as the result of load_support_ticket(). "
-        "The next step will reuse this saved ticket when you resume."
+        f"{ticket['ticket_id']}. This demo has no explicit replay boundary, so "
+        "interrupted runs start this case again from the beginning."
     )
     return ticket
 
@@ -39,14 +39,14 @@ def wait_for_resume_signal(
     pause_seconds: float,
 ) -> dict[str, str]:
     _tutorial_note(
-        "wait_for_resume_signal() is starting with saved ticket "
-        f"{ticket['ticket_id']}. journey resumes at the step boundary, so this step "
-        "restarts from the top on resume with the same saved inputs."
+        "wait_for_resume_signal() is starting with ticket "
+        f"{ticket['ticket_id']}. This journey has no explicit replay boundary, so "
+        "a forceful interruption restarts from the case beginning."
     )
     _tutorial_note(
         f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
         "gracefully after this step reaches post-exit. Press Ctrl-C a second time "
-        "to stop now; Journey will rerun this step later from saved inputs."
+        "to stop now; Journey will rerun from the nearest explicit replay boundary."
     )
     time.sleep(pause_seconds)
     _tutorial_note(
@@ -60,9 +60,10 @@ def assert_resumed_ticket(ticket: dict[str, str]) -> bool:
     if ticket.get("status") != "waiting_for_resume":
         raise AssertionError(f"Unexpected ticket status: {ticket.get('status')!r}")
     _tutorial_note(
-        "The journey finished. After a graceful Ctrl-C, saved completed steps "
-        "are reused. After a forceful Ctrl-C, wait_for_resume_signal() restarts "
-        "with the same saved ticket while load_support_ticket() is reused."
+        "The journey finished. This demo has no explicit replay boundary, so an "
+        "interrupted run restarts the case from the beginning. Add "
+        "branch(start_from=...) or positive retry when a step value should be saved "
+        "and reused."
     )
     return True
 

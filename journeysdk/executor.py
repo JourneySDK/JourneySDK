@@ -275,6 +275,13 @@ class _ReplayBoundary:
 
 
 @dataclass(frozen=True)
+class _ReplayPolicy:
+    result_indices: frozenset[int]
+    input_indices: frozenset[int]
+    boundary_starts_after_step: dict[int, int]
+
+
+@dataclass(frozen=True)
 class _RuntimeStepAnchor:
     node_ids: frozenset[str]
 
@@ -786,6 +793,33 @@ def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotSta
     )
 
 
+def _state_record(record: NodeExecutionRecord) -> NodeExecutionRecord:
+    result = None if record.node_type == "StepNode" else record.result
+    return NodeExecutionRecord(
+        node_id=record.node_id,
+        node_type=record.node_type,
+        label=record.label,
+        ok=record.ok,
+        result=result,
+        error=record.error,
+    )
+
+
+def _state_records(records: list[NodeExecutionRecord]) -> list[NodeExecutionRecord]:
+    return [_state_record(record) for record in records]
+
+
+def _state_report(report: CaseExecutionReport) -> CaseExecutionReport:
+    return CaseExecutionReport(
+        case_id=report.case_id,
+        branch_env=dict(report.branch_env),
+        records=_state_records(report.records),
+        completed=report.completed,
+        stopped_at_label=report.stopped_at_label,
+        replay_anchor=report.replay_anchor,
+    )
+
+
 def _execution_state_is_complete(state: ExecutionStateEnvelope) -> bool:
     return (
         state.active_case is None
@@ -826,6 +860,52 @@ def _branch_anchor_step_ids_for(*, plan: JourneyPlan) -> set[str]:
         for node in case_plan.nodes
         if isinstance(node, BranchMarkerNode) and node.start_from is not None
     }
+
+
+def _case_replay_policy(case_plan: CasePlan) -> _ReplayPolicy:
+    step_index_by_id = {
+        node.node_id: index
+        for index, node in enumerate(case_plan.nodes)
+        if isinstance(node, StepNode)
+    }
+    result_indices: set[int] = set()
+    input_indices: set[int] = set()
+    boundary_starts_after_step: dict[int, int] = {}
+
+    def mark_boundary(completed_index: int, start_index: int) -> None:
+        previous = boundary_starts_after_step.get(completed_index)
+        if previous is None or start_index > previous:
+            boundary_starts_after_step[completed_index] = start_index
+
+    for index, node in enumerate(case_plan.nodes):
+        if isinstance(node, BranchMarkerNode) and node.start_from is not None:
+            anchor_index = step_index_by_id.get(node.start_from)
+            if anchor_index is None:
+                continue
+            boundary_index = anchor_index + 1
+            mark_boundary(anchor_index, boundary_index)
+            for prefix_index in range(boundary_index):
+                if isinstance(case_plan.nodes[prefix_index], StepNode):
+                    result_indices.add(prefix_index)
+            continue
+
+        if isinstance(node, StepNode) and node.retry is not None:
+            anchor_index = step_index_by_id.get(node.retry.from_node_id)
+            if anchor_index is None or anchor_index > index:
+                continue
+            mark_boundary(anchor_index, anchor_index)
+            for prefix_index in range(anchor_index):
+                if isinstance(case_plan.nodes[prefix_index], StepNode):
+                    result_indices.add(prefix_index)
+            for replay_index in range(anchor_index, index + 1):
+                if isinstance(case_plan.nodes[replay_index], StepNode):
+                    input_indices.add(replay_index)
+
+    return _ReplayPolicy(
+        result_indices=frozenset(result_indices),
+        input_indices=frozenset(input_indices),
+        boundary_starts_after_step=boundary_starts_after_step,
+    )
 
 
 def _callable_execution_error_for_step(
@@ -952,6 +1032,10 @@ class _StateController:
     def current_case_index(self) -> int:
         return self._state.current_case_index
 
+    @property
+    def updates_state_file(self) -> bool:
+        return self._run_path is not None
+
     def binding_store_context(self, binding_key: str) -> JourneyStoreContext:
         return JourneyStoreContext(
             artifact_root=self._artifact_dir("binding", binding_key),
@@ -1073,7 +1157,7 @@ class _StateController:
                 f"The journey state file '{self.path}' tried to complete case '{report.case_id}', "
                 f"but this run expected '{expected_case.case_id}'."
             )
-        self._state.completed_case_reports.append(report)
+        self._state.completed_case_reports.append(_state_report(report))
         self._state.current_case_index += 1
         self._state.active_case = None
         self._write_state()
@@ -1428,11 +1512,21 @@ class _RunSession:
         self._prompt_memory_update_disabled = prompt_memory_update_disabled
         self._active_step_lifecycle: _StepLifecycle | None = None
         self._step_key_by_id = _case_rehydration_maps(case_plan)
+        self._step_id_by_key = {
+            binding_key: node_id
+            for node_id, binding_key in self._step_key_by_id.items()
+        }
         self._step_index_by_id = {
             node.node_id: index
             for index, node in enumerate(case_plan.nodes)
             if isinstance(node, StepNode)
         }
+        self._step_index_by_key = {
+            binding_key: self._step_index_by_id[node_id]
+            for node_id, binding_key in self._step_key_by_id.items()
+            if node_id in self._step_index_by_id
+        }
+        self._replay_policy = _case_replay_policy(case_plan)
         self._branch_anchor_step_ids = _branch_anchor_step_ids_for(plan=journey_plan)
         self._runtime_step_result_ids: dict[int, set[str]] = {}
 
@@ -1454,23 +1548,38 @@ class _RunSession:
 
     def _runtime_snapshot(self) -> RuntimeSnapshotState:
         if self._rehydration_enabled:
-            step_bindings = {
-                key: self._freeze_binding(
+            step_bindings: dict[str, StepBindingState] = {}
+            for key, binding in self._step_bindings.items():
+                node_index = self._step_index_by_key.get(key)
+                include_result = (
+                    node_index is not None
+                    and node_index < self.replay_from_index
+                    and node_index in self._replay_policy.result_indices
+                    and binding.has_result
+                )
+                include_inputs = (
+                    node_index is not None
+                    and node_index in self._replay_policy.input_indices
+                    and self._binding_has_cached_or_stored_inputs(
+                        binding_key=key,
+                        binding=binding,
+                    )
+                )
+                if not include_result and not include_inputs:
+                    continue
+                step_bindings[key] = self._freeze_binding(
                     key,
                     binding,
                     context=self._active_state_store_context(key),
                     description_prefix=f"active state for case '{self.case_plan.case_id}'",
+                    include_inputs=include_inputs,
+                    include_result=include_result,
                 )
-                for key, binding in self._step_bindings.items()
-            }
         else:
-            step_bindings = {
-                key: _copy_binding(binding)
-                for key, binding in self._step_bindings.items()
-            }
+            step_bindings = {}
         return RuntimeSnapshotState(
             record_indices=list(self._record_indices),
-            records=list(self.records),
+            records=_state_records(self.records),
             step_bindings=step_bindings,
             retry_remaining=dict(self._retry_remaining),
             step_attempts=dict(self._step_attempts),
@@ -1488,6 +1597,8 @@ class _RunSession:
 
     def _persist_state(self) -> None:
         if self._state_controller is None:
+            return
+        if not self._state_controller.updates_state_file:
             return
         self._state_controller.update_active_case(self.snapshot_state())
 
@@ -1511,7 +1622,6 @@ class _RunSession:
         self._retry_remaining = restored.retry_remaining
         self._step_attempts = restored.step_attempts
         self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
-        self._restore_snapshot_results(restored.step_bindings)
 
     def _restore_state(self, restored_state: ActiveCaseState) -> None:
         if restored_state.case_id != self.case_plan.case_id:
@@ -1536,7 +1646,8 @@ class _RunSession:
         self._step_attempts = restored.step_attempts
         self.stop_after_index = restored_state.stop_after_index
         self._paused_step = restored_state.paused_step
-        self._restore_snapshot_results(restored.step_bindings)
+        if self._dirty_node_id is None and self._paused_step is None:
+            self._trim_from(self.replay_from_index, preserve_retry_for=None)
 
     @property
     def paused_step(self) -> PausedStepState | None:
@@ -1560,7 +1671,12 @@ class _RunSession:
                     f"Cannot continue past failed develop step '{step_name}'.",
                     hint="Retry the failed develop step first, or delete the state file to start fresh.",
                 )
-            self.replay_from_index = paused_step.node_index + 1
+            if self._can_restore_step_result_at(paused_step.node_index):
+                self.replay_from_index = paused_step.node_index + 1
+            else:
+                self._apply_replay_boundary(
+                    _ReplayBoundary(start_index=self.replay_from_index)
+                )
             next_step_index = _next_step_index_after(
                 self.case_plan,
                 paused_step.node_index,
@@ -1580,11 +1696,14 @@ class _RunSession:
                 raise ExecutionStateMismatchError(
                     "Pause-on-step state points at a non-step node."
                 )
-            boundary = self._replay_boundary_for_step(
-                node,
-                paused_step.node_index,
-                preserve_retry_for=None,
-            )
+            if node.retry is None:
+                boundary = _ReplayBoundary(start_index=self.replay_from_index)
+            else:
+                boundary = self._replay_boundary_for_step(
+                    node,
+                    paused_step.node_index,
+                    preserve_retry_for=None,
+                )
             self._apply_replay_boundary(boundary)
             self.stop_after_index = paused_step.node_index
             self._dirty_node_id = None
@@ -1612,11 +1731,14 @@ class _RunSession:
                 f"The journey state points at '{self._dirty_node_id}', which is not a step."
             )
 
-        boundary = self._replay_boundary_for_step(
-            node,
-            node_index,
-            preserve_retry_for=node.node_id if node.retry is not None else None,
-        )
+        if node.retry is None:
+            boundary = _ReplayBoundary(start_index=self.replay_from_index)
+        else:
+            boundary = self._replay_boundary_for_step(
+                node,
+                node_index,
+                preserve_retry_for=node.node_id,
+            )
         self._apply_replay_boundary(boundary)
         self._dirty_node_id = None
         self._persist_state()
@@ -1672,6 +1794,55 @@ class _RunSession:
         self._persist_state()
         return self.stop_after_index is not None and node_index == self.stop_after_index
 
+    def _mark_replay_boundary_available_after(self, node_index: int) -> None:
+        start_index = self._replay_policy.boundary_starts_after_step.get(node_index)
+        if start_index is not None and start_index > self.replay_from_index:
+            self.replay_from_index = start_index
+
+    def _mark_same_step_retry_boundary_before_attempt(
+        self,
+        node: StepNode,
+        node_index: int,
+    ) -> None:
+        if (
+            node.retry is not None
+            and node.retry.from_node_id == node.node_id
+            and node_index > self.replay_from_index
+        ):
+            self.replay_from_index = node_index
+
+    def _binding_has_cached_or_stored_inputs(
+        self,
+        *,
+        binding_key: str,
+        binding: StepBindingState,
+    ) -> bool:
+        if binding_key in self._step_input_cache:
+            return True
+        return bool(binding.args or binding.kwargs)
+
+    def _binding_has_inputs_for_node(
+        self,
+        node: StepNode,
+        binding: StepBindingState,
+    ) -> bool:
+        binding_key = self._step_key_by_id[node.node_id]
+        if binding_key in self._step_input_cache:
+            return True
+        return len(binding.args) == len(node.args) and set(binding.kwargs) == set(node.kwargs)
+
+    def _can_restore_step_result_at(self, node_index: int) -> bool:
+        if not 0 <= node_index < len(self.case_plan.nodes):
+            return False
+        node = self.case_plan.nodes[node_index]
+        if not isinstance(node, StepNode):
+            return False
+        binding_key = self._step_key_by_id[node.node_id]
+        binding = self._step_bindings.get(binding_key)
+        if binding is None or not binding.has_result:
+            return False
+        return binding_key in self._step_result_cache or binding.result is not None
+
     def _trim_from(self, start_index: int, *, preserve_retry_for: str | None) -> None:
         kept_records: list[NodeExecutionRecord] = []
         kept_indices: list[int] = []
@@ -1691,7 +1862,8 @@ class _RunSession:
             if binding is not None:
                 binding.has_result = False
                 binding.result = None
-            self._step_input_cache.pop(binding_key, None)
+            if index not in self._replay_policy.input_indices:
+                self._step_input_cache.pop(binding_key, None)
             self._step_result_cache.pop(binding_key, None)
             if node.node_id != preserve_retry_for:
                 self._retry_remaining.pop(node.node_id, None)
@@ -1820,30 +1992,6 @@ class _RunSession:
             fn_ref=node.fn_ref,
             source_fingerprint=node.source_fingerprint,
         )
-        if self._rehydration_enabled:
-            base_context = self._binding_store_context(binding_key)
-            binding = StepBindingState(
-                args=tuple(
-                    self._store_runtime_value(
-                        value,
-                        context=base_context.child(f"arg-{index}"),
-                        description=f"step input {index + 1} for '{node.label or node.node_id}'",
-                    )
-                    for index, value in enumerate(args)
-                ),
-                kwargs={
-                    key: self._store_runtime_value(
-                        value,
-                        context=base_context.child(f"kw-{key}"),
-                        description=f"step kwarg {key!r} for '{node.label or node.node_id}'",
-                    )
-                    for key, value in kwargs.items()
-                },
-                has_result=False,
-                fn_ref=node.fn_ref,
-                source_fingerprint=node.source_fingerprint,
-            )
-            self._step_binding_contexts[binding_key] = self._binding_restore_context(binding_key)
         self._step_input_cache[binding_key] = (tuple(args), dict(kwargs))
         self._step_bindings[binding_key] = binding
         return binding
@@ -1857,13 +2005,6 @@ class _RunSession:
         binding.source_fingerprint = node.source_fingerprint
         self._step_result_cache[binding_key] = output
         binding.has_result = True
-        if self._rehydration_enabled:
-            base_context = self._binding_store_context(binding_key)
-            binding.result = self._store_runtime_value(
-                output,
-                context=base_context.child("result"),
-                description=f"step result for '{node.label or node.node_id}'",
-            )
         return binding
 
     def _discard_step_result(self, node: StepNode) -> None:
@@ -2011,7 +2152,16 @@ class _RunSession:
         binding_key = self._step_key_by_id[node.node_id]
         cached = self._step_input_cache.get(binding_key)
         if cached is not None:
-            return cached
+            cached_args, cached_kwargs = cached
+            resolved_args = tuple(
+                self._resolve_binding_value(template, value)
+                for template, value in zip(node.args, cached_args)
+            )
+            resolved_kwargs = {
+                key: self._resolve_binding_value(node.kwargs.get(key), value)
+                for key, value in cached_kwargs.items()
+            }
+            return resolved_args, resolved_kwargs
 
         base_context = self._step_binding_contexts.get(binding_key)
         if base_context is None:
@@ -2063,9 +2213,8 @@ class _RunSession:
         *,
         description: str,
     ) -> Any:
-        cached = self._step_result_cache.get(binding_key)
-        if cached is not None:
-            return cached
+        if binding_key in self._step_result_cache:
+            return self._step_result_cache[binding_key]
         if not binding.has_result or binding.result is None:
             raise InvalidBranchUsageError(
                 f"Replay is missing the saved result for step binding '{binding_key}'.",
@@ -2083,15 +2232,6 @@ class _RunSession:
         self._step_result_cache[binding_key] = restored
         return restored
 
-    def _restore_snapshot_results(self, bindings: dict[str, StepBindingState]) -> None:
-        for key, binding in bindings.items():
-            if binding.has_result and binding.result is not None:
-                self._materialize_step_result(
-                    key,
-                    binding,
-                    description=f"saved step result '{key}'",
-                )
-
     def _store_runtime_value(
         self,
         value: Any,
@@ -2103,6 +2243,22 @@ class _RunSession:
             return store_value(value, context=context, description=description)
         except StoredValueSerializationError as exc:
             raise ExecutionStateSerializationError(str(exc)) from exc
+
+    def _store_step_input_value(
+        self,
+        value: Any,
+        *,
+        template: Any,
+        context: JourneyStoreContext,
+        description: str,
+    ) -> StoredValue:
+        if isinstance(template, PlannedValue) and template.kind == "step":
+            return StoredValue(kind="step-ref")
+        return self._store_runtime_value(
+            value,
+            context=context,
+            description=description,
+        )
 
     def _restore_stored_value(
         self,
@@ -2126,35 +2282,95 @@ class _RunSession:
         *,
         context: JourneyStoreContext,
         description_prefix: str,
+        include_inputs: bool,
+        include_result: bool,
     ) -> StepBindingState:
-        frozen = _copy_binding(binding)
-        cached_inputs = self._step_input_cache.get(binding_key)
-        if cached_inputs is not None:
-            cached_args, cached_kwargs = cached_inputs
-            frozen.args = tuple(
-                self._store_runtime_value(
-                    value,
-                    context=context.child(f"arg-{index}"),
-                    description=f"{description_prefix} input {index + 1}",
+        frozen = StepBindingState(
+            args=(),
+            kwargs={},
+            has_result=False,
+            fn_ref=binding.fn_ref,
+            source_fingerprint=binding.source_fingerprint,
+        )
+        if include_inputs:
+            cached_inputs = self._step_input_cache.get(binding_key)
+            if cached_inputs is not None and not binding.args and not binding.kwargs:
+                cached_args, cached_kwargs = cached_inputs
+                node_id = self._step_id_by_key.get(binding_key)
+                node_index = (
+                    self._step_index_by_id.get(node_id)
+                    if node_id is not None
+                    else None
                 )
-                for index, value in enumerate(cached_args)
-            )
-            frozen.kwargs = {
-                key: self._store_runtime_value(
-                    value,
-                    context=context.child(f"kw-{key}"),
-                    description=f"{description_prefix} kwarg {key!r}",
+                node = (
+                    self.case_plan.nodes[node_index]
+                    if node_index is not None
+                    else None
                 )
-                for key, value in cached_kwargs.items()
-            }
+                arg_templates = node.args if isinstance(node, StepNode) else ()
+                kw_templates = node.kwargs if isinstance(node, StepNode) else {}
+                binding.args = tuple(
+                    self._store_step_input_value(
+                        value,
+                        template=(
+                            arg_templates[index]
+                            if index < len(arg_templates)
+                            else None
+                        ),
+                        context=context.child(f"arg-{index}"),
+                        description=f"{description_prefix} input {index + 1}",
+                    )
+                    for index, value in enumerate(cached_args)
+                )
+                binding.kwargs = {
+                    key: self._store_step_input_value(
+                        value,
+                        template=kw_templates.get(key),
+                        context=context.child(f"kw-{key}"),
+                        description=f"{description_prefix} kwarg {key!r}",
+                    )
+                    for key, value in cached_kwargs.items()
+                }
+            frozen.args = tuple(binding.args)
+            frozen.kwargs = dict(binding.kwargs)
+        if include_result and binding.has_result:
+            frozen.has_result = True
+            if binding_key in self._step_result_cache:
+                if binding.result is None:
+                    cached_result = self._step_result_cache[binding_key]
+                    binding.result = self._store_runtime_value(
+                        cached_result,
+                        context=context.child("result"),
+                        description=f"{description_prefix} result",
+                    )
+            frozen.result = binding.result
+        return frozen
+
+    def _freeze_branch_anchor_binding(
+        self,
+        binding_key: str,
+        binding: StepBindingState,
+        *,
+        context: JourneyStoreContext,
+        description_prefix: str,
+    ) -> StepBindingState:
+        frozen = StepBindingState(
+            args=(),
+            kwargs={},
+            has_result=binding.has_result,
+            fn_ref=binding.fn_ref,
+            source_fingerprint=binding.source_fingerprint,
+        )
         if binding.has_result:
-            cached_result = self._step_result_cache.get(binding_key)
-            if cached_result is not None:
+            if binding_key in self._step_result_cache:
+                cached_result = self._step_result_cache[binding_key]
                 frozen.result = self._store_runtime_value(
                     cached_result,
                     context=context.child("result"),
                     description=f"{description_prefix} result",
                 )
+            else:
+                frozen.result = binding.result
         return frozen
 
     def _binding_store_context(self, binding_key: str) -> JourneyStoreContext:
@@ -2263,6 +2479,7 @@ class _RunSession:
         node_index: int,
     ) -> tuple[int, float]:
         self._dirty_node_id = node.node_id
+        self._mark_same_step_retry_boundary_before_attempt(node, node_index)
         attempt = self._step_attempts.get(node.node_id, 0) + 1
         self._step_attempts[node.node_id] = attempt
         self._persist_state()
@@ -2305,7 +2522,7 @@ class _RunSession:
         self._remember_step_result(node, output)
         self._retry_remaining.pop(node.node_id, None)
         self._dirty_node_id = None
-        self.replay_from_index = max(self.replay_from_index, node_index + 1)
+        self._mark_replay_boundary_available_after(node_index)
         should_stop = self._record(node_index, node, ok=True, result=output)
         self._observer.on_step_success(
             case_plan=self.case_plan,
@@ -2325,17 +2542,29 @@ class _RunSession:
             return
 
         anchor_key = self._step_key_by_id[node.node_id]
+        anchor_index = self._step_index_by_id[node.node_id]
+        prefix_step_keys = {
+            self._step_key_by_id[item.node_id]
+            for item in self.case_plan.nodes[: anchor_index + 1]
+            if isinstance(item, StepNode)
+        }
+        prefix_records = [
+            (index, record)
+            for index, record in zip(self._record_indices, self.records)
+            if index <= anchor_index
+        ]
         snapshot = RuntimeSnapshotState(
-            record_indices=list(self._record_indices),
-            records=list(self.records),
+            record_indices=[index for index, _ in prefix_records],
+            records=_state_records([record for _, record in prefix_records]),
             step_bindings={
-                key: self._freeze_binding(
+                key: self._freeze_branch_anchor_binding(
                     key,
                     binding,
                     context=self._branch_anchor_store_context(anchor_key, key),
                     description_prefix=f"branch anchor '{node.label or node.node_id}'",
                 )
                 for key, binding in self._step_bindings.items()
+                if key in prefix_step_keys and binding.has_result
             },
             retry_remaining=dict(self._retry_remaining),
             step_attempts=dict(self._step_attempts),
@@ -2604,7 +2833,11 @@ class _StepLifecycle:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> tuple[tuple[Any, ...], dict[str, Any]]:
-        if self.binding is not None and not self.binding.has_result:
+        if (
+            self.binding is not None
+            and not self.binding.has_result
+            and self.session._binding_has_inputs_for_node(self.node, self.binding)
+        ):
             return self.session._resolve_step_inputs(self.node, self.binding)
 
         self.binding = self.session._store_step_inputs(self.node, args, kwargs)
@@ -2843,20 +3076,11 @@ def _needs_rehydration(
 ) -> bool:
     if develop_step is not None:
         return True
-    if state is not None:
-        return True
-    if step is None:
-        for selected_case in selected_cases:
-            for node in selected_case.case_plan.nodes:
-                if isinstance(node, StepNode) and node.retry is not None:
-                    return True
-                if isinstance(node, BranchMarkerNode) and node.start_from is not None:
-                    return True
-        return False
-
     for selected_case in selected_cases:
         for node in selected_case.case_plan.nodes:
             if isinstance(node, StepNode) and node.retry is not None:
+                return True
+            if isinstance(node, BranchMarkerNode) and node.start_from is not None:
                 return True
     return False
 
@@ -2981,7 +3205,7 @@ def _replay_boundary_for_case_step(
     node_index: int,
 ) -> _ReplayBoundary | None:
     if node.retry is None:
-        return _ReplayBoundary(start_index=node_index)
+        return _ReplayBoundary(start_index=0)
 
     step_index_by_id = {
         item.node_id: index

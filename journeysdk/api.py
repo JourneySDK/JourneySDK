@@ -180,13 +180,13 @@ def step(
     or polling steps configured with retry settings. Retries apply when a step
     raises an exception and ``retry`` is greater than 0.
 
-    When a run uses retries, persistent state, or branches that start
-    from an earlier step, journey may need to save and restore step inputs and
-    outputs. Any value that may be replayed that way must be
-    pickle-serializable or implement the Journey rehydration protocol.
-    In CLI runs with persistent state, first Ctrl-C lets the active step finish and
-    resume after it; pressing Ctrl-C again interrupts the dirty step, which
-    later restarts from the top with saved inputs.
+    When a run uses positive retries or branches that start from an earlier
+    step, Journey may need to save and restore the values needed by that replay
+    boundary. Any value that may be replayed that way must be pickle-serializable
+    or implement the Journey rehydration protocol. In CLI runs with persistent
+    state, first Ctrl-C lets the active step finish; pressing Ctrl-C again
+    interrupts the dirty step, which later restarts from the nearest explicit
+    replay boundary or from the case beginning.
 
     Outside an active planning or execution session, ``step()`` is invalid.
 

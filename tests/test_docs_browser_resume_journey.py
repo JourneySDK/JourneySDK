@@ -116,7 +116,7 @@ def test_browser_resume_example_runs_and_resumes_authenticated_session(
         "continue_authenticated_dashboard",
         "assert_protected_action_complete",
     ]
-    assert report.case_reports[0].records[0].result.url.endswith("/dashboard")
+    assert report.case_reports[0].records[0].result is None
     assert report.case_reports[0].records[1].result == {
         "auth_state": "authenticated",
         "status": "Protected action complete",

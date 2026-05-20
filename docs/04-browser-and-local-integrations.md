@@ -5,7 +5,7 @@ touchpoint. If it is ordinary Python, it can live inside the same authored journ
 
 This is the practical meaning of touchpoints: the journey can cross from one system to another without changing shape.
 One step may drive a browser page, another may wait for a webhook, and another may inspect local state. Journey keeps
-the step boundaries durable while your Python chooses which touchpoint to use.
+explicit replay boundaries durable while your Python chooses which touchpoint to use.
 
 This chapter shows both sides of that idea:
 
@@ -137,7 +137,8 @@ step(assert_stack_ready, stack)
 ```
 
 The interesting state lives on the `stack` value, and `DockerComposeStack`
-implements Journey's rehydration protocol:
+implements Journey's rehydration protocol. Docker snapshots are created only when the stack is in the replay closure
+for an explicit boundary, such as the branch anchor below:
 
 ```python
 baseline = step(capture_baseline_state, stack)
@@ -201,7 +202,9 @@ Docker-managed volume contents only, so services should keep durable,
 replay-relevant state in managed volumes and tolerate container restarts. Bind
 mounts are allowed as external host state and are not copied or restored;
 external volumes, read-only volume mounts, unsupported mount types, and
-multi-container services are rejected.
+multi-container services are rejected. Keep Docker-backed journey steps procedure-sized: tiny do/assert fragments add
+more boundaries, and only explicit `branch(start_from=...)` or positive `retry=...` boundaries should need Docker
+snapshot storage.
 
 ## Capture and Resume a Browser Session
 
@@ -250,7 +253,13 @@ from journeysdk import journey, step
 def browser_resume_journey() -> None:
     pause_seconds = 2.0
     session = step(login_and_capture_session)
-    result = step(continue_authenticated_dashboard, session, pause_seconds)
+    result = step(
+        continue_authenticated_dashboard,
+        session,
+        pause_seconds,
+        retry=1,
+        retry_delay=0,
+    )
     step(assert_protected_action_complete, result)
 ```
 
@@ -311,6 +320,8 @@ Plan
 
 Execution
     case_1 resume
+      continue_authenticated_dashboard  start attempt=2
+      continue_authenticated_dashboard  ok attempt=2 duration=...
       assert_protected_action_complete  ok attempt=1 duration=...
     case_1 done steps=3 duration=...
   Summary: 1 journey executed, 1 case executed, 0 failed
@@ -319,7 +330,8 @@ Execution
 Additional pretty stdout:
 
 ```console
-The protected action completed. After a graceful Ctrl-C, saved completed browser steps are reused. After a forceful Ctrl-C, continue_authenticated_dashboard() restarts with the same saved JourneyBrowserPage instead of logging in again.
+The protected action completed. Positive retry made continue_authenticated_dashboard() an explicit replay boundary, so
+interrupted runs restart that procedure with the same saved JourneyBrowserPage instead of logging in again.
 ```
 
 If you press Ctrl-C a second time, Journey stops the dirty browser step now. Browser cleanup is best-effort and the
@@ -328,7 +340,7 @@ step restarts on the next run with the saved `JourneyBrowserPage` input:
 ```console
       continue_authenticated_dashboard  start attempt=1
 Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
-Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.
+Ctrl-C received again. Stopping now; this step will restart from the nearest replay boundary on resume.
 Warning: continue_authenticated_dashboard interrupted after ... (KeyboardInterrupt)
 Interrupted: Journey execution was interrupted before it finished.
 Hint: Run the same command again to resume from saved progress.
@@ -388,8 +400,8 @@ to disable memory for one prompt. Use `--no-memory` when you want to run without
 
 - Browser logic stays inside normal Python functions. Journey does not wrap browser automation in a separate DSL.
 - The same journey can branch into a webhook case and a local file case.
-- `JourneyBrowserPage` is just another step value. Returning it lets Journey save it at a step boundary, close it,
-  rehydrate it, and pass it into later steps.
+- `JourneyBrowserPage` is just another step value. Returning it lets Journey save it only when an explicit replay
+  boundary needs to close, rehydrate, and pass it into later steps.
 - `JourneyBrowserPage.prompt(...)` works on a live page handle and returns either plain text or explicit structured
   output instead of mutating the saved-page semantics of the original handle.
 - Steps that open a page but return other data should close the page explicitly, as shown in `continue_authenticated_dashboard()`.

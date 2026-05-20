@@ -1133,7 +1133,7 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
 
     assert second_exit == 0
     assert "Development mode stopped after step publish attempt=2 ok." in second_logs
-    assert _event_lines(events_file) == ["prepare", "publish", "publish"]
+    assert _event_lines(events_file) == ["prepare", "publish", "prepare", "publish"]
 
     third_exit = main(["--file", "flow.py", "--develop-step", "cleanup"])
     third_logs = capsys.readouterr().out
@@ -1143,6 +1143,9 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     assert _event_lines(events_file) == [
         "prepare",
         "publish",
+        "prepare",
+        "publish",
+        "prepare",
         "publish",
         "cleanup",
     ]
@@ -1325,8 +1328,8 @@ def test_execute_develop_step_closes_returned_handles_after_retry_prompt(
         for index, line in enumerate(lines)
         if line == "exit_publish"
     ]
-    assert len(publish_indices) == 2
-    assert len(exit_indices) == 2
+    assert len(publish_indices) == 3
+    assert len(exit_indices) == 3
     assert lines.index("prompt_retry") < exit_indices[0] < publish_indices[1]
     assert lines.index("prompt_continue") < exit_indices[1]
 
@@ -1598,10 +1601,10 @@ def test_execute_develop_step_retry_reloads_changed_step(
     log_output = captured.out
     assert exit_code == 0
     assert "Reloaded and recompiled flow.py:flow after retry." in log_output
-    assert events_file.read_text(encoding="utf-8").splitlines() == ["old", "new"]
+    assert events_file.read_text(encoding="utf-8").splitlines() == ["old", "new", "new"]
 
 
-def test_execute_develop_step_continue_reloads_later_step_without_rerunning_prior_steps(
+def test_execute_develop_step_continue_reloads_later_step_from_replay_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1640,7 +1643,7 @@ def test_execute_develop_step_continue_reloads_later_step_without_rerunning_prio
         """,
     )
 
-    prompts = iter(["c", "c"])
+    prompts = iter(["c", "c", "c", "c"])
 
     def fake_input(prompt: str = "") -> str:
         print(prompt, end="")
@@ -1692,6 +1695,13 @@ def test_execute_develop_step_continue_reloads_later_step_without_rerunning_prio
     assert events_file.read_text(encoding="utf-8").splitlines() == [
         "prepare",
         "publish",
+        "prepare",
+        "publish",
+        "prepare",
+        "publish",
+        "cleanup_new",
+        "prepare",
+        "publish",
         "cleanup_new",
     ]
 
@@ -1730,7 +1740,7 @@ def test_execute_develop_step_restarts_when_already_run_step_changes(
         """,
     )
 
-    prompts = iter(["c", "c"])
+    prompts = iter(["c", "c", "c", "c"])
 
     def fake_input(prompt: str = "") -> str:
         print(prompt, end="")
@@ -1779,6 +1789,8 @@ def test_execute_develop_step_restarts_when_already_run_step_changes(
         "publish",
         "prepare_new",
         "publish",
+        "prepare_new",
+        "publish",
     ]
 
 
@@ -1821,7 +1833,7 @@ def test_execute_develop_step_accepts_future_plan_changes_after_continue(
         """,
     )
 
-    prompts = iter(["c", "c", "c"])
+    prompts = iter(["c", "c", "c", "c", "c"])
 
     def fake_input(prompt: str = "") -> str:
         print(prompt, end="")
@@ -1874,9 +1886,20 @@ def test_execute_develop_step_accepts_future_plan_changes_after_continue(
     output = captured.out
     log_output = captured.out
     assert exit_code == 0
-    assert "restarting case_1" not in log_output
+    assert "restarting case_1" in log_output
     assert "Development mode paused after step extra attempt=1 ok." in output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
+        "prepare",
+        "publish",
+        "prepare",
+        "publish",
+        "prepare",
+        "publish",
+        "extra",
+        "prepare",
+        "publish",
+        "extra",
+        "cleanup",
         "prepare",
         "publish",
         "extra",
@@ -1976,7 +1999,7 @@ def test_execute_develop_step_state_resume_reloads_future_change(
         """,
     )
 
-    prompts = iter(["c", "c"])
+    prompts = iter(["c", "c", "c", "c"])
 
     def resume_input(prompt: str = "") -> str:
         print(prompt, end="")
@@ -1999,6 +2022,13 @@ def test_execute_develop_step_state_resume_reloads_future_change(
     assert second_exit == 0
     assert "Reloaded and recompiled flow.py:flow after continue." in log_output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
+        "prepare",
+        "publish",
+        "prepare",
+        "publish",
+        "prepare",
+        "publish",
+        "cleanup_new",
         "prepare",
         "publish",
         "cleanup_new",
@@ -2380,6 +2410,7 @@ def test_execute_no_state_update_reads_without_persisting_progress(
     assert _event_lines(events_file) == [
         "prepare",
         "work_ready",
+        "prepare",
         "work_ready",
         "finish",
     ]
@@ -2504,6 +2535,7 @@ def test_execute_migrates_legacy_default_state_file(
     assert _event_lines(events_file) == [
         "prepare",
         "work_ready",
+        "prepare",
         "work_ready",
     ]
 
@@ -2582,27 +2614,23 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
     assert _event_lines(events_file) == [
         "publish",
         "after_signal",
-        "store_open",
         "exit",
-        "store_closed",
     ]
 
     second_exit = main(["--file", "flow.py"])
     second_capture = capsys.readouterr()
 
     assert second_exit == 0
-    assert "publish                       start attempt=2" not in second_capture.out
+    assert "publish" in second_capture.out
     assert "finish" in second_capture.out
-    assert "ok attempt=1 duration=" in second_capture.out
+    assert "ok attempt=2 duration=" in second_capture.out
     events = _event_lines(events_file)
-    assert events[:5] == [
+    assert events[:3] == [
         "publish",
         "after_signal",
-        "store_open",
         "exit",
-        "store_closed",
     ]
-    assert events.count("publish") == 1
+    assert events.count("publish") == 2
     assert "finish_True" in events
     assert events.index("exit") < events.index("finish_True")
 
@@ -2666,7 +2694,10 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
 
     assert first_exit == 130
     assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_capture.out
-    assert "Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume." in first_capture.out
+    assert (
+        "Ctrl-C received again. Stopping now; this step will restart from the nearest replay boundary on resume."
+        in first_capture.out
+    )
     assert "Warning: publish interrupted after" in first_capture.out
     first_events = _event_lines(events_file)
     runtime_seed = first_events[0].rsplit("_", 1)[1]
@@ -2681,13 +2712,16 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
     assert second_exit == 0
     assert "publish" in second_capture.out
     assert "ok attempt=2 duration=" in second_capture.out
-    assert _event_lines(events_file) == [
+    final_events = _event_lines(events_file)
+    resumed_seed = final_events[2].rsplit("_", 1)[1]
+    assert final_events == [
         f"publish_{runtime_seed}",
         "after_first_signal",
-        f"publish_{runtime_seed}",
-        f"finish_{runtime_seed}",
+        f"publish_{resumed_seed}",
+        f"finish_{resumed_seed}",
     ]
-    assert int(seed_file.read_text(encoding="utf-8")) > int(runtime_seed)
+    assert int(resumed_seed) > int(runtime_seed)
+    assert int(seed_file.read_text(encoding="utf-8")) >= int(resumed_seed)
 
 
 def test_execute_state_resume_streams_case_resume_in_pretty_mode(

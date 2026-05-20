@@ -68,11 +68,11 @@ uv run journey
 With persistent state, Ctrl-C has two levels:
 
 - First Ctrl-C is graceful. Journey prints `Ctrl-C received. Finishing the active step so Journey can save progress.
-  Press Ctrl-C again to stop now.`, lets the active step reach post-exit, saves progress, and stops. The same command
-  resumes after that completed step.
-- Second Ctrl-C is forceful. Journey prints `Ctrl-C received again. Stopping now; this step will restart from saved
-  inputs on resume.`, stops the dirty step as soon as it can, and resumes later by restarting that step from saved
-  inputs.
+  Press Ctrl-C again to stop now.`, lets the active step reach post-exit, saves progress, and stops.
+- Second Ctrl-C is forceful. Journey prints `Ctrl-C received again. Stopping now; this step will restart from the
+  nearest replay boundary on resume.`, stops the dirty step as soon as it can, and resumes later from the nearest
+  explicit `branch(start_from=...)` or positive `retry=...` boundary. If there is no explicit boundary, the case starts
+  again from the beginning.
 
 With `--no-state`, Ctrl-C stops the run immediately and Journey cannot resume it. Use `--no-state-update` when a run
 should read existing state but leave the state file unchanged.

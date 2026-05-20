@@ -6,7 +6,7 @@ run needs to stop cleanly and resume from saved state.
 This chapter covers both cases:
 
 - retries when a step needs to poll or replay from an earlier step boundary
-- default state when a run is interrupted and you want to resume from a step boundary later
+- default state when a run is interrupted and you want to resume from the nearest explicit replay boundary later
 
 ## Three Retry Shapes
 
@@ -50,17 +50,17 @@ def retry_from_step_anchor_journey() -> None:
     step(assert_anchor_retry_ready, result)
 ```
 
-Those three journeys represent the three most common retry boundaries:
+Those three journeys represent the three most common retry boundaries. Retry is disabled by default; it is active only
+when `retry` is explicitly greater than `0`.
 
 - retry only the failing step
 - retry from an earlier step result
 - retry from an earlier setup step and replay everything from that step
 
-Step-anchor replay follows the same rule as persistent state: Journey reuses saved step
-bindings before the replay boundary, then reruns from the anchor step. If one of
-those values needs custom side effects, put that logic on a module-level value
-type with `__store__` / `__restore__` as described in the README's Journey
-Rehydration Protocol section.
+Step-anchor replay follows the same rule as persistent state: Journey stores only the replay closure needed for the
+explicit boundary, then reruns from the anchor step. If one of those saved values needs custom side effects, put that
+logic on a module-level value type with `__store__` / `__restore__` as described in the README's Journey Rehydration
+Protocol section.
 
 That matters when the replayable value wraps external state instead of being a
 plain pickleable object:
@@ -86,9 +86,8 @@ def retry_with_external_state() -> None:
     step(wait_until_ready, context, retry=1, retry_delay=0, retry_from=anchor)
 ```
 
-  stores step results before the replay boundary and reuses them on ...
-retries and resume, so the same external-state logic works for step-anchor
-rewinds and persistent restores.
+Journey stores step results before the replay boundary only when they must be skipped or restored later. Values at or
+after the replay boundary are rerun instead of restored.
 
 ### Retry the Current Step
 
@@ -179,14 +178,14 @@ def wait_for_resume_signal(
     pause_seconds: float,
 ) -> dict[str, str]:
     _tutorial_note(
-        "wait_for_resume_signal() is starting with saved ticket "
-        f"{ticket['ticket_id']}. journey resumes at the step boundary, so this step "
-        "restarts from the top on resume with the same saved inputs."
+        "wait_for_resume_signal() is starting with ticket "
+        f"{ticket['ticket_id']}. This journey has no explicit replay boundary, so "
+        "a forceful interruption restarts from the case beginning."
     )
     _tutorial_note(
         f"Press Ctrl-C once during the next {pause_seconds:.1f} seconds to stop "
         "gracefully after this step reaches post-exit. Press Ctrl-C a second time "
-        "to stop now; Journey will rerun this step later from saved inputs."
+        "to stop now; Journey will rerun from the nearest explicit replay boundary."
     )
     time.sleep(pause_seconds)
     return ticket
@@ -201,9 +200,10 @@ def resume_journey() -> None:
 ```
 
 The key rule is that Journey resumes at a step boundary, not in the middle of a function body. In CLI runs with
-persistent state, first Ctrl-C is graceful: Journey lets the active step finish storage, exit returned handles, and stop at
-post-exit. Press Ctrl-C a second time to stop now; Journey interrupts the dirty step, and on the next run restarts
-that step from the top with saved inputs. With `--no-state`, Ctrl-C stops immediately and cannot resume.
+persistent state, first Ctrl-C is graceful: Journey lets the active step finish, exit returned handles, and stop at
+post-exit. Press Ctrl-C a second time to stop now; Journey interrupts the dirty step, and on the next run restarts from
+the nearest explicit replay boundary. With no `branch(start_from=...)` or positive `retry=...` boundary, that means the
+case starts from the beginning. With `--no-state`, Ctrl-C stops immediately and cannot resume.
 
 ### Reset the Demo State
 
@@ -245,7 +245,7 @@ wait_for_resume_signal() is starting with saved ticket ticket-001. ...
 Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step reaches post-exit. ...
 ```
 
-### Second Run After Graceful Ctrl-C: Continue After the Completed Step
+### Second Run After Graceful Ctrl-C: Restart From the Case Boundary
 
 ```bash
 uv run journey --file docs/resume_journey/resume_journey.py
@@ -261,6 +261,8 @@ Plan
 
 Execution
     case_1 resume
+      load_support_ticket  ok attempt=2 duration=...
+      wait_for_resume_signal  ok attempt=2 duration=...
       assert_resumed_ticket  ok attempt=1 duration=...
     case_1 done steps=3 duration=...
   Summary: 1 journey executed, 1 case executed, 0 failed
@@ -269,7 +271,8 @@ Execution
 Additional pretty stdout:
 
 ```console
-The journey finished. After a graceful Ctrl-C, saved completed steps are reused. After a forceful Ctrl-C, wait_for_resume_signal() restarts with the same saved ticket while load_support_ticket() is reused.
+The journey finished. This demo has no explicit replay boundary, so an interrupted run restarts the case from the
+beginning. Add `branch(start_from=...)` or a positive `retry=...` when a step value should be saved and reused.
 ```
 
 ### If You Press Ctrl-C Twice
@@ -282,17 +285,19 @@ Expected pretty stdout includes:
 ```console
       wait_for_resume_signal  start attempt=1
 Ctrl-C received. Finishing the active step so Journey can save progress. Press Ctrl-C again to stop now.
-Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.
+Ctrl-C received again. Stopping now; this step will restart from the nearest replay boundary on resume.
 Warning: wait_for_resume_signal interrupted after ... (KeyboardInterrupt)
 Interrupted: Journey execution was interrupted before it finished.
 Hint: Run the same command again to resume from saved progress.
 ```
 
-On the next run, Journey reuses earlier successful steps and starts the dirty step again with the saved arguments:
+On the next run, this demo restarts from the case beginning because there is no explicit replay boundary:
 
 ```console
 Execution
     case_1 resume
+      load_support_ticket  start attempt=2
+      load_support_ticket  ok attempt=2 duration=...
       wait_for_resume_signal  start attempt=2
       wait_for_resume_signal  ok attempt=2 duration=...
       assert_resumed_ticket  ok attempt=1 duration=...
@@ -302,12 +307,16 @@ Execution
 ## What To Notice
 
 - Retries are explicit. Journey does not silently retry behind your back.
-- `retry_from=` is the switch that decides the replay boundary.
-- Step anchors define replay boundaries. Retry from a step reruns the anchor step; branch `start_from` resumes from the
-  anchor step's completed post-exit state.
-- Any value that Journey may need to replay later must be pickle-serializable or rehydratable.
-- Persistent state keeps successful step bindings so the rerun can skip what already succeeded.
-- First Ctrl-C in a default CLI run resumes after the completed step; second Ctrl-C restarts the dirty step from the
-  top later. With `--no-state`, Ctrl-C cannot resume. Journey never jumps into the middle of the function.
+- `retry=0` is the default. `retry_from=` or `retry_delay=` without a positive `retry` does not create a replay
+  boundary.
+- Step anchors define replay boundaries only when used by `branch(start_from=...)` or a step with positive `retry`.
+  Retry from a step reruns the anchor step; branch `start_from` resumes from the anchor step's completed post-exit
+  state.
+- Any value that Journey may need to skip or restore later must be pickle-serializable or rehydratable.
+- Persistent state keeps only the saved bindings needed by explicit replay boundaries. Ordinary completed steps are
+  rerun from the nearest boundary instead of restored.
+- First Ctrl-C in a default CLI run stops after the completed step; second Ctrl-C interrupts the dirty step. The next
+  run restarts from the nearest explicit replay boundary, or from the case beginning when there is no such boundary.
+  With `--no-state`, Ctrl-C cannot resume. Journey never jumps into the middle of the function.
 
 Continue with [04 Browser and Local Integrations](04-browser-and-local-integrations.md) when your steps need to open real pages, receive webhooks, or inspect local files.

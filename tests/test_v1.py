@@ -1229,7 +1229,72 @@ def test_execute_protocol_value_replays_from_step_anchor_on_retry():
         "refresh_seed-1",
         "poll_2_seed-1",
     ]
-    assert _ReplayValue.events[0] == "store_seed-1_step-anchor_binding_step:n_1"
+    assert _ReplayValue.events == []
+
+
+def test_execute_state_does_not_store_non_replayable_protocol_values(tmp_path):
+    state_file = tmp_path / "journey.state"
+    _ReplayValue.reset()
+
+    def create_value():
+        return _ReplayValue("seed-1", mode="plain")
+
+    def consume(value):
+        return value.seed == "seed-1"
+
+    def journey():
+        value = journey_sdk.step(create_value)
+        journey_sdk.step(consume, value)
+
+    journey_sdk.execute(journey, state=state_file)
+
+    assert _ReplayValue.events == []
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    assert payload["active_case"] is None
+
+
+def test_execute_retry_from_without_retry_does_not_store_replay_values(tmp_path):
+    state_file = tmp_path / "journey.state"
+    _ReplayValue.reset()
+
+    def create_value():
+        return _ReplayValue("seed-1", mode="disabled-retry")
+
+    def confirm(_value):
+        raise RuntimeError("not ready")
+
+    def journey():
+        value = journey_sdk.step(create_value)
+        journey_sdk.step(confirm, value, retry_from=value)
+
+    with pytest.raises(CallableExecutionError):
+        journey_sdk.execute(journey, state=state_file)
+
+    assert _ReplayValue.events == []
+
+
+def test_execute_same_step_retry_stores_only_replayable_inputs_in_state(tmp_path):
+    state_file = tmp_path / "journey.state"
+    _ReplayValue.reset()
+    attempts = {"poll": 0}
+
+    def poll(value):
+        attempts["poll"] += 1
+        if attempts["poll"] == 1:
+            raise RuntimeError("pending")
+        return value.seed
+
+    def finish():
+        return True
+
+    def journey():
+        token = _ReplayValue("seed-1", mode="same-step-input")
+        journey_sdk.step(poll, token, retry=1, retry_delay=0)
+        journey_sdk.step(finish)
+
+    journey_sdk.execute(journey, state=state_file)
+
+    assert _ReplayValue.events == ["store_seed-1_same-step-input_state_case_1"]
 
 
 def test_execute_step_supports_retryable_target_steps():
@@ -1287,8 +1352,6 @@ def test_execute_returned_step_exit_objects_run_after_storage_and_before_next_st
 
     assert _without_closed_store_events(events) == [
         "allocate",
-        "cleanup_first:store_open",
-        "cleanup_second:store_open",
         "cleanup_second:None",
         "cleanup_first:None",
         "use_True_True",
@@ -1359,7 +1422,6 @@ def test_execute_does_not_cleanup_unreturned_values_on_failure_retry_and_interru
     assert _without_closed_store_events(events) == [
         "flaky_1",
         "flaky_2",
-        "returned_2:store_open",
         "returned_2:None",
         "interrupted",
     ]
@@ -1387,7 +1449,7 @@ def test_execute_returned_step_exit_objects_defer_during_develop_step_pause(tmp_
 
     assert isinstance(paused, journey_executor._PausedExecution)
     assert "publish" in events
-    assert "cleanup:store_open" in events
+    assert "cleanup:store_open" not in events
     assert "cleanup:None" not in events
     paused.close_pending_exits()
     assert events[-1] == "cleanup:None"
@@ -1441,15 +1503,14 @@ def test_execute_step_lifecycle_reaches_post_exit_before_graceful_interrupt(tmp_
         "exit",
         "post-exit",
     ]
-    assert events[:3] == [
+    assert events[:2] == [
         "publish",
-        "cleanup:store_open",
         "cleanup:None",
     ]
 
     journey_sdk.execute(journey, state=state_file)
 
-    assert events.count("publish") == 1
+    assert events.count("publish") == 2
     assert "finish_True" in events
 
 
@@ -1474,7 +1535,7 @@ def test_execute_step_exit_cleanup_failure_fails_successful_step(tmp_path):
 
     assert "Step-exit cleanup failed" in str(exc_info.value)
     assert "close failed" in str(exc_info.value)
-    assert events == ["cleanup:store_open", "cleanup:None"]
+    assert events == ["cleanup:None"]
     assert attempts["publish"] == 1
 
 
@@ -1503,9 +1564,7 @@ def test_execute_step_exit_cleanup_failure_discards_successful_step_result(tmp_p
 
     assert attempts["publish"] == 2
     assert _without_closed_store_events(events) == [
-        "cleanup_1:store_open",
         "cleanup_1:None",
-        "cleanup_2:store_open",
         "cleanup_2:None",
     ]
 
@@ -1525,7 +1584,7 @@ def test_execute_does_not_cleanup_unreturned_values_after_success():
     assert events == []
 
 
-def test_execute_develop_step_continues_to_later_steps_without_rerunning_prior_steps(
+def test_execute_develop_step_continue_restarts_nonreplayable_prefix(
     tmp_path,
 ):
     state_file = tmp_path / "pause.state"
@@ -1573,7 +1632,7 @@ def test_execute_develop_step_continues_to_later_steps_without_rerunning_prior_s
     assert isinstance(report, journey_executor._PausedExecution)
     assert report.paused_step.label == "cleanup"
     assert report.paused_step.ok is True
-    assert events == ["prepare", "publish", "cleanup"]
+    assert events == ["prepare", "publish", "prepare", "publish", "cleanup"]
 
     report = journey_executor._execute_plan(
         journey,
@@ -1584,7 +1643,16 @@ def test_execute_develop_step_continues_to_later_steps_without_rerunning_prior_s
     )
 
     assert isinstance(report, journey_models.ExecutionReport)
-    assert events == ["prepare", "publish", "cleanup"]
+    assert events == [
+        "prepare",
+        "publish",
+        "prepare",
+        "publish",
+        "cleanup",
+        "prepare",
+        "publish",
+        "cleanup",
+    ]
     assert report.case_reports[0].stopped_at_label is None
     assert report.case_reports[0].replay_anchor is None
     assert _record_labels(report.case_reports[0]) == ["prepare", "publish", "cleanup"]
@@ -1671,7 +1739,7 @@ def test_execute_develop_step_retry_rewinds_same_step_and_refreshes_retry_budget
     assert isinstance(report, journey_executor._PausedExecution)
     assert report.paused_step.label == "finish"
     assert report.paused_step.ok is True
-    assert events == ["prepare", "poll_1", "poll_2", "poll_3", "finish"]
+    assert events == ["prepare", "poll_1", "poll_2", "poll_3", "poll_4", "finish"]
 
     report = journey_executor._execute_plan(
         journey,
@@ -1682,7 +1750,16 @@ def test_execute_develop_step_retry_rewinds_same_step_and_refreshes_retry_budget
     )
 
     assert isinstance(report, journey_models.ExecutionReport)
-    assert events == ["prepare", "poll_1", "poll_2", "poll_3", "finish"]
+    assert events == [
+        "prepare",
+        "poll_1",
+        "poll_2",
+        "poll_3",
+        "poll_4",
+        "finish",
+        "poll_5",
+        "finish",
+    ]
     assert _record_labels(report.case_reports[0]) == ["prepare", "poll", "finish"]
 
 
@@ -1787,6 +1864,8 @@ def test_execute_develop_step_retry_rewinds_from_step_result_anchor(
         "poll_2_req-2",
         "issue_req-3",
         "poll_3_req-3",
+        "issue_req-4",
+        "poll_4_req-4",
         "finish",
     ]
 
@@ -1806,6 +1885,11 @@ def test_execute_develop_step_retry_rewinds_from_step_result_anchor(
         "poll_2_req-2",
         "issue_req-3",
         "poll_3_req-3",
+        "issue_req-4",
+        "poll_4_req-4",
+        "finish",
+        "issue_req-5",
+        "poll_5_req-5",
         "finish",
     ]
 
@@ -2014,7 +2098,7 @@ def test_execute_branch_anchor_protocol_restore_failure_surfaces_context():
     with pytest.raises(CallableExecutionError) as exc_info:
         journey_sdk.execute(journey)
 
-    assert "saved step result 'step:n_1'" in str(exc_info.value)
+    assert "saved result for step 'create_value'" in str(exc_info.value)
     assert "could not restore" in str(exc_info.value)
 
 
@@ -2275,13 +2359,25 @@ def test_execute_resumes_interrupted_nonretryable_step(tmp_path):
 
     report = journey_sdk.execute(journey, state=state_file)
 
-    assert events == ["prepare", "work_1_ready", "work_2_ready", "finish_ready"]
+    assert events == [
+        "prepare",
+        "work_1_ready",
+        "prepare",
+        "work_2_ready",
+        "finish_ready",
+    ]
     assert _record_labels(report.case_reports[0]) == ["prepare", "work", "finish"]
     assert state_file.exists()
 
     resumed_report = journey_sdk.execute(journey, state=state_file)
 
-    assert events == ["prepare", "work_1_ready", "work_2_ready", "finish_ready"]
+    assert events == [
+        "prepare",
+        "work_1_ready",
+        "prepare",
+        "work_2_ready",
+        "finish_ready",
+    ]
     assert _record_labels(resumed_report.case_reports[0]) == ["prepare", "work", "finish"]
 
 
@@ -2317,12 +2413,13 @@ def test_execute_resumes_dirty_step_with_helper_args_kwargs_and_none_result(tmp_
     report = journey_sdk.execute(journey, state=state_file)
 
     first_seed = events[1].split("_")[2]
-    second_seed = events[2].split("_")[2]
+    second_seed = events[3].split("_")[2]
 
     assert events[0] == "prepare"
     assert events[1] == f"work_1_{first_seed}_True"
-    assert events[2] == f"work_2_{second_seed}_True"
-    assert first_seed == second_seed
+    assert events[2] == "prepare"
+    assert events[3] == f"work_2_{second_seed}_True"
+    assert first_seed != second_seed
     assert _record_labels(report.case_reports[0]) == ["prepare", "work"]
 
 
@@ -2528,8 +2625,7 @@ def test_execute_resumes_protocol_value_restore_with_saved_state(tmp_path):
         "poll_2_seed-1",
         "finish",
     ]
-    assert _ReplayValue.events[0] == "store_seed-1_resume_binding_step:n_1"
-    assert "restore_seed-1_resume_state_case_1" in _ReplayValue.events
+    assert _ReplayValue.events == []
     assert _record_labels(report.case_reports[0]) == ["create_value", "poll", "finish"]
 
 
@@ -2735,7 +2831,7 @@ def test_execute_resumes_interrupted_target_step_and_still_stops_at_target(tmp_p
 
     report = journey_sdk.execute(journey, step="publish", state=state_file)
 
-    assert events == ["prepare", "publish_1", "publish_2"]
+    assert events == ["prepare", "publish_1", "prepare", "publish_2"]
     assert report.case_reports[0].stopped_at_label == "publish"
     assert _record_labels(report.case_reports[0]) == ["prepare", "publish"]
     assert state_file.exists()
@@ -2778,6 +2874,7 @@ def test_execute_resumes_multi_case_run_without_rerunning_completed_cases(tmp_pa
         "branch_a",
         "shared",
         "branch_b_1",
+        "shared",
         "branch_b_2",
     ]
     assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
@@ -2938,10 +3035,10 @@ def test_execute_step_started_branches_restore_protocol_value_state():
 
     def shared_after_anchor(value):
         events.append(f"shared_{value.seed}")
-        return {"shared": value.seed}
+        return _ReplayValue(f"shared-{value.seed}", mode="branch-local")
 
     def finish(branch_name, shared):
-        events.append(f"finish_{branch_name}_{shared['shared']}")
+        events.append(f"finish_{branch_name}_{shared.seed}")
         return True
 
     def journey():
@@ -2956,13 +3053,15 @@ def test_execute_step_started_branches_restore_protocol_value_state():
 
     assert events == [
         "shared_seed-1",
-        "finish_a_seed-1",
+        "finish_a_shared-seed-1",
         "shared_seed-1",
-        "finish_b_seed-1",
+        "finish_b_shared-seed-1",
     ]
-    assert _ReplayValue.events[0] == "store_seed-1_branch_binding_step:n_1"
+    assert "store_seed-1_branch_binding_step:n_1" not in _ReplayValue.events
+    assert "store_seed-1_branch_state_case_1" in _ReplayValue.events
     assert "store_seed-1_branch_branch-anchor_step:n_1" in _ReplayValue.events
     assert "restore_seed-1_branch_branch-anchor_step:n_1" in _ReplayValue.events
+    assert all("branch-local" not in event for event in _ReplayValue.events)
 
 
 def test_execute_step_started_branches_keep_retry_counters_independent():
@@ -3085,7 +3184,7 @@ def test_execute_state_rejects_corrupt_json_state_file(tmp_path):
     assert exc_info.value.hint is not None
 
 
-def test_execute_state_writes_json_with_encoded_runtime_payloads(tmp_path):
+def test_execute_state_sanitizes_completed_step_record_results(tmp_path):
     state_file = tmp_path / "state.json"
 
     def produce():
@@ -3105,7 +3204,7 @@ def test_execute_state_writes_json_with_encoded_runtime_payloads(tmp_path):
     assert payload["version"] == 11
     encoded_result = payload["completed_case_reports"][0]["records"][0]["result"]
     assert encoded_result["encoding"] == "pickle-base64"
-    assert base64.b64decode(encoded_result["data"].encode("ascii"))
+    assert pickle.loads(base64.b64decode(encoded_result["data"].encode("ascii"))) is None
 
 
 def test_execute_state_writes_active_step_payloads_as_base64_json(tmp_path):
@@ -3128,26 +3227,10 @@ def test_execute_state_writes_active_step_payloads_as_base64_json(tmp_path):
     payload = json.loads(state_file.read_text(encoding="utf-8"))
     active_case = payload["active_case"]
     bindings = active_case["snapshot"]["step_bindings"]
-    encoded_payloads: list[str] = []
-
-    def collect_pickle_payloads(value: object) -> None:
-        if isinstance(value, dict):
-            if value.get("kind") == "pickle" and isinstance(value.get("payload"), str):
-                encoded_payloads.append(value["payload"])
-            for child in value.values():
-                collect_pickle_payloads(child)
-        elif isinstance(value, list):
-            for child in value:
-                collect_pickle_payloads(child)
-
-    collect_pickle_payloads(bindings)
-
-    assert encoded_payloads
-    for encoded in encoded_payloads:
-        assert base64.b64decode(encoded.encode("ascii"))
+    assert bindings == {}
 
 
-def test_execute_state_rejects_unserializable_step_result(tmp_path):
+def test_execute_state_sanitizes_unserializable_nonreplayable_step_result(tmp_path):
     state_file = tmp_path / "journey.state"
 
     def produce():
@@ -3156,10 +3239,12 @@ def test_execute_state_rejects_unserializable_step_result(tmp_path):
     def journey():
         journey_sdk.step(produce)
 
-    with pytest.raises(ExecutionStateSerializationError):
-        journey_sdk.execute(journey, state=state_file)
+    journey_sdk.execute(journey, state=state_file)
 
-    assert not state_file.exists()
+    assert state_file.exists()
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    encoded_result = payload["completed_case_reports"][0]["records"][0]["result"]
+    assert pickle.loads(base64.b64decode(encoded_result["data"].encode("ascii"))) is None
 
 
 def test_execute_rehydration_rejects_unserializable_step_args():

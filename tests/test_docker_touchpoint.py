@@ -1338,7 +1338,7 @@ def test_execute_step_started_branches_restore_docker_snapshot(
         if owner == "store_docker"
         and command[:3] == ["docker", "run", "--rm"]
         and any("cp -a --reflink=auto --sparse=always" in item for item in command)
-    ) >= 2
+    ) == 2
     assert sum(
         1
         for owner, command in runtime.commands
@@ -1346,7 +1346,7 @@ def test_execute_step_started_branches_restore_docker_snapshot(
     ) == 1
 
 
-def test_journey_resume_restores_docker_snapshot_with_saved_step_args(
+def test_journey_resume_reruns_docker_retry_anchor_without_snapshotting_args(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -1391,12 +1391,12 @@ def test_journey_resume_restores_docker_snapshot_with_saved_step_args(
         "poll",
         "finish",
     ]
-    assert list((tmp_path / "journey.state.artifacts").rglob("manifest.json"))
+    assert not list((tmp_path / "journey.state.artifacts").rglob("manifest.json"))
     assert sum(
         1
         for owner, command in runtime.commands
         if owner == "restore_docker" and "down" in command
-    ) >= 1
+    ) == 0
 
 
 @pytest.mark.skipif(

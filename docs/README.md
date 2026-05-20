@@ -28,8 +28,9 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 
 - The Docker Compose step-anchor snapshot example expects local `docker` and `docker compose` access when you execute it.
 - With default state, CLI Ctrl-C is graceful the first time: Journey lets the active step reach post-exit, then resumes
-  after that completed step. Press Ctrl-C again to stop now; the dirty step restarts later with saved inputs. Without
-  state, Ctrl-C stops immediately and cannot resume.
+  later from the nearest explicit replay boundary. Press Ctrl-C again to stop now; the dirty step restarts later from
+  that same boundary, or from the case beginning when no boundary exists. Without state, Ctrl-C stops immediately and
+  cannot resume.
 
 ## Touchpoints in One Minute
 

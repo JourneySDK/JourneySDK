@@ -33,9 +33,8 @@ Why this shape matters:
 - `branch(start_from=classified)` gives later execution a replay anchor at that step's post-exit boundary
 - each `branch(...)` arm becomes its own case
 
-External system state belongs on the step values that cross replay boundaries.
-If a step result needs custom rehydration behavior, define it at module top
-level and make that value implement the Journey rehydration protocol:
+External system state belongs on step values that cross explicit replay boundaries. If a step result needs custom
+rehydration behavior, define it at module top level and make that value implement the Journey rehydration protocol:
 
 ```python
 class BrowserSession:
@@ -52,11 +51,10 @@ if branch(start_from=session):
     ...
 ```
 
-  stores and restores replayable step values whenever execution truly ...
-rewinds to a step boundary, such as a step-started later branch. The protocol is
-documented in the README's Journey Rehydration Protocol section.
+Journey stores and restores replayable step values only when execution truly rewinds to an explicit replay boundary,
+such as a step-started later branch. The protocol is documented in the README's Journey Rehydration Protocol section.
 
-  compiles the branch structure internally before execution. A normal run executes every generated case; a ...
+Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
 targeted run uses the compiled labels to choose one case.
 
 ### Run Only the Branch That Reaches One Step
@@ -109,11 +107,10 @@ Development mode stopped after step assert_manual_review_path attempt=1 ok.
 
 Use `--develop-step` when you are actively editing one branch and want Journey to pause after the step boundary you
 care about. Rerun the same command to retry the paused step after editing code, or target the next step with the same
-state file to continue. Develop-step retries replay from the paused step's replay boundary, are unlimited, and do not
-spend the step's configured `step(..., retry=...)` budget. Add `--interactive` when you want Journey to keep the process
-open and prompt after each paused step. Journey reloads and recompiles the selected journey file before each retry or
-continue, so edits to the retried step or later steps are picked up immediately; if code that Journey would have reused
-from the already-run prefix changed, the selected case starts again from the beginning.
+state file to continue. Develop-step retry and continue replay from the paused step's nearest explicit replay boundary;
+when no explicit boundary exists, the selected case starts again from the beginning. Add `--interactive` when you want
+Journey to keep the process open and prompt after each paused step. Journey reloads and recompiles the selected journey
+file before each retry or continue, so edits are picked up immediately.
 
 ## Rehydrate Later Cases from a Step Anchor
 
@@ -139,9 +136,8 @@ def rehydration_journey() -> None:
 This example is intentionally small. It exists to show one idea clearly: in a full multi-case run, later branches can
 restart from a saved step anchor instead of rerunning earlier shared setup.
 
-If a value created by the anchor step implements `__store__` / `__restore__`,
-  restores that external state before the later branch continues from the ...
-anchor's post-exit boundary.
+If a value created by the anchor step implements `__store__` / `__restore__`, Journey restores that external state
+only when a later branch actually starts from the anchor's post-exit boundary.
 
 ### Target the Second Branch
 
@@ -173,10 +169,10 @@ retry behavior causes replay.
 ## What To Notice
 
 - Authoring stays sequential, even when execution becomes multi-case.
-- Branch `start_from` points to an earlier step result, and later branch cases resume from that step's post-exit
+- Branch `start_from` points to an earlier step result, and later branch cases can resume from that step's post-exit
   boundary.
-- External replay behavior lives on values themselves through `__store__` / `__restore__`, so retries, branch
-  rewinds, and persistent state all use the same rehydration path.
+- External replay behavior lives on values themselves through `__store__` / `__restore__`, but those hooks run only
+  when an explicit replay boundary needs that value.
 - `--step` picks one case. `--develop-step` picks one case and stops after the target so you can iterate faster.
 - Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.
 

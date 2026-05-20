@@ -20,7 +20,7 @@ The core value is:
   user flow. A journey might act through the browser touchpoint, then check email, webhooks, payment providers, CRM
   records, support/Ops queues, SMS, or back-office systems through other touchpoints.
 - **Interrupt long waits, resume later**: default persistent state lets a test stop while waiting on async work or a
-  third-party service and continue later from saved step state.
+  third-party service and continue later from an explicit replay boundary.
 - **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory for
   faster repeat runs, and keep tests editable by the same AI coding assistants that write application code.
 
@@ -124,9 +124,9 @@ retries via `step(..., retry=..., retry_delay=..., retry_from=...)`. Decorate mo
 paths without duplicating test code.
 
 Step functions are plain callables: pass every required input as explicit arguments, and return any value that later
-steps or resumed runs must reuse. The step boundary is the durable unit: successful steps can be reused, interrupted
-or retried steps restart from the top with saved inputs, and `branch(start_from=...)` creates a replay anchor that
-lets each branch reuse the same saved setup.
+explicit replay boundaries must reuse. Procedure-sized steps are the durable unit: `branch(start_from=...)` and steps
+with positive `retry=...` create replay anchors, while ordinary interrupted steps restart from the nearest replay
+boundary or from the case beginning.
 
 ## Touchpoints
 
@@ -196,18 +196,19 @@ retried.
 - **Case**: one linear executable path compiled from a journey, including one selected inline `if branch()` /
   `elif branch()` choice where the journey can split.
 - **Step**: one `step(...)` call and the plain Python function it runs.
-- **Step boundary**: the boundary before and after a step where Journey can save progress, stop, retry, or resume.
+- **Step boundary**: the boundary before and after a step where Journey can stop, report progress, retry, or resume.
 - **Touchpoint**: a system, service, or channel that participates in the tested journey, such as a browser, email,
   webhook, payment gateway, CRM, support/Ops system, SMS provider, or back-office process.
-- **State file**: the default `.journey/state.json` file that stores selected cases, completed case reports, active
-  progress, saved step bindings, and branch-anchor snapshots.
-- **Saved step binding**: stored step inputs, metadata, and optional result that Journey can use when replaying or
-  resuming.
+- **State file**: the default `.journey/state.json` file that stores selected cases, sanitized completed case reports,
+  active progress, replay step bindings, and branch-anchor snapshots.
+- **Saved step binding**: stored step inputs, metadata, and optional result that Journey can use at an explicit replay
+  boundary.
 - **Dirty step**: the step that had started but had not completed when execution was interrupted.
-- **Graceful interrupt**: the first Ctrl-C in a CLI run with persistent state. Journey lets the active step reach post-exit
-  so progress can be saved and the next run can continue after that step.
-- **Forced interrupt**: the second Ctrl-C in a CLI run with persistent state. Journey stops the active dirty step as soon as
-  it can; the next run restarts that step from saved inputs instead of jumping into the middle of the function.
+- **Graceful interrupt**: the first Ctrl-C in a CLI run with persistent state. Journey lets the active step reach
+  post-exit so progress can be saved and the next run can continue from the nearest replay boundary.
+- **Forced interrupt**: the second Ctrl-C in a CLI run with persistent state. Journey stops the active dirty step as
+  soon as it can; the next run restarts from the nearest replay boundary instead of jumping into the middle of the
+  function.
 - **Replay**: rerunning part of a case from a step boundary while reusing saved values before that boundary.
 - **Replay boundary**: the step index where replay starts.
 - **Replay anchor**: the step label reported for a targeted branch run or used by retry and branch replay.
@@ -225,11 +226,9 @@ retried.
 
 ## Journey Rehydration Protocol
 
-When retries, persistent state, or step-started branches need
-to reuse a step value across a replay boundary, Journey rehydrates that value
-from SDK-managed saved step bindings. Any step argument or return value that
-may cross one of those boundaries must be pickle-serializable or implement the
-Journey rehydration protocol:
+When positive retries or step-started branches need to reuse a step value across a replay boundary, Journey rehydrates
+that value from SDK-managed saved step bindings. Any step argument or return value that may cross one of those
+boundaries must be pickle-serializable or implement the Journey rehydration protocol:
 
 ```python
 class ExternalState:
@@ -446,23 +445,23 @@ The optional `output={...}` argument maps field names to descriptions or JSON-sc
 If the browser task cannot be completed because the page shows a blocking app state, such as a locked account or
 invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
 
-Interrupted executions resume by rerunning the same Journey command. When state persistence is enabled,
-Journey stores the step inputs and outputs it may need to replay later, so those values must be pickle-serializable.
-In the CLI, the first Ctrl-C during an active step is graceful: Journey logs that it is finishing the active step,
-lets that step finish storage and exit, then stops at post-exit. The next run continues after that completed step.
-Press Ctrl-C a second time to force an immediate stop; Journey treats the current step as dirty, and the next run
-restarts that step from the top with the same saved inputs. With `--no-state`, Ctrl-C stops immediately and the run
-cannot resume. Use `--no-state-update` to read existing progress without writing new updates. The same replay rule
-applies to steps that may be replayed because of retries or `branch(start_from=...)`. Default state is cleared after a
-clean completion; interrupted and paused runs keep `.journey/state.json` so the same command can resume.
+Interrupted executions resume by rerunning the same Journey command. When state persistence is enabled, Journey stores
+only the step inputs and outputs needed by explicit replay boundaries, so those values must be pickle-serializable or
+rehydratable. In the CLI, the first Ctrl-C during an active step is graceful: Journey logs that it is finishing the
+active step, lets that step finish and exit, then stops at post-exit. Press Ctrl-C a second time to force an immediate
+stop; Journey treats the current step as dirty. The next run restarts from the nearest explicit
+`branch(start_from=...)` or positive `retry=...` boundary, or from the case beginning when none exists. With
+`--no-state`, Ctrl-C stops immediately and the run cannot resume. Use `--no-state-update` to read existing progress
+without writing new updates. Default state is cleared after a clean completion; interrupted and paused runs keep
+`.journey/state.json` so the same command can resume.
 
 ## How it works
 
 1. Write one journey spec in Python using `journey`, `step`, `branch`, and documented helpers from
    `journeysdk.touchpoints`.
 2. Run `journey`, which compiles branch choices into linear executable cases and executes them.
-3. Use `branch(start_from=...)`, retries, and state files to replay from durable step boundaries instead of rerunning
-   every expensive setup step.
+3. Use `branch(start_from=...)`, positive retries, and state files to replay from explicit durable boundaries instead
+   of rerunning every expensive setup step.
 4. Rerun the same command to resume a long test interrupted while waiting on async work or a third-party service.
 5. Use `--step` or `--develop-step` when you only want the case that reaches one target step label.
 6. Use `page.prompt(..., memory=...)` when a browser step is easier to describe than hand-maintain with selectors.
@@ -496,8 +495,8 @@ selected case changed, Journey starts that case over so the reused prefix is not
 
 - **One journey spec for all paths**: author the full user journey once and let `branch()` compile the executable
   cases.
-- **Replay from a step**: use `branch(start_from=...)`, retries, and targeted runs to reuse saved setup from durable
-  step boundaries.
+- **Replay from a step**: use `branch(start_from=...)` and positive retries to reuse saved setup from durable replay
+  boundaries.
 - **Interrupt long waits, resume later**: keep long journeys restartable by saving progress between steps by default.
 - **Touchpoints for external tests**: integrate hosted inboxes, webhooks, browser pages, Docker snapshots, and
   app-specific channel or service code without forcing them into a custom DSL.
@@ -523,8 +522,9 @@ Execute with default persisted state so Ctrl-C can be resumed later:
 uv run journey
 ```
 
-Press Ctrl-C once to stop after the active step is saved, or press it a second time to stop now and restart the dirty
-step from saved inputs on resume. Use `--no-state` for a one-off run that should not read or write state.
+Press Ctrl-C once to stop after the active step reaches post-exit, or press it a second time to stop now and restart
+from the nearest explicit replay boundary on resume. Use `--no-state` for a one-off run that should not read or write
+state.
 
 Execute only the case that reaches a target step label:
 

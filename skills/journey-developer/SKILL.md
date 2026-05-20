@@ -21,7 +21,7 @@ Do not use this skill for generic Python scripts, generic unit tests, or unrelat
 Official touchpoints live under `journeysdk.touchpoints`. They are ordinary Python helpers that return step callables or
 serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted
 resources while steps execute, and make returned values serializable or rehydratable when they cross replay boundaries
-for retry, branch, or persistent-state behavior.
+for positive retry or branch-start behavior.
 
 - `journeysdk.touchpoints.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
 - `journeysdk.touchpoints.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
@@ -67,16 +67,17 @@ def account_journey() -> None:
 
 Choose step boundaries around meaningful durable procedures, not tiny "do" and "assert" fragments. A step should
 usually complete one end-to-end unit of the user journey and verify the outcome it owns. This matters most for browser
-and Docker touchpoints, because every boundary can save browser state, rehydrate values, and create Docker snapshot
-artifacts. Use a separate assertion step only when that assertion is its own replayable procedure or a later step needs
-its result.
+and Docker touchpoints, because explicit replay boundaries can save browser state, rehydrate values, and create Docker
+snapshot artifacts. Use a separate assertion step only when that assertion is its own replayable procedure or a later
+step needs its result.
 
 Prefer stable function names because default step labels come from function names. When a label appears in docs, tests, state files, or CLI examples, keep it stable or update every reference in the same change.
 
-Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay. Use
-`branch(start_from=step_result)` for branch replay anchors and branch-anchor snapshots. Keep values that cross replay boundaries
-pickle-serializable or implement the Journey rehydration protocol with top-level classes and explicit `__store__` /
-`__restore__` methods.
+Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay, but remember that retry is active
+only when `retry` is explicitly greater than `0`; `retry_from=` or `retry_delay=` alone does not create a replay
+boundary. Use `branch(start_from=step_result)` for branch replay anchors and branch-anchor snapshots. Keep values that
+cross explicit replay boundaries pickle-serializable or implement the Journey rehydration protocol with top-level
+classes and explicit `__store__` / `__restore__` methods.
 
 ## Run Journeys
 
@@ -96,11 +97,11 @@ Journey-owned output goes through `journeysdk.logger` and writes to stdout. The 
 use `--output structured` for `[journey]` logfmt records or `--output jsonl` for JSON Lines. Use
 `--log-level debug|info|warning|error|off` to tune visibility; default `info` is usually best for local and agent runs.
 
-Journey persists execution state by default whenever a run may need to resume after interruption or preserve successful
-step bindings. In CLI runs, first Ctrl-C lets the active step finish storage, exit returned handles, and stop at
-post-exit; rerunning resumes after that step. Press Ctrl-C again to stop now; the dirty step later restarts from the top
-with saved inputs. Use `--no-state` for one-off runs that should not resume, and `--no-state-update` when a run should
-read existing state without writing updates:
+Journey persists execution state by default, but rehydratable values are stored only for explicit replay boundaries:
+`branch(start_from=...)` and steps with positive `retry=...`. In CLI runs, first Ctrl-C lets the active step finish,
+exit returned handles, and stop at post-exit. Press Ctrl-C again to stop now; the dirty step later restarts from the
+nearest explicit replay boundary, or from the case beginning when none exists. Use `--no-state` for one-off runs that
+should not resume, and `--no-state-update` when a run should read existing state without writing updates:
 
 ```bash
 uv run journey --file docs/resume_journey/resume_journey.py
@@ -135,10 +136,10 @@ uv run journey --file path/to/journey.py --develop-step target_label
 ```
 
 If the paused step failed, retry the same paused step first; continuing to a later label is invalid until the failed
-step succeeds. Develop-step retry replays from the paused step's replay boundary; continue reuses the saved prefix and
-moves to the next step boundary. Retry/continue reloads and recompiles the journey file, so code edits are picked up
-without a long-lived process. Avoid `--interactive` for non-human agent runs; reserve it for a person who wants an
-in-process continue/retry prompt.
+step succeeds. Develop-step retry or continue replays from the paused step's nearest explicit replay boundary; when no
+explicit boundary exists, it restarts from the case beginning. Retry/continue reloads and recompiles the journey file,
+so code edits are picked up without a long-lived process. Avoid `--interactive` for non-human agent runs; reserve it
+for a person who wants an in-process continue/retry prompt.
 
 ## Maintain Journeys
 

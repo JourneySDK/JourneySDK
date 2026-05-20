@@ -224,7 +224,7 @@ def test_cloud_webhook_journey_supports_targeted_execution(monkeypatch: pytest.M
         assert targeted_report.case_reports[0].replay_anchor == "get_webhook_invoice_paid"
 
 
-def test_cloud_webhook_endpoint_handle_survives_resume(
+def test_cloud_webhook_endpoint_reruns_without_explicit_replay_boundary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -283,4 +283,4 @@ def test_cloud_webhook_endpoint_handle_survives_resume(
             "assert_webhook",
         ]
         assert len(seen_endpoint_ids) == 2
-        assert seen_endpoint_ids[0] == seen_endpoint_ids[1]
+        assert seen_endpoint_ids[0] != seen_endpoint_ids[1]

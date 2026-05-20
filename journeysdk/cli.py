@@ -128,13 +128,14 @@ class _CliStepInterruptController:
         self._forced_interrupt_requested = True
         if self._pending_interrupt and not self._forced_interrupt_logged:
             self._forced_interrupt_logged = True
+            message = (
+                "Ctrl-C received again. Stopping now; this step will restart "
+                "from the nearest replay boundary on resume."
+            )
             _CLI_LOGGER.warning(
                 "forced_interrupt_requested",
-                "Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.",
-                pretty=pretty_line(
-                    "Ctrl-C received again. Stopping now; this step will restart from saved inputs on resume.",
-                    style="warning",
-                ),
+                message,
+                pretty=pretty_line(message, style="warning"),
                 phase=self._phase,
             )
         self._start_forced_interrupt_cleanup()
