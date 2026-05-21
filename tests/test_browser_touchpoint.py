@@ -609,11 +609,17 @@ def _run_code(code: str) -> dict[str, object]:
     )
 
 
-def _fail_session(reason: str) -> dict[str, object]:
-    return _prompt_action_call(
-        "journey_fail_session",
-        {"reason": reason},
-    )
+def _finalization(
+    output: str | dict[str, object],
+    *,
+    success: bool = True,
+    reason: str = "",
+) -> dict[str, object]:
+    return {
+        "success_criteria_met": success,
+        "failure_reason": reason,
+        "output": output,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -1749,7 +1755,7 @@ def test_journey_browser_prompt_rejects_blank_instruction(monkeypatch):
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
-        lambda model: _FakeLangChainPromptModel(["finish()", "done"]),
+        lambda model: _FakeLangChainPromptModel(["done"]),
     )
 
     with pytest.raises(ValueError, match="non-blank instruction"):
@@ -1863,6 +1869,7 @@ def test_journey_browser_prompt_delegates_action_execution_to_langchain_agent():
     assert "PromptEngineSession" in source
     assert "from langchain.chat_models import init_chat_model" in engine_source
     assert "importlib.import_module" not in source
+    assert "journey_fail_session" not in source
     assert "create_agent" in engine_source
     assert "_build_agent_middleware" not in source
     assert "wrap_model_call" not in source
@@ -1910,7 +1917,10 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
             _run_code('page.locator("#sign-in").click(timeout=timeout_ms)'),
             _run_code("switch_page(1)"),
             "The opened popup title is Welcome popup.",
-        ]
+        ],
+        structured_responses=[
+            _finalization("The opened popup title is Welcome popup."),
+        ],
     )
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -1927,11 +1937,11 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
     assert result == "The opened popup title is Welcome popup."
     assert len(fake_model.calls) == 3
     assert all(
-        "Return whether the original browser task is completed."
+        "Return the finalization object using this schema"
         not in call["messages"][-1]["content"][0]["text"]
         for call in fake_model.calls
     )
-    assert not fake_model.structured_calls
+    assert len(fake_model.structured_calls) == 1
     assert not hasattr(journey_browser_prompt, "_COLLECT_ELEMENTS_SCRIPT")
     first_prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-rendered-html>" in first_prompt_text
@@ -1955,7 +1965,10 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
     assert "Executed steps JSON:" not in final_prompt_text
     assert '"event": "action"' in final_prompt_text
     assert '"action_type": "python"' in final_prompt_text
-    assert "return the final answer as plain text" in final_prompt_text
+    assert "Final return value requested: plain text" in final_prompt_text
+    finalization_prompt_text = fake_model.structured_calls[0]["messages"][1]["content"][0]["text"]
+    assert "Return the finalization object using this schema" in finalization_prompt_text
+    assert "success_criteria_met" in finalization_prompt_text
     assert events == [
         ("prompt_rendered_html", "Login page"),
         ("prompt_screenshot", "Login page"),
@@ -2012,7 +2025,10 @@ def test_journey_browser_prompt_runs_action_work_on_prompt_thread(monkeypatch):
         [
             _run_code('page.locator("#sign-in").click(timeout=timeout_ms)'),
             "Done.",
-        ]
+        ],
+        structured_responses=[
+            _finalization("Done."),
+        ],
     )
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -2039,7 +2055,9 @@ def test_journey_browser_prompt_returns_structured_output(monkeypatch):
     fake_model = _FakeLangChainPromptModel(
         ["The popup summary is ready."],
         structured_responses=[
-            {"popup_title": "Welcome popup", "has_welcome_text": True},
+            _finalization(
+                {"popup_title": "Welcome popup", "has_welcome_text": True}
+            ),
         ],
     )
     monkeypatch.setattr(
@@ -2069,24 +2087,43 @@ def test_journey_browser_prompt_returns_structured_output(monkeypatch):
     agent_call = fake_model.calls[0]
     assert fake_model.structured_calls[0]["method"] == "json_schema"
     assert fake_model.structured_calls[0]["schema"] == {
-        "title": "journey_prompt_output",
-        "description": "Structured output for JourneyBrowserPage.prompt(...).",
+        "title": "journey_prompt_finalization",
+        "description": "Structured finalization for a Journey prompt task.",
         "type": "object",
         "properties": {
-            "popup_title": {
-                "type": "string",
-                "description": "The popup title.",
-            },
-            "has_welcome_text": {
+            "success_criteria_met": {
                 "type": "boolean",
-                "description": "Whether the popup says welcome.",
+                "description": "Whether the original instruction and all success criteria are satisfied.",
+            },
+            "failure_reason": {
+                "type": "string",
+                "description": (
+                    "Visible blocking message or concise expected-vs-observed "
+                    "explanation when success_criteria_met is false; otherwise an empty string."
+                ),
+            },
+            "output": {
+                "type": "object",
+                "description": "Output object to return when all success criteria are met.",
+                "properties": {
+                    "popup_title": {
+                        "type": "string",
+                        "description": "The popup title.",
+                    },
+                    "has_welcome_text": {
+                        "type": "boolean",
+                        "description": "Whether the popup says welcome.",
+                    },
+                },
+                "required": ["popup_title", "has_welcome_text"],
+                "additionalProperties": False,
             },
         },
-        "required": ["popup_title", "has_welcome_text"],
+        "required": ["success_criteria_met", "failure_reason", "output"],
         "additionalProperties": False,
     }
     final_prompt_text = agent_call["messages"][1]["content"][0]["text"]
-    assert "return the final answer using these output fields JSON" in final_prompt_text
+    assert "Final return value requested: JSON object with these output fields" in final_prompt_text
     assert "popup_title" in final_prompt_text
     assert "has_welcome_text" in final_prompt_text
 
@@ -2107,7 +2144,7 @@ def test_journey_browser_prompt_final_output_includes_visible_error_text(monkeyp
     fake_model = _FakeLangChainPromptModel(
         ["The visible error is ready."],
         structured_responses=[
-            {"error": ""},
+            _finalization({"error": ""}),
         ],
     )
     monkeypatch.setattr(
@@ -2131,14 +2168,14 @@ def test_journey_browser_prompt_final_output_includes_visible_error_text(monkeyp
     assert "<journey-visible-text>" in final_prompt_text
     assert "Password is incorrect. Try again, or use another method." in final_prompt_text
     assert (
-        "Do not return an empty string for such a field"
-        in fake_model.calls[0]["messages"][0]["content"]
+        "copy the visible message exactly when present"
+        in fake_model.structured_calls[0]["messages"][0]["content"]
     )
     assert ("prompt_wait_for_load_state", "Login", "networkidle", 2000) in events
     assert ("prompt_wait_for_timeout", "Login", 500) in events
 
 
-def test_journey_browser_prompt_finish_with_blocking_error_raises(
+def test_journey_browser_prompt_finalization_with_blocking_error_raises(
     monkeypatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -2159,9 +2196,10 @@ def test_journey_browser_prompt_finish_with_blocking_error_raises(
     )
     context.pages.append(page)
     fake_model = _FakeLangChainPromptModel(
-        [
-            _fail_session(reason),
-        ]
+        ["The sign-in attempt is blocked by a visible account lock message."],
+        structured_responses=[
+            _finalization("", success=False, reason=reason),
+        ],
     )
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -2178,15 +2216,20 @@ def test_journey_browser_prompt_finish_with_blocking_error_raises(
     log_output = capsys.readouterr().out
 
     assert len(fake_model.calls) == 1
+    assert len(fake_model.structured_calls) == 1
     prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-visible-text>" in prompt_text
     assert reason in prompt_text
+    finalization_prompt_text = fake_model.structured_calls[0]["messages"][1]["content"][0]["text"]
+    assert "success_criteria_met" in finalization_prompt_text
+    assert reason in finalization_prompt_text
     assert "AI prompt" in log_output
     assert "failed" in log_output
+    assert "finish" not in log_output
     assert not _prompt_memory_path(tmp_path, "sign-in").exists()
 
 
-def test_journey_browser_prompt_fail_action_raises_without_final_output(
+def test_journey_browser_prompt_failed_finalization_raises_without_memory(
     monkeypatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -2203,7 +2246,12 @@ def test_journey_browser_prompt_fail_action_raises_without_final_output(
         visible_texts={reason},
     )
     context.pages.append(page)
-    fake_model = _FakeLangChainPromptModel([_fail_session(reason)])
+    fake_model = _FakeLangChainPromptModel(
+        ["The page still shows a blocking sign-in state."],
+        structured_responses=[
+            _finalization("", success=False, reason=reason),
+        ],
+    )
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
@@ -2219,10 +2267,68 @@ def test_journey_browser_prompt_fail_action_raises_without_final_output(
     log_output = capsys.readouterr().out
 
     assert len(fake_model.calls) == 1
-    assert not fake_model.structured_calls
+    assert len(fake_model.structured_calls) == 1
     assert "AI prompt" in log_output
     assert "failed" in log_output
     assert not _prompt_memory_path(tmp_path, "sign-in").exists()
+
+
+def test_journey_browser_prompt_fails_when_expected_state_is_missing(
+    monkeypatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+    reason = "Expected two sidebar chats, but only one chat is visible."
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Hey Alfie",
+        url="http://example.test/chats/roof",
+        context=context,
+        events=events,
+        visible_texts={
+            "RECENT CHATS",
+            "repair a leaking roof",
+        },
+    )
+    context.pages.append(page)
+    fake_model = _FakeLangChainPromptModel(
+        [
+            (
+                "The chat has been successfully started. However, the task "
+                "expects two chats and I only see one chat in the sidebar."
+            ),
+        ],
+        structured_responses=[
+            _finalization("", success=False, reason=reason),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    with pytest.raises(RuntimeError, match="Expected two sidebar chats"):
+        page.prompt(
+            (
+                "Start chatting with Alfie - say you need to 'repair a leaking roof'. "
+                "Expect there are two chats in the 'Active chats' section in the sidebar."
+            ),
+            model="openai:gpt-4.1-mini",
+            memory="roof-chat",
+        )
+    log_output = capsys.readouterr().out
+
+    assert len(fake_model.calls) == 1
+    assert len(fake_model.structured_calls) == 1
+    finalization_prompt_text = fake_model.structured_calls[0]["messages"][1]["content"][0]["text"]
+    assert "Expect there are two chats" in finalization_prompt_text
+    assert "I only see one chat" in finalization_prompt_text
+    assert "success_criteria_met" in finalization_prompt_text
+    assert "finish" not in log_output
+    assert not (tmp_path / "roof-chat.memory.md").exists()
 
 
 def test_journey_browser_prompt_rejects_invalid_output_specs(monkeypatch):
@@ -2272,7 +2378,9 @@ def test_journey_browser_prompt_rejects_malformed_structured_output(monkeypatch)
         "_load_langchain_model",
         lambda model: _FakeLangChainPromptModel(
             ["The popup summary is ready."],
-            structured_responses=[{"popup_title": "Welcome", "extra": True}],
+            structured_responses=[
+                _finalization({"popup_title": "Welcome", "extra": True}),
+            ],
         ),
     )
 
@@ -2282,6 +2390,29 @@ def test_journey_browser_prompt_rejects_malformed_structured_output(monkeypatch)
             model="openai:gpt-4.1-mini",
             output={"popup_title": "The popup title."},
         )
+
+
+def test_journey_browser_prompt_rejects_malformed_finalization_output(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Welcome popup",
+        url="http://example.test/sign-in-popup",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: _FakeLangChainPromptModel(
+            ["The popup summary is ready."],
+            structured_responses=[{"completed": True, "output": "Welcome"}],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="missing fields"):
+        page.prompt("summarize the popup", model="openai:gpt-4.1-mini")
 
 
 def test_journey_browser_prompt_retries_rejected_python(
@@ -2315,7 +2446,10 @@ def test_journey_browser_prompt_retries_rejected_python(
                 'page.locator("#composer").fill("I need to fix a toilet", timeout=timeout_ms)'
             ),
             "Started the chat.",
-        ]
+        ],
+        structured_responses=[
+            _finalization("Started the chat."),
+        ],
     )
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -2438,7 +2572,10 @@ def test_journey_browser_prompt_compiles_and_replays_named_memory(
                     "Use the known-good password directly.",
                 ]
             ),
-        ]
+        ],
+        structured_responses=[
+            _finalization("Signed in."),
+        ],
     )
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -2501,7 +2638,12 @@ def test_journey_browser_prompt_compiles_and_replays_named_memory(
     ) in replay_events
     assert all("1212" not in repr(event) for event in replay_events)
 
-    third_model = _FakeLangChainPromptModel(["Done without memory."])
+    third_model = _FakeLangChainPromptModel(
+        ["Done without memory."],
+        structured_responses=[
+            _finalization("Done without memory."),
+        ],
+    )
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
@@ -2558,7 +2700,12 @@ def test_journey_browser_prompt_falls_back_when_memory_replay_fails(
         ],
     )
     context.pages.append(page)
-    model = _FakeLangChainPromptModel(["Recovered after fallback."])
+    model = _FakeLangChainPromptModel(
+        ["Recovered after fallback."],
+        structured_responses=[
+            _finalization("Recovered after fallback."),
+        ],
+    )
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
@@ -2633,7 +2780,12 @@ def test_journey_browser_prompt_validates_memory_sections_at_browser_boundary(
         events=events,
     )
     context.pages.append(page)
-    model = _FakeLangChainPromptModel(["Recovered after invalid memory."])
+    model = _FakeLangChainPromptModel(
+        ["Recovered after invalid memory."],
+        structured_responses=[
+            _finalization("Recovered after invalid memory."),
+        ],
+    )
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
@@ -2687,7 +2839,12 @@ def test_journey_browser_prompt_does_not_reuse_legacy_memory_shape(
         events=events,
     )
     context.pages.append(page)
-    model = _FakeLangChainPromptModel(["Done."])
+    model = _FakeLangChainPromptModel(
+        ["Done."],
+        structured_responses=[
+            _finalization("Done."),
+        ],
+    )
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
@@ -2714,7 +2871,12 @@ def test_journey_browser_prompt_respects_execute_no_memory(monkeypatch):
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
-        lambda model: _FakeLangChainPromptModel(["Done."]),
+        lambda model: _FakeLangChainPromptModel(
+            ["Done."],
+            structured_responses=[
+                _finalization("Done."),
+            ],
+        ),
     )
 
     def fail_memory_access(*args: object, **kwargs: object) -> object:
@@ -2978,7 +3140,12 @@ def test_journey_browser_prompt_retries_invalid_action_arguments(monkeypatch):
         events=events,
     )
     context.pages.append(page)
-    model = _FakeLangChainPromptModel([_run_code("   "), "Recovered."])
+    model = _FakeLangChainPromptModel(
+        [_run_code("   "), "Recovered."],
+        structured_responses=[
+            _finalization("Recovered."),
+        ],
+    )
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
@@ -3004,7 +3171,10 @@ def test_journey_browser_prompt_retries_invalid_python(monkeypatch):
     )
     context.pages.append(page)
     model = _FakeLangChainPromptModel(
-        [_run_code('page.locator("#sign-in"'), "Recovered."]
+        [_run_code('page.locator("#sign-in"'), "Recovered."],
+        structured_responses=[
+            _finalization("Recovered."),
+        ],
     )
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -3038,7 +3208,10 @@ def test_journey_browser_prompt_rejects_json_as_python_failure(monkeypatch):
             [
                 _run_code('{"action":"hover","target":"e1","value":null}'),
                 "Recovered.",
-            ]
+            ],
+            structured_responses=[
+                _finalization("Recovered."),
+            ],
         ),
     )
 
@@ -3060,7 +3233,12 @@ def test_journey_browser_prompt_rejects_blank_finish_then_recovers(monkeypatch):
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
-        lambda model: _FakeLangChainPromptModel([_run_code('finish("")'), "Done."]),
+        lambda model: _FakeLangChainPromptModel(
+            [_run_code('finish("")'), "Done."],
+            structured_responses=[
+                _finalization("Done."),
+            ],
+        ),
     )
 
     result = page.prompt("finish clearly", model="openai:gpt-4.1-mini")

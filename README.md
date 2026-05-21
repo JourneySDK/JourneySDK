@@ -448,8 +448,9 @@ want a run to ignore and avoid updating prompt memory, or `--no-memory-update` w
 without writing new updates.
 The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
 `dict[str, object]` return value instead of plain text.
-If the browser task cannot be completed because the page shows a blocking app state, such as a locked account or
-invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
+Expectation wording in the instruction, such as `Expect ...`, is treated as required success criteria. If the browser
+task cannot be completed or the current page does not satisfy those criteria, `page.prompt(...)` raises `RuntimeError`
+instead of returning successful prompt output.
 
 Interrupted executions resume by rerunning the same Journey command. When state persistence is enabled, Journey stores
 only the step inputs and outputs needed by explicit replay boundaries, so those values must be pickle-serializable or

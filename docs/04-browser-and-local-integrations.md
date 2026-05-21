@@ -388,8 +388,9 @@ def assert_prompt_result(result: dict[str, object]) -> bool:
     return True
 ```
 
-If the requested browser task cannot complete because the page shows a blocking app state, such as a locked account or
-invalid credentials, `page.prompt(...)` raises `RuntimeError` instead of returning successful prompt output.
+Expectation wording in the instruction, such as `Expect ...`, is treated as required success criteria. If the requested
+browser task cannot complete or the current page does not satisfy those criteria, `page.prompt(...)` raises
+`RuntimeError` instead of returning successful prompt output.
 
 By default, each `page.prompt(...)` inside a journey step gets a generated callsite memory file. The
 `memory="sign-in-popup"` argument gives this prompt an explicit memory file instead. After a successful run, Journey

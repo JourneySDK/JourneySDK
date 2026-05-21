@@ -56,18 +56,17 @@ JOURNEY_BROWSER_PROMPT_MODEL_ENV = "JOURNEY_BROWSER_PROMPT_MODEL"
 DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL = "anthropic:claude-sonnet-4-6"
 
 _PROMPT_RUN_CODE_ACTION_NAME = "journey_run_code"
-_PROMPT_FAIL_SESSION_ACTION_NAME = "journey_fail_session"
 _BROWSER_REPLAY_SECTION = "Replay code"
 _BROWSER_SUCCESS_CHECK_SECTION = "Success check code"
 _BROWSER_NOTES_SECTION = "Notes"
 
 _PROMPT_SYSTEM_MESSAGE = """You control a Playwright sync browser page with available actions.
 
-Use actions when the browser needs more work. When the requested browser task is complete, return the
-final answer directly.
+Use actions when the browser needs more work. When no more browser action is needed, return a concise
+completion signal describing the current visible result. A structured finalizer will decide whether the
+instruction succeeded and will produce the returned output.
 
 Use journey_run_code to execute one Python snippet against the active page.
-Use journey_fail_session when a visible page state prevents the requested browser task from completing.
 
 Available names:
 - page: the active Playwright sync Page
@@ -80,19 +79,16 @@ Rules:
 - Prefer robust Playwright locators such as get_by_role, get_by_text, get_by_label, and locator.
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
 - Use switch_page(index) before acting on a popup or tab listed in known pages.
-- Return the final answer directly only when the instruction is complete in the browser.
-- If the page shows a blocking app error or status, such as a locked account, invalid password, authorization failure,
-  or unavailable action, call journey_fail_session with the visible message instead of returning a final answer.
+- Treat all expectation wording in the instruction, such as "Expect ...", "should ...", and "must ...", as required
+  success criteria.
+- Do not return a completion signal until no more browser action is needed or possible.
 - Do not treat a failed sign-in, failed checkout, failed submission, or similar rejected user task as complete just
   because the page displays the final error state.
 - If the previous step was rejected, correct the action arguments or Python and try again.
 - If prompt memory is provided, use it as a hint from prior successful runs,
   but trust the current rendered HTML and screenshot over stale memory.
-- Use the rendered HTML, visible text, screenshot, known pages, and executed steps to answer the original instruction.
-- Base the final output on the current visible page state.
-If a requested output field asks for an error, validation message, warning, status, or problem, copy the visible
-message exactly when present. Do not return an empty string for such a field when the current visible page text or
-screenshot contains a matching message.
+- The completion signal should be factual and based on the rendered HTML, visible text, screenshot, known pages, and
+  executed steps.
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
@@ -118,6 +114,7 @@ Rules:
 - Keep only the successful path needed for the next run.
 - Remove rejected, failed, speculative, redundant, or superseded attempts.
 - If a later fallback corrected an earlier value, keep only the corrected value.
+- Success check code must assert all required success criteria from the instruction, including "Expect ..." clauses.
 - Prefer robust Playwright locators and pass timeout=timeout_ms to waits/actions.
 - Do not include screenshots, rendered HTML, hidden reasoning, or prose outside the requested sections.
 """
@@ -354,15 +351,7 @@ class _PromptSession:
                 lambda: self._run_code_tool(code, context=context)
             )
 
-        @tool(_PROMPT_FAIL_SESSION_ACTION_NAME)
-        def journey_fail_session(reason: str) -> list[dict[str, object]]:
-            """Stop the prompt because a visible page state blocks the requested browser task."""
-
-            return context.run_on_prompt_thread(
-                lambda: self._fail_session_tool(reason, context=context)
-            )
-
-        return [journey_run_code, journey_fail_session]
+        return [journey_run_code]
 
     def _replay_memory(
         self,
@@ -528,41 +517,6 @@ class _PromptSession:
         )
         context.record_action(step)
         return context.observation_or_stop(step_index=step_index)
-
-    def _fail_session_tool(
-        self,
-        reason: str,
-        *,
-        context: PromptActionContext,
-    ) -> list[dict[str, object]]:
-        step_index = context.next_step_index()
-        try:
-            normalized_reason = _require_text_value(
-                reason,
-                "JourneyBrowserPage.prompt(...) "
-                "journey_fail_session expects a non-blank reason string.",
-            )
-        except Exception as exc:
-            self._append_rejected_action(
-                context=context,
-                step_index=step_index,
-                action_type="tool",
-                target=_PROMPT_FAIL_SESSION_ACTION_NAME,
-                detail=_format_python_error(exc),
-            )
-            return context.observation_or_stop(step_index=step_index)
-        context.record_action(
-            _prompt_action_record(
-                step_index=step_index,
-                max_steps=self._max_steps,
-                page_index=self._active_page_index,
-                action_type="fail",
-                target=normalized_reason,
-                status="failed",
-                detail=normalized_reason,
-            )
-        )
-        context.fail_session(step_index=step_index, reason=normalized_reason)
 
     def _append_rejected_action(
         self,
@@ -1080,10 +1034,6 @@ def _describe_direct_function_call(call: ast.Call) -> str | None:
         return None
     if call.func.id == "switch_page":
         return f"switch to page {_call_arg_description(call, 0)}"
-    if call.func.id == "finish":
-        return "finish the browser action loop"
-    if call.func.id == "fail":
-        return f"fail the browser prompt with {_call_arg_description(call, 0)}"
     return None
 
 

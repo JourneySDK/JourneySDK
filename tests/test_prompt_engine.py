@@ -35,10 +35,49 @@ class _FakeAIMessage:
 
 
 class _FakePromptModel:
-    def __init__(self, responses: list[str | dict[str, object]]) -> None:
+    def __init__(
+        self,
+        responses: list[str | dict[str, object]],
+        *,
+        structured_responses: list[object] | None = None,
+    ) -> None:
         self._responses = list(responses)
+        self._structured_responses = list(structured_responses or [])
         self.calls: list[dict[str, object]] = []
+        self.structured_calls: list[dict[str, object]] = []
         self._response_index = 0
+
+    def with_structured_output(
+        self,
+        schema: dict[str, object],
+        *,
+        method: str | None = None,
+    ) -> _FakeStructuredPromptModel:
+        return _FakeStructuredPromptModel(self, schema, method)
+
+
+class _FakeStructuredPromptModel:
+    def __init__(
+        self,
+        prompt_model: _FakePromptModel,
+        schema: dict[str, object],
+        method: str | None,
+    ) -> None:
+        self._prompt_model = prompt_model
+        self._schema = schema
+        self._method = method
+
+    def invoke(self, messages: list[object]) -> object:
+        self._prompt_model.structured_calls.append(
+            {
+                "messages": list(messages),
+                "schema": self._schema,
+                "method": self._method,
+            }
+        )
+        if not self._prompt_model._structured_responses:
+            raise AssertionError("No fake structured LLM responses remaining.")
+        return self._prompt_model._structured_responses.pop(0)
 
 
 class _FakeAgent:
@@ -143,11 +182,29 @@ def _action_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _finalization(
+    output: str | dict[str, object],
+    *,
+    success: bool = True,
+    reason: str = "",
+) -> dict[str, object]:
+    return {
+        "success_criteria_met": success,
+        "failure_reason": reason,
+        "output": output,
+    }
+
+
 def test_prompt_engine_runs_action_adapter_and_persists_action_records(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    model = _FakePromptModel([_action_call("fake_echo", {"text": "hello"}), "done"])
+    model = _FakePromptModel(
+        [_action_call("fake_echo", {"text": "hello"}), "done"],
+        structured_responses=[
+            _finalization("done"),
+        ],
+    )
     action_records: list[JourneyLogRecord] = []
 
     def build_observation() -> PromptObservation:
@@ -230,6 +287,8 @@ def test_prompt_engine_runs_action_adapter_and_persists_action_records(
     assert "Executed steps JSON:" not in second_prompt_text
     assert '"event": "action"' in second_prompt_text
     assert "fake-visible-text" in first_prompt_text
+    assert len(model.structured_calls) == 1
+    assert model.structured_calls[0]["schema"]["title"] == "journey_prompt_finalization"
 
     entry = load_prompt_memory_entry(
         tmp_path / "fake.memory.md",

@@ -133,9 +133,6 @@ class PromptActionContext:
     def observation_or_stop(self, *, step_index: int) -> list[dict[str, object]]:
         return self._session.action_observation_or_stop(step_index=step_index)
 
-    def fail_session(self, *, step_index: int, reason: str) -> None:
-        self._session.raise_prompt_failed(step_index=step_index, reason=reason)
-
     def run_on_prompt_thread(self, callback: Callable[[], _T]) -> _T:
         return self._session.run_on_prompt_thread(callback)
 
@@ -300,12 +297,12 @@ class PromptEngineSession:
         if self._output_schema is None:
             output_section = [
                 "",
-                "When the task is complete, return the final answer as plain text.",
+                "Final return value requested: plain text.",
             ]
         else:
             output_section = [
                 "",
-                "When the task is complete, return the final answer using these output fields JSON:",
+                "Final return value requested: JSON object with these output fields:",
                 self._output_schema.prompt_text,
             ]
         prompt_text = "\n".join(
@@ -322,7 +319,9 @@ class PromptEngineSession:
                 *self._render_text_sections(observation.sections),
                 *output_section,
                 "",
-                "Use an available action to continue work, or return the final answer directly when complete.",
+                "Use an available action to continue work, or return a concise completion signal "
+                "when no more action is needed. The structured finalizer will decide whether "
+                "success criteria are met and produce the returned output.",
             ]
         )
         content = [
@@ -481,11 +480,12 @@ class PromptEngineSession:
         if self._before_final_observation is not None:
             self._before_final_observation()
         final_observation = self._build_observation()
-        final_output = self._parse_final_output(
+        step_index = len(self._action_records) + 1
+        final_output = self._finalize_output(
             response_text,
             observation=final_observation,
+            step_index=step_index,
         )
-        step_index = len(self._action_records) + 1
         self._logger.info(
             "prompt_finish",
             f"step {step_index}/{self._max_steps}: finished with output: "
@@ -507,20 +507,54 @@ class PromptEngineSession:
         )
         return final_output
 
-    def _parse_final_output(
+    def _finalize_output(
         self,
         response_text: str,
         *,
         observation: PromptObservation,
+        step_index: int,
     ) -> str | dict[str, object]:
-        if self._output_schema is None:
-            return response_text
-        structured_response = self._request_structured_output(
+        structured_response = self._request_finalization(
             completion_text=response_text,
             observation=observation,
         )
-        structured_output = _normalize_structured_output(
+        finalization_schema = self._finalization_schema()
+        finalization = _normalize_structured_output(
             structured_response,
+            schema=finalization_schema,
+            owner=self._owner,
+        )
+        success_criteria_met = finalization.get("success_criteria_met")
+        failure_reason = finalization.get("failure_reason")
+        if not isinstance(success_criteria_met, bool) or not isinstance(
+            failure_reason,
+            str,
+        ):
+            raise RuntimeError(
+                f"{self._owner} final structured output must include boolean "
+                "success_criteria_met and string failure_reason fields."
+            )
+        if not success_criteria_met:
+            self.raise_prompt_failed(
+                step_index=step_index,
+                reason=failure_reason,
+            )
+
+        raw_output = finalization.get("output")
+        if self._output_schema is None:
+            if not isinstance(raw_output, str):
+                raise RuntimeError(
+                    f"{self._owner} final structured output field 'output' "
+                    "must be a string when output=... is omitted."
+                )
+            return raw_output
+        if not isinstance(raw_output, dict):
+            raise RuntimeError(
+                f"{self._owner} final structured output field 'output' must "
+                "be an object matching output=...."
+            )
+        structured_output = _normalize_structured_output(
+            raw_output,
             schema=self._output_schema,
             owner=self._owner,
         )
@@ -530,23 +564,21 @@ class PromptEngineSession:
             visible_text=observation.visible_text,
         )
 
-    def _request_structured_output(
+    def _request_finalization(
         self,
         *,
         completion_text: str,
         observation: PromptObservation,
     ) -> object:
-        if self._output_schema is None:
-            raise RuntimeError(f"{self._owner} structured output was not configured.")
         if self._prompt_model is None:
             self._prompt_model = self._load_model(self._model)
         try:
             structured_model = self._prompt_model.with_structured_output(
-                self._output_schema.json_schema,
+                self._finalization_schema().json_schema,
                 method="json_schema",
             )
             return structured_model.invoke(
-                self._build_structured_output_messages(
+                self._build_finalization_messages(
                     completion_text=completion_text,
                     observation=observation,
                 )
@@ -558,7 +590,7 @@ class PromptEngineSession:
                 hint=_prompt_model_failure_hint(self._model, exc),
             ) from exc
 
-    def _build_structured_output_messages(
+    def _build_finalization_messages(
         self,
         *,
         completion_text: str,
@@ -584,8 +616,12 @@ class PromptEngineSession:
                 ),
                 *self._render_text_sections(observation.sections),
                 "",
-                "Return values for these output fields:",
-                self._output_schema.prompt_text,
+                "Return the finalization object using this schema:",
+                json.dumps(
+                    self._finalization_schema().properties,
+                    sort_keys=True,
+                    indent=2,
+                ),
             ]
         )
         content = [
@@ -605,10 +641,18 @@ class PromptEngineSession:
             {
                 "role": "system",
                 "content": (
-                    "Return structured output for a completed Journey prompt task.\n\n"
-                    "Use the current visible state as the source of truth. If a requested output field "
-                    "asks for an error, validation message, warning, status, or problem, copy the visible "
-                    "message exactly when present.\n\n"
+                    "Finalize a Journey prompt task with structured output.\n\n"
+                    "Use the current visible state as the source of truth. Decide whether the original "
+                    "instruction and all success criteria are satisfied. Treat expectation wording such "
+                    "as 'Expect ...', 'should ...', and 'must ...' as required success criteria.\n\n"
+                    "Set success_criteria_met=false when the visible page state contradicts a success "
+                    "criterion, a required state cannot be confirmed, or the completion signal admits "
+                    "that a criterion was not met. When false, set failure_reason to the visible "
+                    "blocking message or a concise expected-vs-observed explanation.\n\n"
+                    "When success_criteria_met=true, set failure_reason to an empty string and set "
+                    "output to the requested return value. If a requested output field asks for an "
+                    "error, validation message, warning, status, or problem, copy the visible message "
+                    "exactly when present.\n\n"
                     "Do not mention implementation details, hidden reasoning, or unavailable metadata."
                 ),
             },
@@ -617,6 +661,56 @@ class PromptEngineSession:
                 "content": content,
             },
         ]
+
+    def _finalization_schema(self) -> PromptOutputSchema:
+        if self._output_schema is None:
+            output_property: dict[str, object] = {
+                "type": "string",
+                "description": (
+                    "Plain-text value to return when all success criteria are met."
+                ),
+            }
+        else:
+            output_property = {
+                "type": "object",
+                "description": (
+                    "Output object to return when all success criteria are met."
+                ),
+                "properties": dict(self._output_schema.properties),
+                "required": list(self._output_schema.fields),
+                "additionalProperties": False,
+            }
+        properties: dict[str, object] = {
+            "success_criteria_met": {
+                "type": "boolean",
+                "description": (
+                    "Whether the original instruction and all success criteria are satisfied."
+                ),
+            },
+            "failure_reason": {
+                "type": "string",
+                "description": (
+                    "Visible blocking message or concise expected-vs-observed explanation "
+                    "when success_criteria_met is false; otherwise an empty string."
+                ),
+            },
+            "output": output_property,
+        }
+        return PromptOutputSchema(
+            fields=("success_criteria_met", "failure_reason", "output"),
+            properties=properties,
+            json_schema={
+                "title": "journey_prompt_finalization",
+                "description": (
+                    "Structured finalization for a Journey prompt task."
+                ),
+                "type": "object",
+                "properties": properties,
+                "required": ["success_criteria_met", "failure_reason", "output"],
+                "additionalProperties": False,
+            },
+            prompt_text=json.dumps(properties, sort_keys=True, indent=2),
+        )
 
     def _memory_for_observation(
         self,
