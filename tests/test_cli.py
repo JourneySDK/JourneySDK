@@ -198,6 +198,9 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.no_memory_update is True
     assert execute_args.no_browser_recording is True
 
+    alias_args = parser.parse_args(["--level", "warning"])
+    assert alias_args.log_level == "warning"
+
     pause_args = parser.parse_args(
         [
             "--file",

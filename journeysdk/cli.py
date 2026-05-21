@@ -1805,6 +1805,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--log-level",
+        "--level",
+        dest="log_level",
         choices=("debug", "info", "warning", "error", "off"),
         default="info",
         help="Set Journey diagnostic logging level (default: info)",
@@ -1829,7 +1831,11 @@ def _extract_option_value(argv: list[str], option: str) -> str | None:
 
 
 def _preconfigure_logging(argv: list[str]) -> None:
-    level = _extract_option_value(argv, "--log-level") or "info"
+    level = (
+        _extract_option_value(argv, "--log-level")
+        or _extract_option_value(argv, "--level")
+        or "info"
+    )
     output = _extract_option_value(argv, "--output")
     output_format = output if output in {"pretty", "structured", "jsonl"} else "pretty"
     try:

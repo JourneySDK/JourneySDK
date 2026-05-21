@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
-from journeysdk.logger import PrettyLine, get_logger, pretty_row
+from journeysdk.logger import JourneyLogLevel, PrettyLine, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
@@ -81,7 +81,7 @@ def _log_snapshot_phase_start(
     pretty_detail: object | None = None,
     **fields: object,
 ) -> float:
-    _LOGGER.info(
+    _LOGGER.debug(
         f"{prefix}_{phase}_start",
         message,
         pretty=_docker_row(_phase_pretty_text(message, detail=pretty_detail)),
@@ -105,7 +105,7 @@ def _log_snapshot_phase_success(
     **fields: object,
 ) -> None:
     duration = _duration_fields(started_at)
-    _LOGGER.info(
+    _LOGGER.debug(
         f"{prefix}_{phase}_success",
         message,
         pretty=_docker_row(
@@ -232,6 +232,7 @@ def run_docker(
     )
 
     def start_stack() -> DockerComposeStack:
+        compose_started_at = time.monotonic()
         original_compose_path = _resolve_compose_file(normalized_compose_file)
         resolved_project_name = normalized_project_name or _generate_project_name(
             original_compose_path
@@ -242,6 +243,7 @@ def run_docker(
             pretty=_docker_row("starting Docker Compose stack"),
             compose_file=original_compose_path,
             project=resolved_project_name,
+            wait_timeout=normalized_wait_timeout,
         )
         project_cache_dir = _project_cache_dir(
             cache_root=_CACHE_ROOT,
@@ -277,17 +279,46 @@ def run_docker(
                     subcommand=up_command,
                 ),
                 owner="run_docker",
+                failure_level="debug",
             )
-        except RuntimeError:
+        except RuntimeError as exc:
             if not _compose_wait_failure_is_successful_one_shot(stack):
+                _LOGGER.error(
+                    "compose_failure",
+                    "Docker Compose stack failed",
+                    pretty="Docker Compose stack failed",
+                    compose_file=stack.compose_file,
+                    resolved_compose_file=stack.resolved_compose_file,
+                    project=stack.project_name,
+                    wait_timeout=normalized_wait_timeout,
+                    error=str(exc),
+                    **_duration_fields(compose_started_at),
+                )
                 raise
 
+        duration = _duration_fields(compose_started_at)
         _LOGGER.info(
             "compose_success",
             "Docker Compose stack started",
-            pretty=_docker_row("Docker Compose stack started"),
+            pretty=_docker_row(
+                _phase_pretty_text(
+                    "Docker Compose stack started",
+                    duration=duration["duration"],
+                    detail=_pretty_kv(
+                        [
+                            ("project", stack.project_name),
+                            ("compose", stack.compose_file),
+                            ("resolved", stack.resolved_compose_file),
+                            ("wait_timeout", normalized_wait_timeout),
+                        ]
+                    ),
+                )
+            ),
             compose_file=stack.compose_file,
+            resolved_compose_file=stack.resolved_compose_file,
             project=stack.project_name,
+            wait_timeout=normalized_wait_timeout,
+            **duration,
         )
         return stack
 
@@ -331,22 +362,10 @@ def _store_docker_snapshot(
         snapshot_name=normalized_snapshot_name,
         snapshot_root=snapshot_root,
     )
-    snapshot_detail = _pretty_kv(
-        [
-            ("project", validated_stack.project_name),
-            ("snapshot", normalized_snapshot_name),
-            ("dir", snapshot_dir),
-        ]
-    )
     _LOGGER.info(
         "snapshot_store_start",
         "storing Docker Compose snapshot",
-        pretty=_docker_row(
-            _phase_pretty_text(
-                "storing Docker Compose snapshot",
-                detail=snapshot_detail,
-            )
-        ),
+        pretty=_docker_row("storing Docker Compose snapshot"),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
         snapshot_dir=snapshot_dir,
@@ -624,6 +643,8 @@ def _store_docker_snapshot(
                     [
                         ("project", validated_stack.project_name),
                         ("snapshot", normalized_snapshot_name),
+                        ("dir", snapshot_dir),
+                        ("manifest", manifest_path),
                         ("containers", len(container_entries)),
                         ("volumes", len(volume_entries_by_name)),
                     ]
@@ -632,6 +653,8 @@ def _store_docker_snapshot(
         ),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
+        snapshot_dir=snapshot_dir,
+        manifest_path=manifest_path,
         containers=len(container_entries),
         volumes=len(volume_entries_by_name),
         **duration,
@@ -678,18 +701,7 @@ def _restore_docker_snapshot(
     _LOGGER.info(
         "snapshot_restore_start",
         "restoring Docker Compose snapshot",
-        pretty=_docker_row(
-            _phase_pretty_text(
-                "restoring Docker Compose snapshot",
-                detail=_pretty_kv(
-                    [
-                        ("project", validated_stack.project_name),
-                        ("snapshot", normalized_snapshot_name),
-                        ("dir", snapshot_dir),
-                    ]
-                ),
-            )
-        ),
+        pretty=_docker_row("restoring Docker Compose snapshot"),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
         snapshot_dir=snapshot_dir,
@@ -992,16 +1004,23 @@ def _restore_docker_snapshot(
                     [
                         ("project", validated_stack.project_name),
                         ("snapshot", normalized_snapshot_name),
+                        ("dir", snapshot_dir),
+                        ("manifest", manifest_path),
                         ("containers", len(container_entries)),
                         ("volumes", len(volume_entries)),
+                        ("services", running_services),
                     ]
                 ),
             )
         ),
         project=validated_stack.project_name,
         snapshot=normalized_snapshot_name,
+        snapshot_dir=snapshot_dir,
+        manifest_path=manifest_path,
         containers=len(container_entries),
         volumes=len(volume_entries),
+        services=running_services,
+        services_count=len(running_services),
         **duration,
     )
 
@@ -1976,7 +1995,12 @@ def _compose_multi_file_command(
     return args
 
 
-def _run_cli(args: Sequence[str], *, owner: str) -> str:
+def _run_cli(
+    args: Sequence[str],
+    *,
+    owner: str,
+    failure_level: JourneyLogLevel = "error",
+) -> str:
     _LOGGER.debug(
         "subprocess_start",
         "running subprocess",
@@ -2008,7 +2032,8 @@ def _run_cli(args: Sequence[str], *, owner: str) -> str:
         error_output = completed.stderr.strip() or completed.stdout.strip()
         if not error_output:
             error_output = f"exit code {completed.returncode}"
-        _LOGGER.error(
+        log_failure = _LOGGER.debug if failure_level == "debug" else _LOGGER.error
+        log_failure(
             "subprocess_failure",
             "subprocess failed",
             owner=owner,

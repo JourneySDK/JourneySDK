@@ -172,7 +172,13 @@ class _FakeDockerRuntime:
         self.stopped_container_ids: list[str] = []
         self.started_container_ids: list[str] = []
 
-    def __call__(self, args: object, *, owner: str) -> str:
+    def __call__(
+        self,
+        args: object,
+        *,
+        owner: str,
+        failure_level: object | None = None,
+    ) -> str:
         assert isinstance(args, list)
         self.commands.append((owner, list(args)))
 
@@ -496,9 +502,15 @@ def test_run_docker_accepts_wait_failure_when_one_shot_service_exits_zero(
         ],
     )
 
-    def run_cli(args: object, *, owner: str) -> str:
-        output = runtime(args, owner=owner)
+    def run_cli(
+        args: object,
+        *,
+        owner: str,
+        failure_level: object | None = None,
+    ) -> str:
+        output = runtime(args, owner=owner, failure_level=failure_level)
         if isinstance(args, list) and args[:2] == ["docker", "compose"] and "up" in args:
+            assert failure_level == "debug"
             raise RuntimeError("container demo-setup-1 exited (0)")
         return output
 
@@ -541,6 +553,51 @@ def test_docker_run_cli_logs_subprocess_lifecycle(
     log_output = capsys.readouterr().out
     assert "Debug: docker:subprocess_start" in log_output
     assert "Debug: docker:subprocess_success" in log_output
+
+
+def test_docker_run_cli_can_downgrade_subprocess_failure_to_debug(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    def fake_run(
+        args: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="boom\n")
+
+    monkeypatch.setattr(journey_docker.subprocess, "run", fake_run)
+
+    configure_logging("info")
+    try:
+        with pytest.raises(RuntimeError):
+            journey_docker._run_cli(
+                ["docker", "compose", "up"],
+                owner="test",
+                failure_level="debug",
+            )
+    finally:
+        configure_logging("info")
+
+    assert "subprocess failed" not in capsys.readouterr().out
+
+    configure_logging("debug")
+    try:
+        with pytest.raises(RuntimeError):
+            journey_docker._run_cli(
+                ["docker", "compose", "up"],
+                owner="test",
+                failure_level="debug",
+            )
+    finally:
+        configure_logging("info")
+
+    assert "Debug: docker:subprocess_failure" in capsys.readouterr().out
 
 
 def test_docker_stack_statuses_and_logs_use_live_docker_metadata(
@@ -738,7 +795,7 @@ def test_store_docker_removes_replaced_snapshot_volumes(
     assert "old_demo_snapshot" not in runtime.volume_names
 
 
-def test_store_docker_logs_snapshot_phase_timings(
+def test_store_docker_info_logs_compact_snapshot_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -755,17 +812,49 @@ def test_store_docker_logs_snapshot_phase_timings(
 
     records = _docker_jsonl_records(capsys.readouterr().out)
     records_by_event = {record["event"]: record for record in records}
+    assert "snapshot_store_start" in records_by_event
+    assert "snapshot_store_success" in records_by_event
+    assert "snapshot_store_volume_backup_success" not in records_by_event
+    assert "snapshot_store_manifest_write_success" not in records_by_event
+    success = records_by_event["snapshot_store_success"]
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
+    assert success["level"] == "INFO"
+    assert isinstance(success["duration_ms"], int | float)
+    assert success["snapshot_dir"] == str(snapshot_dir)
+    assert success["manifest_path"] == str(snapshot_dir / "manifest.json")
+    assert success["containers"] == 1
+    assert success["volumes"] == 1
+
+
+def test_store_docker_debug_logs_snapshot_phase_timings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("debug", output_format="jsonl")
+    try:
+        journey_docker.store_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    records = _docker_jsonl_records(capsys.readouterr().out)
+    records_by_event = {record["event"]: record for record in records}
     for event in [
         "snapshot_store_prepare_snapshot_dir_success",
         "snapshot_store_compose_config_success",
         "snapshot_store_live_containers_success",
         "snapshot_store_validate_snapshot_success",
         "snapshot_store_manifest_write_success",
-        "snapshot_store_success",
     ]:
         assert event in records_by_event
+        assert records_by_event[event]["level"] == "DEBUG"
         assert isinstance(records_by_event[event]["duration_ms"], int | float)
 
+    assert records_by_event["snapshot_store_success"]["level"] == "INFO"
     assert "snapshot_store_container_commit_success" not in records_by_event
 
     volume_record = next(
@@ -773,12 +862,34 @@ def test_store_docker_logs_snapshot_phase_timings(
         for record in records
         if record["event"] == "snapshot_store_volume_backup_success"
     )
+    assert volume_record["level"] == "DEBUG"
     assert volume_record["volume"] == "demo_demo_data"
     assert volume_record["target_path"] == "/data"
     assert isinstance(volume_record["duration_ms"], int | float)
 
 
-def test_store_docker_pretty_logs_identify_containers_and_volumes(
+def test_store_docker_structured_info_hides_snapshot_phase_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("info", output_format="structured")
+    try:
+        journey_docker.store_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    output = capsys.readouterr().out
+    assert "event=snapshot_store_success" in output
+    assert "event=snapshot_store_volume_backup_success" not in output
+    assert "event=snapshot_store_manifest_write_success" not in output
+
+
+def test_store_docker_pretty_logs_compact_snapshot_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -795,13 +906,36 @@ def test_store_docker_pretty_logs_identify_containers_and_volumes(
 
     output = capsys.readouterr().out
     assert "committing Docker container snapshot" not in output
+    assert "copying Docker volume to snapshot" not in output
+    assert "writing Docker snapshot manifest" not in output
+    assert ".tar" not in output
+    assert "stored Docker Compose snapshot" in output
+    assert "manifest=" in output
+    assert "containers=1 volumes=1" in output
+
+
+def test_store_docker_debug_pretty_logs_identify_containers_and_volumes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("debug", output_format="pretty")
+    try:
+        journey_docker.store_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    output = capsys.readouterr().out
     assert (
         "copying Docker volume to snapshot: volume=demo_demo_data service=web "
         "container=demo-web-1 from=demo_demo_data to=journey-snapshot-demo-"
     ) in output
-    assert ".tar" not in output
+    assert "writing Docker snapshot manifest" in output
     assert "stored Docker Compose snapshot" in output
-    assert "containers=1 volumes=1" in output
 
 
 def test_store_docker_ignores_bind_mounts_and_snapshots_managed_volumes(
@@ -1069,7 +1203,7 @@ def test_restore_docker_rejects_legacy_manifest(
     assert "only restores format 3 volume-clone snapshots" in str(exc_info.value)
 
 
-def test_restore_docker_logs_snapshot_phase_timings(
+def test_restore_docker_info_logs_compact_snapshot_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1087,6 +1221,40 @@ def test_restore_docker_logs_snapshot_phase_timings(
 
     records = _docker_jsonl_records(capsys.readouterr().out)
     records_by_event = {record["event"]: record for record in records}
+    assert "snapshot_restore_start" in records_by_event
+    assert "snapshot_restore_success" in records_by_event
+    assert "snapshot_restore_volume_remove_success" not in records_by_event
+    assert "snapshot_restore_volume_restore_success" not in records_by_event
+    assert "snapshot_restore_start_services_success" not in records_by_event
+    success = records_by_event["snapshot_restore_success"]
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
+    assert success["level"] == "INFO"
+    assert isinstance(success["duration_ms"], int | float)
+    assert success["snapshot_dir"] == str(snapshot_dir)
+    assert success["manifest_path"] == str(snapshot_dir / "manifest.json")
+    assert success["containers"] == 1
+    assert success["volumes"] == 1
+    assert success["services"] == ["web"]
+
+
+def test_restore_docker_debug_logs_snapshot_phase_timings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    _write_restore_snapshot(stack)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("debug", output_format="jsonl")
+    try:
+        journey_docker.restore_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    records = _docker_jsonl_records(capsys.readouterr().out)
+    records_by_event = {record["event"]: record for record in records}
     for event in [
         "snapshot_restore_manifest_load_success",
         "snapshot_restore_compose_down_success",
@@ -1095,11 +1263,12 @@ def test_restore_docker_logs_snapshot_phase_timings(
         "snapshot_restore_recreated_containers_success",
         "snapshot_restore_volume_restore_success",
         "snapshot_restore_start_services_success",
-        "snapshot_restore_success",
     ]:
         assert event in records_by_event
+        assert records_by_event[event]["level"] == "DEBUG"
         assert isinstance(records_by_event[event]["duration_ms"], int | float)
 
+    assert records_by_event["snapshot_restore_success"]["level"] == "INFO"
     assert "snapshot_restore_override_write_success" not in records_by_event
     assert records_by_event["snapshot_restore_volume_remove_success"]["removed"] is True
     assert records_by_event["snapshot_restore_start_services_success"]["services"] == ["web"]
@@ -1108,7 +1277,7 @@ def test_restore_docker_logs_snapshot_phase_timings(
     )
 
 
-def test_restore_docker_pretty_logs_identify_volumes_and_services(
+def test_restore_docker_pretty_logs_compact_snapshot_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1119,6 +1288,32 @@ def test_restore_docker_pretty_logs_identify_volumes_and_services(
     monkeypatch.setattr(journey_docker, "_run_cli", runtime)
 
     configure_logging("info", output_format="pretty")
+    try:
+        journey_docker.restore_docker(stack, snapshot_name="after_boot")
+    finally:
+        configure_logging("info")
+
+    output = capsys.readouterr().out
+    assert "removing Docker volume before restore" not in output
+    assert "checked Docker volume before restore" not in output
+    assert "restoring Docker volume contents" not in output
+    assert "starting restored Docker Compose services" not in output
+    assert "restored Docker Compose snapshot" in output
+    assert "manifest=" in output
+    assert "containers=1 volumes=1 services=web" in output
+
+
+def test_restore_docker_debug_pretty_logs_identify_volumes_and_services(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    stack = _build_stack(tmp_path)
+    _write_restore_snapshot(stack)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    configure_logging("debug", output_format="pretty")
     try:
         journey_docker.restore_docker(stack, snapshot_name="after_boot")
     finally:
