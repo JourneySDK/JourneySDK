@@ -49,7 +49,7 @@ def run_roof_chat_isolation_check(
 ) -> bool:
     page = open_page(saved_page, headless=False)
     page.prompt(
-        f"Start chatting with Alfie - say you need to 'repair a leaking roof'. Expect there are two chats in the 'Active chats' section in the sidebar.",
+        f"Start chatting with Alfie - say you need to 'repair a leaking roof'. Expect there is the new chat added to the 'Active chats' section in the sidebar.",
         memory="start-chatting-about-roof-leak",
     )
     return True

@@ -146,6 +146,7 @@ class DockerComposeStack:
     resolved_compose_file: str
     project_name: str
     cache_root: str
+    wait_timeout: int | None = None
 
     @property
     def statuses(self) -> dict[str, tuple[DockerContainerStatus, ...]]:
@@ -172,6 +173,7 @@ class DockerComposeStack:
             "project_name": self.project_name,
             "cache_root": self.cache_root,
             "snapshot_name": snapshot_name,
+            "wait_timeout": self.wait_timeout,
         }
 
     @classmethod
@@ -186,6 +188,7 @@ class DockerComposeStack:
             resolved_compose_file=data["resolved_compose_file"],
             project_name=data["project_name"],
             cache_root=data["cache_root"],
+            wait_timeout=data["wait_timeout"],
         )
         _restore_docker_snapshot(
             stack=stack,
@@ -270,6 +273,7 @@ def run_docker(
             resolved_compose_file=str(resolved_compose_path),
             project_name=resolved_project_name,
             cache_root=str(_CACHE_ROOT),
+            wait_timeout=normalized_wait_timeout,
         )
         try:
             _run_cli(
@@ -973,11 +977,15 @@ def _restore_docker_snapshot(
             services=running_services,
             services_count=len(running_services),
         )
+        up_command = ["up", "-d", "--wait", "--no-recreate", "--no-deps"]
+        if validated_stack.wait_timeout is not None:
+            up_command.extend(["--wait-timeout", str(validated_stack.wait_timeout)])
+        up_command.extend(running_services)
         _run_cli(
             _compose_multi_file_command(
                 compose_files=compose_files,
                 project_name=validated_stack.project_name,
-                subcommand=["start", *running_services],
+                subcommand=up_command,
             ),
             owner="restore_docker",
         )
@@ -1237,7 +1245,7 @@ def _require_stack_payload(
     payload: object,
     *,
     owner: str,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise TypeError(f"{owner}(...) expects a mapping payload.")
     data = dict(payload)
@@ -1248,12 +1256,20 @@ def _require_stack_payload(
         "cache_root",
         "snapshot_name",
     ]
-    result: dict[str, str] = {}
+    result: dict[str, Any] = {}
     for key in required:
         value = data.get(key)
         if not isinstance(value, str) or not value:
             raise TypeError(f"{owner}(...) received invalid payload field {key!r}.")
         result[key] = value
+    wait_timeout = data.get("wait_timeout")
+    if wait_timeout is not None:
+        wait_timeout = _normalize_optional_positive_int(
+            owner=owner,
+            field="wait_timeout",
+            value=wait_timeout,
+        )
+    result["wait_timeout"] = wait_timeout
     return result
 
 

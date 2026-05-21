@@ -15,6 +15,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
+from time import sleep
 from types import TracebackType
 from typing import Any, Literal, TypedDict, cast
 
@@ -74,6 +75,22 @@ _REHYDRATE_STORAGE_SCRIPT = """
 
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
 _BROWSER_INSTALL_LOCK = Lock()
+_NAVIGATION_RETRY_ATTEMPTS = 5
+_NAVIGATION_RETRY_DELAY_SECONDS = 0.25
+_TRANSIENT_NAVIGATION_ERROR_FRAGMENTS = (
+    "err_connection_reset",
+    "err_connection_refused",
+    "err_empty_response",
+    "err_connection_closed",
+    "connection reset",
+    "connection refused",
+    "empty response",
+    "connection closed",
+    "ns_error_net_reset",
+    "ns_error_connection_refused",
+    "ns_binding_aborted",
+    "navigation interrupted",
+)
 _LOGGER = get_logger("browser")
 
 
@@ -586,11 +603,39 @@ class JourneyBrowserPage(PlaywrightPage):
     ) -> None:
         """Close browser resources owned by this step-scoped page."""
 
+        self._close_step_resources(
+            exc_type,
+            exc,
+            traceback,
+            capture_snapshot=True,
+        )
+
+    def _close_after_failed_open(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._close_step_resources(
+            exc_type,
+            exc,
+            traceback,
+            capture_snapshot=False,
+        )
+
+    def _close_step_resources(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+        *,
+        capture_snapshot: bool,
+    ) -> None:
         if self._journey_exit_started:
             return
         self._journey_exit_started = True
         self._unregister_forced_interrupt_callback()
-        cleanup_url = self._safe_recording_url() or "<unknown>"
+        cleanup_url = self._cleanup_url(prefer_live=capture_snapshot)
         was_live = self._is_live
         recording = self._journey_recording
         _LOGGER.debug(
@@ -627,15 +672,15 @@ class JourneyBrowserPage(PlaywrightPage):
             recording.capture_video(self)
 
         if self._is_live:
-            if interrupted:
-                self._mark_step_closed()
-            else:
+            if capture_snapshot and not interrupted:
                 try:
                     self._snapshot_for_storage()
                 except BaseException as snapshot_exc:  # pragma: no cover - surfaced through executor
                     failures.append(snapshot_exc)
                 finally:
                     self._mark_step_closed()
+            else:
+                self._mark_step_closed()
 
         if recording is not None:
             recording.stop_trace(self._journey_context)
@@ -719,6 +764,16 @@ class JourneyBrowserPage(PlaywrightPage):
             "browser page resources cleaned up",
             url=cleanup_url,
         )
+
+    def _cleanup_url(self, *, prefer_live: bool) -> str:
+        if prefer_live:
+            try:
+                return self.url
+            except Exception:  # pragma: no cover - environment dependent
+                pass
+        if self._journey_snapshot is not None:
+            return self._journey_snapshot.url
+        return "<unknown>"
 
     def __store__(self, context: JourneyStoreContext) -> object:
         """Store the current page state for Journey replay."""
@@ -848,10 +903,10 @@ def open_page(
             cast(PlaywrightPage, native_page),
             fallback_snapshot=snapshot,
         )
-        page.goto(snapshot.url, wait_until="load")
+        _retry_navigation(lambda: page.goto(snapshot.url, wait_until="load"))
         if local_storage:
             page.evaluate(_REHYDRATE_STORAGE_SCRIPT, local_storage)
-            page.reload(wait_until="load")
+            _retry_navigation(lambda: page.reload(wait_until="load"))
         _register_step_exit_object("open_page", page)
         _LOGGER.info(
             "open_page_success",
@@ -893,7 +948,7 @@ def open_page(
             error=_format_exception(exc),
         )
         try:
-            page.__exit__(type(exc), exc, exc.__traceback__)
+            page._close_after_failed_open(type(exc), exc, exc.__traceback__)
         except BaseException as cleanup_exc:
             add_note = getattr(exc, "add_note", None)
             if callable(add_note):
@@ -1129,6 +1184,35 @@ def _looks_like_missing_browser_error(exc: BaseException) -> bool:
     return (
         "Executable doesn't exist" in message
         or "Please run the following command to download new browsers" in message
+    )
+
+
+def _retry_navigation(action: Callable[[], object]) -> object:
+    for attempt in range(1, _NAVIGATION_RETRY_ATTEMPTS + 1):
+        try:
+            return action()
+        except Exception as exc:
+            if (
+                attempt == _NAVIGATION_RETRY_ATTEMPTS
+                or not _looks_like_transient_navigation_error(exc)
+            ):
+                raise
+            _LOGGER.debug(
+                "open_page_navigation_retry",
+                "retrying transient browser navigation failure",
+                attempt=attempt,
+                max_attempts=_NAVIGATION_RETRY_ATTEMPTS,
+                error=_format_exception(exc),
+            )
+            sleep(_NAVIGATION_RETRY_DELAY_SECONDS)
+    raise AssertionError("_retry_navigation loop should always return or raise.")
+
+
+def _looks_like_transient_navigation_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(
+        fragment in message
+        for fragment in _TRANSIENT_NAVIGATION_ERROR_FRAGMENTS
     )
 
 

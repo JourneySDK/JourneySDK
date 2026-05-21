@@ -109,10 +109,14 @@ def _attach_fake_live_page(
     events: list[object],
     fallback_snapshot: object,
     initial_url: str = "about:blank",
+    goto_errors: list[BaseException] | None = None,
+    reload_errors: list[BaseException] | None = None,
     fail_goto: BaseException | None = None,
     force_cleanup_before_goto_failure: bool = False,
 ) -> None:
     context = getattr(native_page, "context")
+    pending_goto_errors = list(goto_errors or [])
+    pending_reload_errors = list(reload_errors or [])
     page._journey_snapshot = fallback_snapshot
     page._journey_step_closed = False
     page._fake_context = context
@@ -127,8 +131,10 @@ def _attach_fake_live_page(
             if force_cleanup_before_goto_failure:
                 self._force_close_after_forced_interrupt()
             raise fail_goto
-        self._fake_url = url
         events.append(("goto", url, wait_until))
+        if pending_goto_errors:
+            raise pending_goto_errors.pop(0)
+        self._fake_url = url
 
     def evaluate(
         self,
@@ -146,6 +152,8 @@ def _attach_fake_live_page(
 
     def reload(self, *, wait_until: str) -> None:
         events.append(("reload", wait_until))
+        if pending_reload_errors:
+            raise pending_reload_errors.pop(0)
 
     def snapshot_for_storage(self):
         if not self._is_live and self._journey_snapshot is not None:
@@ -343,6 +351,8 @@ def _install_fake_playwright(
     fail_context_close: BaseException | None = None,
     fail_browser_close: BaseException | None = None,
     executable_path: str | None = None,
+    goto_errors: list[BaseException] | None = None,
+    reload_errors: list[BaseException] | None = None,
     record_recording_events: bool = False,
 ) -> None:
     def attach_live_page(
@@ -356,6 +366,8 @@ def _install_fake_playwright(
             native_page,
             events=events,
             fallback_snapshot=fallback_snapshot,
+            goto_errors=goto_errors,
+            reload_errors=reload_errors,
             fail_goto=fail_goto,
             force_cleanup_before_goto_failure=force_cleanup_before_goto_failure,
         )
@@ -925,6 +937,170 @@ def test_open_page_cleans_unreturned_page_when_step_fails(monkeypatch):
         "new_page",
         ("goto", "http://example.test/login", "load"),
         ("capture_state", "http://example.test/login"),
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
+
+
+def test_open_page_retries_transient_initial_navigation_failure(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        goto_errors=[
+            RuntimeError("JourneyBrowserPage.goto: net::ERR_CONNECTION_RESET"),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser,
+        "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+
+    def open_login() -> journey_browser.JourneyBrowserPage:
+        return journey_browser.open_page("http://example.test/login")
+
+    def journey():
+        journey_sdk.step(open_login)
+
+    journey_sdk.execute(journey)
+
+    assert events == [
+        "playwright_enter",
+        ("launch", True, False),
+        "new_context",
+        "new_page",
+        ("goto", "http://example.test/login", "load"),
+        ("sleep", journey_browser._NAVIGATION_RETRY_DELAY_SECONDS),
+        ("goto", "http://example.test/login", "load"),
+        ("capture_state", "http://example.test/login"),
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
+
+
+def test_open_page_does_not_retry_non_transient_navigation_failure(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        goto_errors=[
+            RuntimeError("JourneyBrowserPage.goto: certificate verify failed"),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser,
+        "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    assert "certificate verify failed" in str(exc_info.value)
+    assert events == [
+        "playwright_enter",
+        ("launch", True, False),
+        "new_context",
+        "new_page",
+        ("goto", "http://example.test/login", "load"),
+        "context_close",
+        "browser_close",
+        "playwright_exit",
+    ]
+
+
+def test_open_page_repeated_transient_navigation_failure_skips_snapshot_cleanup(
+    monkeypatch,
+):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        goto_errors=[
+            RuntimeError("JourneyBrowserPage.goto: net::ERR_CONNECTION_RESET")
+            for _ in range(journey_browser._NAVIGATION_RETRY_ATTEMPTS)
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser,
+        "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+
+    def open_fails() -> bool:
+        journey_browser.open_page("http://example.test/login")
+        return True
+
+    def journey():
+        journey_sdk.step(open_fails)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
+
+    message = str(exc_info.value)
+    assert "ERR_CONNECTION_RESET" in message
+    assert "browser page cleanup failed" not in message
+    assert "localStorage" not in message
+    assert ("capture_state", "about:blank") not in events
+    assert not any(event == ("capture_storage", "about:blank") for event in events)
+    assert events.count(("goto", "http://example.test/login", "load")) == (
+        journey_browser._NAVIGATION_RETRY_ATTEMPTS
+    )
+    assert events[-3:] == ["context_close", "browser_close", "playwright_exit"]
+
+
+def test_open_page_retries_transient_reload_failure_after_local_storage(monkeypatch):
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        reload_errors=[
+            RuntimeError("JourneyBrowserPage.reload: net::ERR_EMPTY_RESPONSE"),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser,
+        "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+    saved_page = journey_browser.JourneyBrowserPage.__restore__(
+        _state_payload(local_storage={"journey_session_token": "demo-token"}),
+        journey_sdk.JourneyRestoreContext(
+            artifact_root=Path("."),
+            boundary_kind="binding",
+            boundary_id="step:n_1",
+        ),
+    )
+
+    def open_dashboard() -> journey_browser.JourneyBrowserPage:
+        return journey_browser.open_page(saved_page)
+
+    def journey():
+        journey_sdk.step(open_dashboard)
+
+    journey_sdk.execute(journey)
+
+    assert events == [
+        "playwright_enter",
+        ("launch", True, False),
+        "new_context",
+        "new_page",
+        ("goto", "http://example.test/dashboard", "load"),
+        ("evaluate", {"journey_session_token": "demo-token"}),
+        ("reload", "load"),
+        ("sleep", journey_browser._NAVIGATION_RETRY_DELAY_SECONDS),
+        ("reload", "load"),
+        ("capture_state", "http://example.test/dashboard"),
         "context_close",
         "browser_close",
         "playwright_exit",
@@ -1638,7 +1814,7 @@ def test_open_page_real_navigation_failure_remains_browser_failure(
     output = capsys.readouterr().out
     assert "navigation failed" in str(exc_info.value)
     assert "Browser failed to open chromium http://example.test/login" in output
-    assert ("capture_state", "about:blank") in events
+    assert ("capture_state", "about:blank") not in events
 
 
 def test_ensure_browser_installed_reports_automatic_install_failure(
@@ -1791,7 +1967,10 @@ def test_journey_browser_prompt_defaults_model_when_model_and_env_are_missing(mo
 
     def load_model(model: str) -> _FakeLangChainPromptModel:
         loaded_models.append(model)
-        return _FakeLangChainPromptModel(["done"])
+        return _FakeLangChainPromptModel(
+            ["done"],
+            structured_responses=[_finalization("done")],
+        )
 
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -2935,7 +3114,8 @@ def test_journey_browser_prompt_uses_generated_callsite_memory_by_default(
                     "No-op prompt memory for test.",
                 ]
             ),
-        ]
+        ],
+        structured_responses=[_finalization("Done.")],
     )
     monkeypatch.setattr(
         journey_browser_prompt,
@@ -2977,7 +3157,10 @@ def test_journey_browser_prompt_memory_none_disables_callsite_memory(
     monkeypatch.setattr(
         journey_browser_prompt,
         "_load_langchain_model",
-        lambda model: _FakeLangChainPromptModel(["Done."]),
+        lambda model: _FakeLangChainPromptModel(
+            ["Done."],
+            structured_responses=[_finalization("Done.")],
+        ),
     )
 
     def fail_memory_access(*args: object, **kwargs: object) -> object:

@@ -29,7 +29,12 @@ def _write_compose_file(tmp_path: Path) -> Path:
     return compose_file
 
 
-def _build_stack(tmp_path: Path, *, project_name: str = "demo") -> journey_docker.DockerComposeStack:
+def _build_stack(
+    tmp_path: Path,
+    *,
+    project_name: str = "demo",
+    wait_timeout: int | None = None,
+) -> journey_docker.DockerComposeStack:
     compose_file = _write_compose_file(tmp_path).resolve()
     cache_root = tmp_path / "cache"
     resolved_compose_file = cache_root / project_name / "resolved-compose.yml"
@@ -43,6 +48,7 @@ def _build_stack(tmp_path: Path, *, project_name: str = "demo") -> journey_docke
         resolved_compose_file=str(resolved_compose_file),
         project_name=project_name,
         cache_root=str(cache_root),
+        wait_timeout=wait_timeout,
     )
 
 
@@ -418,6 +424,7 @@ def test_run_docker_executes_compose_config_and_up(
     resolved_path = Path(stack.resolved_compose_file)
     assert stack.compose_file == str(compose_file.resolve())
     assert stack.project_name == "demo-project"
+    assert stack.wait_timeout == 15
     assert resolved_path.exists()
     assert resolved_path.read_text(encoding="utf-8") == (
         "services:\n  web:\n    image: demo-web:latest\n"
@@ -458,6 +465,40 @@ def test_run_docker_executes_compose_config_and_up(
     assert "Docker" in log_output
     assert "starting Docker Compose stack" in log_output
     assert "Docker Compose stack started" in log_output
+
+def test_docker_stack_store_payload_preserves_wait_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path, wait_timeout=42)
+    snapshots: list[dict[str, object]] = []
+
+    def fake_store_docker_snapshot(**kwargs: object) -> None:
+        snapshots.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        journey_docker,
+        "_store_docker_snapshot",
+        fake_store_docker_snapshot,
+    )
+
+    payload = stack.__store__(
+        journey_sdk.JourneyStoreContext(
+            artifact_root=tmp_path,
+            boundary_kind="binding",
+            boundary_id="step:n_1",
+        )
+    )
+    assert isinstance(payload, dict)
+    assert payload["wait_timeout"] == 42
+    assert snapshots[0]["stack"] is stack
+
+    legacy_payload = dict(payload)
+    del legacy_payload["wait_timeout"]
+    assert journey_docker._require_stack_payload(
+        legacy_payload,
+        owner="DockerComposeStack.__restore__",
+    )["wait_timeout"] is None
 
 
 def test_run_docker_accepts_wait_failure_when_one_shot_service_exits_zero(
@@ -1061,7 +1102,11 @@ def test_restarting_containers_are_treated_as_started_services(
             stack.resolved_compose_file,
             "-p",
             stack.project_name,
-            "start",
+            "up",
+            "-d",
+            "--wait",
+            "--no-recreate",
+            "--no-deps",
             "web",
         ]
         for _, command in runtime.commands
@@ -1105,7 +1150,7 @@ def test_restore_docker_recreates_stack_and_restores_backups(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
-    stack = _build_stack(tmp_path)
+    stack = _build_stack(tmp_path, wait_timeout=42)
     _write_restore_snapshot(stack)
 
     runtime = _FakeDockerRuntime()
@@ -1136,7 +1181,13 @@ def test_restore_docker_recreates_stack_and_restores_backups(
             stack.resolved_compose_file,
             "-p",
             stack.project_name,
-            "start",
+            "up",
+            "-d",
+            "--wait",
+            "--no-recreate",
+            "--no-deps",
+            "--wait-timeout",
+            "42",
             "web",
         ]
         for _, command in runtime.commands
