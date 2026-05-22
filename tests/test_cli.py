@@ -8,6 +8,7 @@ import threading
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -19,6 +20,7 @@ from journeysdk.cli import (
     main,
 )
 from journeysdk.logger import configure_logging
+from journeysdk.models import ExecutionReport
 from journeysdk.state import default_execution_state_path, load_execution_state
 
 
@@ -51,6 +53,43 @@ def _event_lines(path: Path) -> list[str]:
     if not path.exists():
         return []
     return path.read_text(encoding="utf-8").splitlines()
+
+
+def _capture_prompt_memory_roots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[Path | None]:
+    captured_roots: list[Path | None] = []
+
+    def fake_execute_plan(
+        journey_fn: object,
+        *,
+        plan: Any,
+        step: str | None = None,
+        develop_step: str | None = None,
+        pause_action: str | None = None,
+        state: str | None = None,
+        observer: object | None = None,
+        no_state: bool = False,
+        no_state_update: bool = False,
+        no_memory: bool = False,
+        no_memory_update: bool = False,
+        no_browser_recording: bool = False,
+        prompt_memory_root: str | Path | None = None,
+    ) -> ExecutionReport:
+        del journey_fn, step, develop_step, pause_action, state, observer
+        del no_state, no_state_update, no_memory, no_memory_update
+        del no_browser_recording
+        captured_roots.append(
+            Path(prompt_memory_root) if prompt_memory_root is not None else None
+        )
+        return ExecutionReport(
+            journey_id=plan.journey_id,
+            function_ref=plan.function_ref,
+            case_reports=[],
+        )
+
+    monkeypatch.setattr("journeysdk.cli._execute_plan", fake_execute_plan)
+    return captured_roots
 
 
 def _state_path(
@@ -294,6 +333,66 @@ def test_execute_forwards_no_memory_update_flag(
 
     assert exit_code == 0
     assert captured_flags == [True]
+
+
+def test_execute_uses_command_root_for_nested_prompt_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _write(
+        tmp_path / "pkg" / "flow.py",
+        """
+        import journeysdk as journey
+
+        def target():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(target)
+        """,
+    )
+    captured_roots = _capture_prompt_memory_roots(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--file", "pkg/flow.py", "--log-level", "off"])
+
+    assert exit_code == 0
+    assert captured_roots == [tmp_path.resolve()]
+
+
+@pytest.mark.parametrize(
+    "target_args",
+    [
+        ["--step", "target"],
+        ["--develop-step", "target"],
+    ],
+)
+def test_targeted_execute_uses_command_root_for_nested_prompt_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_args: list[str],
+):
+    _write(
+        tmp_path / "pkg" / "flow.py",
+        """
+        import journeysdk as journey
+
+        def target():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(target)
+        """,
+    )
+    captured_roots = _capture_prompt_memory_roots(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--file", "pkg/flow.py", *target_args, "--log-level", "off"])
+
+    assert exit_code == 0
+    assert captured_roots == [tmp_path.resolve()]
 
 
 def test_execute_forwards_no_browser_recording_flag(

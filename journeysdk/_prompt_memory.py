@@ -24,7 +24,6 @@ from .utils import callable_ref
 
 PROMPT_MEMORY_FORMAT_VERSION = 2
 PROMPT_MEMORY_SUFFIX = ".memory.md"
-PROMPT_MEMORY_DIR = ".journey"
 MAX_PROMPT_MEMORY_TEXT_LENGTH = 1000
 _PROMPT_MEMORY_TITLE = "# Journey Prompt Memory"
 _FENCE_PATTERN = re.compile(
@@ -260,7 +259,7 @@ def resolve_prompt_memory_path(
         if resolved is not None:
             root = Path(resolved)
     if root is None:
-        root = Path.cwd() / PROMPT_MEMORY_DIR
+        root = Path.cwd().resolve()
     return root / f"{name}{PROMPT_MEMORY_SUFFIX}"
 
 

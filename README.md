@@ -21,14 +21,16 @@ The core value is:
   records, support/Ops queues, SMS, or back-office systems through other touchpoints.
 - **Interrupt long waits, resume later**: default persistent state lets a test stop while waiting on async work or a
   third-party service and continue later from an explicit replay boundary.
-- **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory for
-  faster repeat runs, and keep tests editable by the same AI coding assistants that write application code.
+- **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory as a
+  versioned fast path for repeat runs, and keep tests editable by the same AI coding assistants that write application
+  code.
 
 That makes Journey SDK useful for flows such as:
 
 - testing checkout paths such as card versus wallet payment from the same cart setup
 - waiting for email, SMS, voice, webhook, payment, or third-party side effects without keeping a laptop busy
-- asking an LLM-driven browser step to complete UI work while prompt memory reduces repeated model calls
+- asking an LLM-driven browser step to complete UI work while prompt memory compiles successful model work into a
+  reusable fast path
 - iterating on one failed late step without rerunning the whole journey from the beginning
 
 ## Who it's for
@@ -456,10 +458,14 @@ Set provider credentials with the provider's normal environment variables such a
 `ANTHROPIC_API_KEY`. Browser prompts default to `anthropic:claude-sonnet-4-6`; override that by passing a LangChain
 model identifier like `model="anthropic:claude-sonnet-4-5"` or by setting `JOURNEY_BROWSER_PROMPT_MODEL`.
 By default, each `page.prompt(...)` inside a journey step stores a replayable fast path from successful runs in a
-generated callsite memory file under `.journey/`. Pass `memory="sign-in-popup"` to choose a stable name such as
-`.journey/sign-in-popup.memory.md`, or pass `memory=None` to disable memory for one prompt. Pass `--no-memory` when you
-want a run to ignore and avoid updating prompt memory, or `--no-memory-update` when you want to read existing memory
-without writing new updates.
+generated callsite memory file in the journey root: the current directory where you run `journey`, or `Path.cwd()` when
+using `journeysdk.execute(...)` directly. Pass `memory="sign-in-popup"` to choose a stable name such as
+`sign-in-popup.memory.md`, or pass `memory=None` to disable memory for one prompt. Commit and review memory files with
+the journey specs so teammates and agents can reuse and improve them. Prompt memory acts like a new form of code
+compilation for AI actions: the first successful run pays for the heavier LLM processing and writes a compact replayable
+path, while later runs reuse that compiled path and fall back to the model only when the page no longer matches. Pass
+`--no-memory` when you want a run to ignore and avoid updating prompt memory, or `--no-memory-update` when you want to
+read existing memory without writing new updates.
 The optional `output={...}` argument maps field names to descriptions or JSON-schema fragments and stores a
 `dict[str, object]` return value instead of plain text.
 Expectation wording in the instruction, such as `Expect ...`, is treated as required success criteria. If the browser
@@ -521,8 +527,8 @@ selected case changed, Journey starts that case over so the reused prefix is not
 - **Interrupt long waits, resume later**: keep long journeys restartable by saving progress between steps by default.
 - **Touchpoints for external tests**: integrate hosted inboxes, webhooks, browser pages, Docker snapshots, and
   app-specific channel or service code without forcing them into a custom DSL.
-- **AI-generated steps with `page.prompt(...)`**: describe browser work in natural language and let prompt memory make
-  repeat runs faster.
+- **AI-generated steps with `page.prompt(...)`**: describe browser work in natural language and let prompt memory reuse
+  versioned compiled fast paths.
 - **Native with AI coding assistants**: keep tests in ordinary Python files so coding agents can generate, edit, run,
   and debug them beside application code.
 

@@ -3586,14 +3586,13 @@ def _refresh_develop_state_for_plan(
 
 
 def _resolve_prompt_memory_root(
-    journey_fn: JourneyEntrypoint,
+    _journey_fn: JourneyEntrypoint,
     *,
     prompt_memory_root: str | Path | None,
 ) -> Path:
     if prompt_memory_root is not None:
-        return Path(prompt_memory_root) / DEFAULT_STATE_DIR
-    source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
-    return Path(source_file).resolve().parent / DEFAULT_STATE_DIR
+        return Path(prompt_memory_root)
+    return Path.cwd().resolve()
 
 
 def _resolve_browser_recording_root(

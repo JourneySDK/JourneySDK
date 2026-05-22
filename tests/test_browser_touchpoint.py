@@ -18,7 +18,6 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page as PlaywrightPage
 
 from journeysdk._prompt_memory import (
-    PROMPT_MEMORY_DIR,
     PromptMemoryEntry,
     PromptMemorySection,
     write_prompt_memory_entry,
@@ -31,7 +30,7 @@ from journeysdk.touchpoints import browser as journey_browser
 
 
 def _prompt_memory_path(root: Path, name: str) -> Path:
-    return root / PROMPT_MEMORY_DIR / f"{name}.memory.md"
+    return root / f"{name}.memory.md"
 
 
 def _browser_recording_root() -> Path:
@@ -2987,8 +2986,7 @@ def test_journey_browser_prompt_does_not_reuse_legacy_memory_shape(
     tmp_path: Path,
 ):
     monkeypatch.chdir(tmp_path)
-    memory_path = tmp_path / PROMPT_MEMORY_DIR / "legacy.memory.json"
-    memory_path.parent.mkdir(parents=True)
+    memory_path = tmp_path / "legacy.memory.json"
     memory_path.write_text(
         json.dumps(
             {
@@ -3035,6 +3033,76 @@ def test_journey_browser_prompt_does_not_reuse_legacy_memory_shape(
     prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
     assert "Prompt memory:" not in prompt_text
     assert "#legacy" not in prompt_text
+
+
+def test_journey_browser_prompt_execute_uses_cwd_as_memory_root(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        [
+            "Done.",
+            "\n".join(
+                [
+                    "## Replay code",
+                    "```python",
+                    (
+                        'page.locator("text=Done").wait_for'
+                        '(state="visible", timeout=timeout_ms)'
+                    ),
+                    "```",
+                    "",
+                    "## Success check code",
+                    "```python",
+                    "assert True",
+                    "```",
+                    "",
+                    "## Notes",
+                    "No actions are needed.",
+                ]
+            ),
+        ],
+        structured_responses=[
+            _finalization("Done."),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+    write_paths: list[Path] = []
+
+    def capture_memory_write(path: Path, entry: PromptMemoryEntry) -> int:
+        assert entry.component == "browser"
+        write_paths.append(path)
+        return 1
+
+    monkeypatch.setattr(
+        journey_prompt_engine,
+        "write_prompt_memory_entry",
+        capture_memory_write,
+    )
+
+    def run_prompt() -> str | dict[str, object]:
+        return page.prompt("finish", model="openai:gpt-4.1-mini", memory="cwd-root")
+
+    def memory_journey() -> None:
+        journey_sdk.step(run_prompt)
+
+    journey_sdk.execute(memory_journey)
+
+    assert write_paths == [tmp_path.resolve() / "cwd-root.memory.md"]
 
 
 def test_journey_browser_prompt_respects_execute_no_memory(monkeypatch):
@@ -3191,7 +3259,7 @@ def test_journey_browser_prompt_memory_none_disables_callsite_memory(
         prompt_memory_root=tmp_path,
     )
 
-    assert not list((tmp_path / PROMPT_MEMORY_DIR).glob("*.memory.md"))
+    assert not list(tmp_path.glob("*.memory.md"))
 
 
 def test_journey_browser_prompt_respects_execute_no_memory_update(

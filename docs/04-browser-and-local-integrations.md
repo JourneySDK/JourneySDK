@@ -418,10 +418,12 @@ browser task cannot complete or the current page does not satisfy those criteria
 
 By default, each `page.prompt(...)` inside a journey step gets a generated callsite memory file. The
 `memory="sign-in-popup"` argument gives this prompt an explicit memory file instead. After a successful run, Journey
-writes `docs/browser_prompt_journey/.journey/sign-in-popup.memory.md`. Later runs with the same prompt memory replay the
-successful fast path first, and fall back to the model with the remembered path as context if replay no longer matches
-the page. Prompt memory stores compact code and checks only; it does not store screenshots, rendered HTML, or full model
-prompts.
+writes `sign-in-popup.memory.md` in the journey root: the current directory where you run `journey`, or `Path.cwd()`
+when using `journeysdk.execute(...)` directly. Commit and review memory files with the journey specs so teammates and
+agents can reuse and improve them. Prompt memory is like a new form of code compilation for AI-powered actions: the
+first successful run does the heavier LLM processing and writes a compact replayable path, then later runs reuse that
+compiled path and fall back to the model only when the page no longer matches. Prompt memory stores compact code and
+checks only; it does not store screenshots, rendered HTML, or full model prompts.
 
 Explicit memory names must be literal strings, and explicit or generated names must be unique within one compiled
 journey. That keeps planning deterministic and makes memory files easy to review in version control. Pass `memory=None`

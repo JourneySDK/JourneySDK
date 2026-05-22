@@ -1073,7 +1073,7 @@ def _execute_all_targets(
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
-                prompt_memory_root=item.file_path.parent,
+                prompt_memory_root=root,
             )
         except Exception as exc:
             _CLI_LOGGER.error(
@@ -1165,7 +1165,7 @@ def _execute_target_step(
             no_memory=no_memory,
             no_memory_update=no_memory_update,
             no_browser_recording=no_browser_recording,
-            prompt_memory_root=selected.file_path.parent,
+            prompt_memory_root=root,
         )
     except Exception as exc:
         _CLI_LOGGER.error(
@@ -1324,7 +1324,7 @@ def _execute_target_pause(
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
-                prompt_memory_root=selected.file_path.parent,
+                prompt_memory_root=root,
             )
             if isinstance(outcome, _PausedExecution):
                 outcome.close_pending_exits()
@@ -1374,7 +1374,7 @@ def _execute_target_pause(
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
-                prompt_memory_root=selected.file_path.parent,
+                prompt_memory_root=root,
             )
             if isinstance(outcome, _PausedExecution):
                 try:

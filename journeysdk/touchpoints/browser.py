@@ -812,7 +812,8 @@ class JourneyBrowserPage(PlaywrightPage):
                 `JOURNEY_BROWSER_PROMPT_MODEL` when set.
             max_steps: Maximum generated Python snippets before failing.
             action_timeout_seconds: Timeout passed to generated Playwright actions.
-            memory: Optional named prompt memory stored as `.journey/[memory].memory.md`.
+            memory: Optional named prompt memory stored as `[memory].memory.md`
+                in the journey root.
                 When omitted inside a journey step, Journey generates a stable
                 callsite memory name. Pass `None` to disable memory for this prompt.
             output: Optional structured-output fields. String values are field
