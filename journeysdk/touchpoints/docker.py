@@ -165,7 +165,7 @@ class DockerComposeStack:
         _store_docker_snapshot(
             stack=self,
             snapshot_name=snapshot_name,
-            snapshot_root=context.artifact_root,
+            snapshot_root=_context_snapshot_root(context),
         )
         return {
             "compose_file": self.compose_file,
@@ -193,7 +193,7 @@ class DockerComposeStack:
         _restore_docker_snapshot(
             stack=stack,
             snapshot_name=data["snapshot_name"],
-            snapshot_root=context.artifact_root,
+            snapshot_root=_context_snapshot_root(context),
         )
         return stack
 
@@ -1249,6 +1249,12 @@ def _snapshot_dir(
     )
 
 
+def _context_snapshot_root(
+    context: JourneyStoreContext | JourneyRestoreContext,
+) -> Path:
+    return context.persistent_artifact_root or context.artifact_root
+
+
 def _snapshot_name_for_context(context: JourneyStoreContext) -> str:
     return _slugify(f"{context.boundary_kind}-{context.boundary_id}")
 
@@ -1627,10 +1633,17 @@ def _copy_volume_to_directory(
     source_volume_name: str,
     destination_dir: Path,
 ) -> None:
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination_mount, destination_path = _bind_mount_for_path(
+        destination_dir,
+        target="/to-root",
+    )
     _copy_snapshot_contents(
         owner=owner,
         source_mount=f"type=volume,source={source_volume_name},target=/from,readonly",
-        destination_mount=f"type=bind,source={destination_dir},target=/to",
+        destination_mount=destination_mount,
+        source_path="/from",
+        destination_path=destination_path,
     )
 
 
@@ -1640,11 +1653,44 @@ def _copy_directory_to_volume(
     source_dir: Path,
     destination_volume_name: str,
 ) -> None:
+    source_mount, source_path = _bind_mount_for_path(
+        source_dir,
+        target="/from-root",
+        readonly=True,
+    )
     _copy_snapshot_contents(
         owner=owner,
-        source_mount=f"type=bind,source={source_dir},target=/from,readonly",
+        source_mount=source_mount,
         destination_mount=f"type=volume,source={destination_volume_name},target=/to",
+        source_path=source_path,
+        destination_path="/to",
     )
+
+
+def _bind_mount_for_path(
+    host_path: Path,
+    *,
+    target: str,
+    readonly: bool = False,
+) -> tuple[str, str]:
+    resolved = host_path.resolve()
+    mount_source = resolved
+    relative_parts: tuple[str, ...] = ()
+    parts = resolved.parts
+    for index, part in enumerate(parts):
+        if part.startswith(".") and index > 0:
+            mount_source = Path(*parts[:index])
+            relative_parts = tuple(parts[index:])
+            break
+    container_path = PurePosixPath(target).joinpath(*relative_parts).as_posix()
+    mount_parts = [
+        "type=bind",
+        f"source={mount_source}",
+        f"target={target}",
+    ]
+    if readonly:
+        mount_parts.append("readonly")
+    return ",".join(mount_parts), container_path
 
 
 def _copy_snapshot_contents(
@@ -1652,6 +1698,8 @@ def _copy_snapshot_contents(
     owner: str,
     source_mount: str,
     destination_mount: str,
+    source_path: str,
+    destination_path: str,
 ) -> None:
     _run_cli(
         [
@@ -1665,7 +1713,10 @@ def _copy_snapshot_contents(
             _VOLUME_COPY_IMAGE,
             "sh",
             "-ec",
-            "cp -a --reflink=auto --sparse=always /from/. /to/",
+            'mkdir -p "$2" && cp -a --reflink=auto --sparse=always "$1"/. "$2"/',
+            "copy",
+            source_path,
+            destination_path,
         ],
         owner=owner,
     )

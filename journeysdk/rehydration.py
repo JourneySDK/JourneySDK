@@ -17,9 +17,19 @@ class JourneyStoreContext:
     artifact_root: Path
     boundary_kind: str
     boundary_id: str
+    # Optional user-visible root for artifact-heavy values when artifact_root is temporary.
+    persistent_artifact_root: Path | None = None
 
     def child(self, segment: str) -> "JourneyStoreContext":
-        return replace(self, artifact_root=self.artifact_root / segment)
+        return replace(
+            self,
+            artifact_root=self.artifact_root / segment,
+            persistent_artifact_root=(
+                self.persistent_artifact_root / segment
+                if self.persistent_artifact_root is not None
+                else None
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -29,9 +39,19 @@ class JourneyRestoreContext:
     artifact_root: Path
     boundary_kind: str
     boundary_id: str
+    # Optional user-visible root for artifact-heavy values when artifact_root is temporary.
+    persistent_artifact_root: Path | None = None
 
     def child(self, segment: str) -> "JourneyRestoreContext":
-        return replace(self, artifact_root=self.artifact_root / segment)
+        return replace(
+            self,
+            artifact_root=self.artifact_root / segment,
+            persistent_artifact_root=(
+                self.persistent_artifact_root / segment
+                if self.persistent_artifact_root is not None
+                else None
+            ),
+        )
 
 
 @runtime_checkable

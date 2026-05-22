@@ -1072,6 +1072,7 @@ class _StateController:
         self._allow_stale_develop_pause = allow_stale_develop_pause
         self.artifact_root = storage.artifact_root
         self._artifact_root_is_temporary = storage.artifact_root_is_temporary
+        self._persistent_artifact_root = storage.persistent_artifact_root
         self.plan_signature = _plan_signature(
             journey_plan,
             self.selected_cases,
@@ -1124,6 +1125,10 @@ class _StateController:
             artifact_root=self._artifact_dir("binding", binding_key),
             boundary_kind="binding",
             boundary_id=binding_key,
+            persistent_artifact_root=self._persistent_artifact_dir(
+                "binding",
+                binding_key,
+            ),
         )
 
     def binding_restore_context(self, binding_key: str) -> JourneyRestoreContext:
@@ -1131,6 +1136,10 @@ class _StateController:
             artifact_root=self._artifact_dir("binding", binding_key),
             boundary_kind="binding",
             boundary_id=binding_key,
+            persistent_artifact_root=self._persistent_artifact_dir(
+                "binding",
+                binding_key,
+            ),
         )
 
     def branch_anchor_store_context(
@@ -1143,6 +1152,11 @@ class _StateController:
             artifact_root=self._artifact_dir("branch-anchor", anchor_key, binding_key),
             boundary_kind="branch-anchor",
             boundary_id=anchor_key,
+            persistent_artifact_root=self._persistent_artifact_dir(
+                "branch-anchor",
+                anchor_key,
+                binding_key,
+            ),
         )
 
     def branch_anchor_restore_context(
@@ -1155,6 +1169,11 @@ class _StateController:
             artifact_root=self._artifact_dir("branch-anchor", anchor_key, binding_key),
             boundary_kind="branch-anchor",
             boundary_id=anchor_key,
+            persistent_artifact_root=self._persistent_artifact_dir(
+                "branch-anchor",
+                anchor_key,
+                binding_key,
+            ),
         )
 
     def active_state_store_context(
@@ -1167,6 +1186,11 @@ class _StateController:
             artifact_root=self._artifact_dir("active-state", case_id, binding_key),
             boundary_kind="state",
             boundary_id=case_id,
+            persistent_artifact_root=self._persistent_artifact_dir(
+                "active-state",
+                case_id,
+                binding_key,
+            ),
         )
 
     def active_state_restore_context(
@@ -1179,6 +1203,11 @@ class _StateController:
             artifact_root=self._artifact_dir("active-state", case_id, binding_key),
             boundary_kind="state",
             boundary_id=case_id,
+            persistent_artifact_root=self._persistent_artifact_dir(
+                "active-state",
+                case_id,
+                binding_key,
+            ),
         )
 
     def active_case_for(
@@ -1537,6 +1566,14 @@ class _StateController:
 
     def _artifact_dir(self, *parts: str) -> Path:
         path = self.artifact_root
+        for part in parts:
+            path = path / _artifact_segment(part)
+        return path
+
+    def _persistent_artifact_dir(self, *parts: str) -> Path | None:
+        if self._persistent_artifact_root is None:
+            return None
+        path = self._persistent_artifact_root
         for part in parts:
             path = path / _artifact_segment(part)
         return path
@@ -3596,18 +3633,25 @@ def _execute_plan(
     validation = validate_journey(journey_fn)
     execution_observer = observer or _LoggingExecutionObserver()
     execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
+    default_state_path = _resolve_default_state_path(journey_fn)
     using_default_state = not no_state and state is None
     state_path = (
         None
         if no_state
         else Path(state)
         if state is not None
-        else _resolve_default_state_path(journey_fn)
+        else default_state_path
     )
     state_storage = prepare_execution_state_storage(
         state_path,
         update_enabled=not no_state_update,
     )
+    if no_state:
+        default_artifact_root, _ = artifact_root_for_state(default_state_path)
+        state_storage = replace(
+            state_storage,
+            persistent_artifact_root=default_artifact_root,
+        )
     rehydration_enabled = _needs_rehydration(
         selected_cases,
         step=step,

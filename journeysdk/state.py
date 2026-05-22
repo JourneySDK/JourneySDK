@@ -96,6 +96,7 @@ class ExecutionStateStorage:
     artifact_root: Path
     cleanup_root: Path | None = None
     artifact_root_is_temporary: bool = False
+    persistent_artifact_root: Path | None = None
 
 
 def artifact_root_for_state(path: Path | None) -> tuple[Path, bool]:
@@ -141,6 +142,7 @@ def prepare_execution_state_storage(
             run_path=path,
             artifact_root=artifact_root,
             artifact_root_is_temporary=temporary,
+            persistent_artifact_root=artifact_root,
         )
 
     temp_root = Path(tempfile.mkdtemp(prefix="journey-state-readonly."))

@@ -218,16 +218,8 @@ class _FakeDockerRuntime:
                 if item == "--mount"
             ]
             mounts = [_mount_parts(value) for value in mount_values]
-            source = next(
-                mount["source"]
-                for mount in mounts
-                if mount.get("target") == "/from"
-            )
-            destination = next(
-                mount["source"]
-                for mount in mounts
-                if mount.get("target") == "/to"
-            )
+            source = _host_path_for_container_path(args[-2], mounts)
+            destination = _host_path_for_container_path(args[-1], mounts)
             self.volume_copies.append((source, destination))
             return ""
 
@@ -308,6 +300,30 @@ def _docker_jsonl_records(output: str) -> list[dict[str, object]]:
 
 def _mount_parts(value: str) -> dict[str, str]:
     return dict(part.split("=", 1) for part in value.split(",") if "=" in part)
+
+
+def _host_path_for_container_path(
+    container_path: str,
+    mounts: list[dict[str, str]],
+) -> str:
+    for mount in sorted(
+        mounts,
+        key=lambda item: len(item.get("target", "")),
+        reverse=True,
+    ):
+        target = mount.get("target")
+        if target is None:
+            continue
+        if container_path != target and not container_path.startswith(f"{target}/"):
+            continue
+        source = mount["source"]
+        if mount.get("type") == "volume":
+            return source
+        relpath = container_path[len(target) :].lstrip("/")
+        if not relpath:
+            return source
+        return str(Path(source) / relpath)
+    raise AssertionError(f"Container path is not mounted: {container_path}")
 
 
 def _inspect_row_uses_volume(row: dict[str, object], volume_name: str) -> bool:
@@ -808,7 +824,7 @@ def test_store_docker_creates_manifest_and_volume_snapshot_payload(
     assert any(
         command[:3] == ["docker", "run", "--rm"]
         and any(
-            "cp -a --reflink=auto --sparse=always /from/. /to/" in item
+            "cp -a --reflink=auto --sparse=always" in item
             for item in command
         )
         for _, command in runtime.commands
@@ -1250,7 +1266,7 @@ def test_restore_docker_recreates_stack_and_restores_snapshot_payloads(
     assert any(
         command[:3] == ["docker", "run", "--rm"]
         and any(
-            "cp -a --reflink=auto --sparse=always /from/. /to/" in item
+            "cp -a --reflink=auto --sparse=always" in item
             for item in command
         )
         for _, command in runtime.commands
@@ -1696,6 +1712,91 @@ def test_execute_step_started_branches_restore_docker_snapshot(
         for owner, command in runtime.commands
         if owner == "restore_docker" and "down" in command
     ) == 1
+
+
+def test_execute_no_state_stores_docker_snapshot_under_journey_dot_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    journey_dir = tmp_path / "journey"
+    journey_dir.mkdir()
+    compose_file = _write_compose_file(tmp_path)
+    journey_file = journey_dir / "flow.py"
+    source = """
+def capture_anchor(stack):
+    return "anchor"
+
+
+def first_branch(stack):
+    EVENTS.append("first")
+    return True
+
+
+def second_branch(stack):
+    EVENTS.append("second")
+    return True
+
+
+def flow():
+    stack = journey_sdk.step(
+        journey_docker.run_docker(
+            compose_file=COMPOSE_FILE,
+            project_name="demo",
+        )
+    )
+    anchor = journey_sdk.step(capture_anchor, stack)
+    if journey_sdk.branch(start_from=anchor):
+        journey_sdk.step(first_branch, stack)
+    elif journey_sdk.branch(start_from=anchor):
+        journey_sdk.step(second_branch, stack)
+"""
+    journey_file.write_text(source, encoding="utf-8")
+    events: list[str] = []
+    namespace = {
+        "COMPOSE_FILE": compose_file,
+        "EVENTS": events,
+        "journey_docker": journey_docker,
+        "journey_sdk": journey_sdk,
+    }
+    exec(compile(source, str(journey_file), "exec"), namespace)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    report = journey_sdk.execute(namespace["flow"], no_state=True)
+
+    artifact_root = journey_dir / ".journey" / "state.json.artifacts"
+    manifest_paths = list(artifact_root.rglob("manifest.json"))
+    assert [case.case_id for case in report.case_reports] == ["case_1", "case_2"]
+    assert events == ["first", "second"]
+    assert not (journey_dir / ".journey" / "state.json").exists()
+    assert len(manifest_paths) == 1
+    assert manifest_paths[0].is_relative_to(artifact_root)
+    assert any(
+        source == "demo_demo_data" and Path(destination).is_relative_to(artifact_root)
+        for source, destination in runtime.volume_copies
+    )
+    assert any(
+        Path(source).is_relative_to(artifact_root) and destination == "demo_demo_data"
+        for source, destination in runtime.volume_copies
+    )
+    bind_mounts = [
+        command[index + 1]
+        for _, command in runtime.commands
+        for index, item in enumerate(command)
+        if item == "--mount" and "type=bind" in command[index + 1]
+    ]
+    assert all("/.journey/" not in _mount_parts(mount)["source"] for mount in bind_mounts)
+    assert any(
+        _mount_parts(mount)["source"] == str(journey_dir.resolve())
+        and _mount_parts(mount)["target"] == "/to-root"
+        for mount in bind_mounts
+    )
+    assert any(
+        _mount_parts(mount)["source"] == str(journey_dir.resolve())
+        and _mount_parts(mount)["target"] == "/from-root"
+        for mount in bind_mounts
+    )
 
 
 def test_journey_resume_reruns_docker_retry_anchor_without_snapshotting_args(
