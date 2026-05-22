@@ -120,26 +120,48 @@ This example is intentionally branched. It boots a tiny HTTP app plus Postgres, 
 - branch A increments a database-backed counter from `0` to `1`
 - branch B replays from the same step-anchor snapshot and sees the counter back at `0`
 
-The Docker helper is still just a normal Journey step factory:
+The Docker helper is a normal function. Wrap it in your own step when Docker
+startup belongs in the journey:
 
 ```python
-stack = step(
-    run_docker(
+def start_docker_stack():
+    return run_docker(
         compose_file=_COMPOSE_FILE,
         project_name="journey-docker-docs",
+        wait_for_logs=[
+            DockerLogMatcher(
+                service_name=r"^app$",
+                message=r"Journey counter app\s+ready",
+                timeout=60,
+            )
+        ],
     )
-)
+
+stack = step(start_docker_stack)
+```
+
+Both `service_name` and `message` are regular expressions matched with
+`re.search`. The same stack can wait for later logs inside any ordinary step:
+
+```python
+def wait_for_worker_job(stack):
+    return stack.wait_for_log(
+        service_name=r"^worker-[0-9]+$",
+        message=r"job\s+[a-f0-9]+\s+complete",
+        timeout=30,
+    )
 ```
 
 The shared setup reads like plain Python, even though the app is running locally in Docker:
 
 ```python
-stack = step(
-    run_docker(
+def start_docker_stack():
+    return run_docker(
         compose_file=_COMPOSE_FILE,
         project_name="journey-docker-docs",
     )
-)
+
+stack = step(start_docker_stack)
 step(assert_stack_ready, stack)
 ```
 
@@ -172,13 +194,13 @@ uv run journey --file docs/docker_compose_journey/docker_compose_journey.py
 ```console
 Plan
   docs/docker_compose_journey/docker_compose_journey.py:docker_compose_journey ...
-    case_1  labels: run_docker, assert_stack_ready, capture_baseline_state, increment_counter, assert_increment_branch; branches: {bg_1=branch_1}
-    case_2  labels: run_docker, assert_stack_ready, capture_baseline_state, read_counter_state, assert_restored_counter_branch; branches: {bg_1=branch_2}
+    case_1  labels: start_docker_stack, assert_stack_ready, capture_baseline_state, increment_counter, assert_increment_branch; branches: {bg_1=branch_1}
+    case_2  labels: start_docker_stack, assert_stack_ready, capture_baseline_state, read_counter_state, assert_restored_counter_branch; branches: {bg_1=branch_2}
   Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
     case_1  branches={bg_1=branch_1}
-      run_docker  ok attempt=1 duration=...
+      start_docker_stack  ok attempt=1 duration=...
       assert_stack_ready  ok attempt=1 duration=...
       capture_baseline_state  ok attempt=1 duration=...
       increment_counter  ok attempt=1 duration=...

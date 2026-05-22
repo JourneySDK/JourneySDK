@@ -5,7 +5,7 @@ from pathlib import Path
 
 from journeysdk import branch, journey, step
 from journeysdk.touchpoints.browser import JourneyBrowserPage, open_page
-from journeysdk.touchpoints.docker import DockerComposeStack, run_docker
+from journeysdk.touchpoints.docker import DockerComposeStack, DockerLogMatcher, run_docker
 
 
 def start_hey_alfie_services() -> DockerComposeStack:
@@ -16,7 +16,14 @@ def start_hey_alfie_services() -> DockerComposeStack:
             compose_file="/Users/piotrsliwa/Hey-Alfie/dev/docker-compose.yml",
             project_name="journey-hey-alfie-dev",
             wait_timeout=600,
-        )()
+            wait_for_logs=[
+                DockerLogMatcher(
+                    service_name=r"^backend$",
+                    message=r"Application startup complete",
+                    timeout=600,
+                )
+            ],
+        )
     finally:
         os.chdir(previous_cwd)
 

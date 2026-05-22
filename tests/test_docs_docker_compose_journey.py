@@ -88,14 +88,14 @@ def test_docker_compose_example_compiles_without_touching_docker(
     assert sorted(_case_labels(first_plan)) == sorted(
         [
             [
-                "run_docker",
+                "start_docker_stack",
                 "assert_stack_ready",
                 "capture_baseline_state",
                 "increment_counter",
                 "assert_increment_branch",
             ],
             [
-                "run_docker",
+                "start_docker_stack",
                 "assert_stack_ready",
                 "capture_baseline_state",
                 "read_counter_state",
@@ -106,14 +106,14 @@ def test_docker_compose_example_compiles_without_touching_docker(
     assert sorted(_case_labels(second_plan)) == sorted(
         [
             [
-                "run_docker",
+                "start_docker_stack",
                 "assert_stack_ready",
                 "capture_baseline_state",
                 "increment_counter",
                 "assert_increment_branch",
             ],
             [
-                "run_docker",
+                "start_docker_stack",
                 "assert_stack_ready",
                 "capture_baseline_state",
                 "read_counter_state",

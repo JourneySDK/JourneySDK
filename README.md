@@ -364,9 +364,21 @@ Docker-managed volume contents. `DockerComposeStack` already implements the rehy
 
 ```python
 from journeysdk import branch, step
-from journeysdk.touchpoints.docker import run_docker
+from journeysdk.touchpoints.docker import DockerLogMatcher, run_docker
 
-stack = step(run_docker(compose_file="docker-compose.yml"))
+def start_docker_stack():
+    return run_docker(
+        compose_file="docker-compose.yml",
+        wait_for_logs=[
+            DockerLogMatcher(
+                service_name=r"^(app|web)$",
+                message=r"server\s+ready",
+                timeout=60,
+            )
+        ],
+    )
+
+stack = step(start_docker_stack)
 baseline = step(capture_baseline_state, stack)
 if branch(start_from=baseline):
     step(mutate_compose_app, stack)

@@ -4,6 +4,7 @@ import json
 import os
 import pickle
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import journeysdk as journey_sdk
@@ -34,6 +35,7 @@ def _build_stack(
     *,
     project_name: str = "demo",
     wait_timeout: int | None = None,
+    log_matchers: tuple[journey_docker.DockerLogMatcher, ...] = (),
 ) -> journey_docker.DockerComposeStack:
     compose_file = _write_compose_file(tmp_path).resolve()
     cache_root = tmp_path / "cache"
@@ -49,6 +51,7 @@ def _build_stack(
         project_name=project_name,
         cache_root=str(cache_root),
         wait_timeout=wait_timeout,
+        log_matchers=log_matchers,
     )
 
 
@@ -120,6 +123,7 @@ class _FakeDockerRuntime:
         restored_ps_rows: list[dict[str, str]] | None = None,
         restored_inspect_rows: list[dict[str, object]] | None = None,
         logs_by_service: dict[str, str] | None = None,
+        container_logs: dict[str, str] | None = None,
     ) -> None:
         self.compose_config = compose_config or {
             "services": {
@@ -170,6 +174,10 @@ class _FakeDockerRuntime:
         self.logs_by_service = logs_by_service or {
             "web": "web-1  | 2026-04-14T10:00:00Z booted\n",
         }
+        self.container_logs = container_logs or {
+            "web-container-1": "2026-04-14T10:00:00Z booted\n",
+            "web-container-2": "2026-04-14T10:00:00Z restored\n",
+        }
         self.volume_names = {"demo_demo_data"}
         self.volume_labels: dict[str, dict[str, str]] = {}
         self.phase = "live"
@@ -207,6 +215,10 @@ class _FakeDockerRuntime:
         if args[:2] == ["docker", "compose"] and "logs" in args:
             service = args[-1]
             return self.logs_by_service[service]
+
+        if args[:2] == ["docker", "logs"]:
+            container_id = args[-1]
+            return self.container_logs.get(container_id, "")
 
         if args[:2] == ["docker", "commit"]:
             return f"sha256:{args[-1]}"
@@ -389,7 +401,7 @@ def _write_restore_snapshot(
     return snapshot_dir
 
 
-def test_run_docker_validates_factory_arguments(tmp_path: Path):
+def test_run_docker_validates_arguments(tmp_path: Path):
     with pytest.raises(TypeError):
         journey_docker.run_docker(compose_file=object())
     with pytest.raises(ValueError):
@@ -400,6 +412,20 @@ def test_run_docker_validates_factory_arguments(tmp_path: Path):
         journey_docker.run_docker(wait_timeout="5")
     with pytest.raises(ValueError):
         journey_docker.run_docker(wait_timeout=0)
+    with pytest.raises(TypeError):
+        journey_docker.run_docker(wait_for_logs=[object()])
+    with pytest.raises(ValueError):
+        journey_docker.DockerLogMatcher(service_name="[", message="ready")
+    with pytest.raises(ValueError):
+        journey_docker.DockerLogMatcher(service_name="web", message="[")
+    with pytest.raises(ValueError):
+        journey_docker.DockerLogMatcher(service_name="web", message="ready", timeout=-1)
+    with pytest.raises(ValueError):
+        journey_docker.DockerLogMatcher(
+            service_name="web",
+            message="ready",
+            poll_interval=0,
+        )
     with pytest.raises(ValueError):
         journey_docker.store_docker(
             _build_stack(tmp_path),
@@ -416,14 +442,17 @@ def test_run_docker_planning_does_not_touch_docker(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(journey_docker.subprocess, "run", fail_run)
 
+    def start_stack() -> journey_docker.DockerComposeStack:
+        return journey_docker.run_docker(compose_file=compose_file)
+
     def journey():
-        stack = journey_sdk.step(journey_docker.run_docker(compose_file=compose_file))
+        stack = journey_sdk.step(start_stack)
         journey_sdk.step(lambda current: current.project_name, stack)
 
     plan = journey_sdk.compile_journey(journey)
 
     monkeypatch.setattr(journey_docker.subprocess, "run", original_run)
-    assert _record_labels(plan) == ["run_docker", "<lambda>"]
+    assert _record_labels(plan) == ["start_stack", "<lambda>"]
 
 
 def test_run_docker_executes_compose_config_and_up(
@@ -440,7 +469,7 @@ def test_run_docker_executes_compose_config_and_up(
         compose_file=compose_file,
         project_name="demo-project",
         wait_timeout=15,
-    )()
+    )
 
     resolved_path = Path(stack.resolved_compose_file)
     assert stack.compose_file == str(compose_file.resolve())
@@ -487,11 +516,228 @@ def test_run_docker_executes_compose_config_and_up(
     assert "starting Docker Compose stack" in log_output
     assert "Docker Compose stack started" in log_output
 
+
+def test_run_docker_waits_for_configured_raw_container_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    matcher = journey_docker.DockerLogMatcher(
+        service_name=r"^we.",
+        message=r"server\s+ready",
+        timeout=1,
+        poll_interval=0.01,
+    )
+    runtime = _FakeDockerRuntime(
+        container_logs={
+            "web-container-1": "booting\nserver ready\n",
+        },
+    )
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    stack = journey_docker.run_docker(
+        compose_file=compose_file,
+        project_name="demo-project",
+        wait_for_logs=[matcher],
+    )
+
+    assert stack.log_matchers == (matcher,)
+    docker_logs_commands = [
+        command
+        for owner, command in runtime.commands
+        if owner == "run_docker" and command[:2] == ["docker", "logs"]
+    ]
+    assert len(docker_logs_commands) == 1
+    assert docker_logs_commands[0][:3] == ["docker", "logs", "--since"]
+    assert docker_logs_commands[0][-1] == "web-container-1"
+
+
+def test_run_docker_log_wait_filters_services_by_regex(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime(
+        compose_config={
+            "services": {
+                "web": {"image": "demo-web:latest"},
+                "worker": {"image": "demo-worker:latest"},
+            },
+            "volumes": {"demo_data": {}},
+        },
+        live_ps_rows=[
+            _ps_row("web-container-1", "demo-web-1", "web"),
+            _ps_row("worker-container-1", "demo-worker-1", "worker"),
+        ],
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="web-container-1",
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+            ),
+            _inspect_row(
+                container_id="worker-container-1",
+                name="demo-worker-1",
+                service="worker",
+                image="demo-worker:latest",
+                mounts=[],
+            ),
+        ],
+        container_logs={
+            "web-container-1": "server ready\n",
+            "worker-container-1": "worker ready\n",
+        },
+    )
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.run_docker(
+        compose_file=compose_file,
+        project_name="demo-project",
+        wait_for_logs=[
+            journey_docker.DockerLogMatcher(
+                service_name=r"worker$",
+                message=r"worker\s+ready",
+                timeout=1,
+                poll_interval=0.01,
+            )
+        ],
+    )
+
+    docker_logs_commands = [
+        command
+        for owner, command in runtime.commands
+        if owner == "run_docker" and command[:2] == ["docker", "logs"]
+    ]
+    assert [command[-1] for command in docker_logs_commands] == ["worker-container-1"]
+
+
+def test_run_docker_log_wait_times_out_when_message_never_appears(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime(container_logs={"web-container-1": "booting\n"})
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    with pytest.raises(TimeoutError) as exc_info:
+        journey_docker.run_docker(
+            compose_file=compose_file,
+            project_name="demo-project",
+            wait_for_logs=[
+                journey_docker.DockerLogMatcher(
+                    service_name=r"web",
+                    message=r"server ready",
+                    timeout=0,
+                    poll_interval=0.01,
+                )
+            ],
+        )
+
+    assert "timed out" in str(exc_info.value)
+
+
+def test_run_docker_log_wait_requires_matching_declared_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        journey_docker.run_docker(
+            compose_file=compose_file,
+            project_name="demo-project",
+            wait_for_logs=[
+                journey_docker.DockerLogMatcher(
+                    service_name=r"api",
+                    message=r"ready",
+                    timeout=0,
+                    poll_interval=0.01,
+                )
+            ],
+        )
+
+    assert "declared Compose service" in str(exc_info.value)
+    assert not any(
+        command[:2] == ["docker", "logs"]
+        for _, command in runtime.commands
+    )
+
+
+@pytest.mark.parametrize(
+    ("since", "expected_since"),
+    [
+        ("all", None),
+        ("2026-04-14T10:00:00Z", "2026-04-14T10:00:00Z"),
+        (
+            datetime(2026, 4, 14, 10, 0, tzinfo=UTC),
+            "2026-04-14T10:00:00.000000Z",
+        ),
+    ],
+)
+def test_docker_stack_wait_for_log_supports_since_variants(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    since: datetime | str,
+    expected_since: str | None,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime(
+        container_logs={
+            "web-container-1": "booting\nserver ready\n",
+        },
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    match = stack.wait_for_log(
+        service_name=r"web",
+        message=r"server\s+ready",
+        timeout=1,
+        poll_interval=0.01,
+        since=since,
+    )
+
+    assert match == journey_docker.DockerLogMatch(
+        service="web",
+        container_id="web-container-1",
+        container_name="demo-web-1",
+        line="server ready",
+    )
+    docker_logs_command = next(
+        command
+        for owner, command in runtime.commands
+        if owner == "DockerComposeStack.wait_for_log"
+        and command[:2] == ["docker", "logs"]
+    )
+    if expected_since is None:
+        assert docker_logs_command == ["docker", "logs", "web-container-1"]
+    else:
+        assert docker_logs_command == [
+            "docker",
+            "logs",
+            "--since",
+            expected_since,
+            "web-container-1",
+        ]
+
+
 def test_docker_stack_store_payload_preserves_wait_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
-    stack = _build_stack(tmp_path, wait_timeout=42)
+    matcher = journey_docker.DockerLogMatcher(
+        service_name=r"web",
+        message=r"ready",
+        timeout=12,
+        poll_interval=0.5,
+    )
+    stack = _build_stack(tmp_path, wait_timeout=42, log_matchers=(matcher,))
     snapshots: list[dict[str, object]] = []
 
     def fake_store_docker_snapshot(**kwargs: object) -> None:
@@ -512,14 +758,53 @@ def test_docker_stack_store_payload_preserves_wait_timeout(
     )
     assert isinstance(payload, dict)
     assert payload["wait_timeout"] == 42
+    assert payload["log_matchers"] == [
+        {
+            "service_name": r"web",
+            "message": r"ready",
+            "timeout": 12.0,
+            "poll_interval": 0.5,
+        }
+    ]
     assert snapshots[0]["stack"] is stack
 
     legacy_payload = dict(payload)
     del legacy_payload["wait_timeout"]
-    assert journey_docker._require_stack_payload(
+    del legacy_payload["log_matchers"]
+    restored_payload = journey_docker._require_stack_payload(
         legacy_payload,
         owner="DockerComposeStack.__restore__",
-    )["wait_timeout"] is None
+    )
+    assert restored_payload["wait_timeout"] is None
+    assert restored_payload["log_matchers"] == ()
+
+    restored_payload_with_matcher = journey_docker._require_stack_payload(
+        payload,
+        owner="DockerComposeStack.__restore__",
+    )
+    assert restored_payload_with_matcher["log_matchers"] == (matcher,)
+
+    restored_snapshots: list[dict[str, object]] = []
+
+    def fake_restore_docker_snapshot(**kwargs: object) -> None:
+        restored_snapshots.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        journey_docker,
+        "_restore_docker_snapshot",
+        fake_restore_docker_snapshot,
+    )
+
+    restored_stack = journey_docker.DockerComposeStack.__restore__(
+        payload,
+        journey_sdk.JourneyRestoreContext(
+            artifact_root=tmp_path,
+            boundary_kind="binding",
+            boundary_id="step:n_1",
+        ),
+    )
+    assert restored_stack.log_matchers == (matcher,)
+    assert restored_snapshots[0]["stack"] == restored_stack
 
 
 def test_run_docker_accepts_wait_failure_when_one_shot_service_exits_zero(
@@ -583,7 +868,7 @@ def test_run_docker_accepts_wait_failure_when_one_shot_service_exits_zero(
         compose_file=compose_file,
         project_name="demo-project",
         wait_timeout=15,
-    )()
+    )
 
     assert stack.project_name == "demo-project"
 
@@ -1509,6 +1794,42 @@ def test_restore_docker_debug_pretty_logs_identify_volumes_and_services(
     assert "starting restored Docker Compose services: services=web count=1" in output
 
 
+def test_restore_docker_waits_for_configured_raw_container_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(
+        tmp_path,
+        log_matchers=(
+            journey_docker.DockerLogMatcher(
+                service_name=r"web",
+                message=r"restored\s+ready",
+                timeout=1,
+                poll_interval=0.01,
+            ),
+        ),
+    )
+    _write_restore_snapshot(stack)
+    runtime = _FakeDockerRuntime(
+        container_logs={
+            "web-container-1": "old ready\n",
+            "web-container-2": "restored ready\n",
+        },
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.restore_docker(stack, snapshot_name="after_boot")
+
+    docker_logs_commands = [
+        command
+        for owner, command in runtime.commands
+        if owner == "restore_docker" and command[:2] == ["docker", "logs"]
+    ]
+    assert len(docker_logs_commands) == 1
+    assert docker_logs_commands[0][:3] == ["docker", "logs", "--since"]
+    assert docker_logs_commands[0][-1] == "web-container-2"
+
+
 def test_restore_docker_requires_existing_snapshot(tmp_path: Path):
     stack = _build_stack(tmp_path)
 
@@ -1649,13 +1970,14 @@ def test_execute_step_started_branches_restore_docker_snapshot(
         assert current["count"] == baseline["count"]
         return True
 
-    def journey():
-        stack = journey_sdk.step(
-            journey_docker.run_docker(
-                compose_file=compose_file,
-                project_name="demo",
-            )
+    def start_docker_stack() -> journey_docker.DockerComposeStack:
+        return journey_docker.run_docker(
+            compose_file=compose_file,
+            project_name="demo",
         )
+
+    def journey():
+        stack = journey_sdk.step(start_docker_stack)
         journey_sdk.step(assert_stack_ready, stack)
         baseline = journey_sdk.step(capture_baseline_state, stack)
         if journey_sdk.branch(start_from=baseline):
@@ -1681,14 +2003,14 @@ def test_execute_step_started_branches_restore_docker_snapshot(
         for case in report.case_reports
     ] == [
         [
-            "run_docker",
+            "start_docker_stack",
             "assert_stack_ready",
             "capture_baseline_state",
             "increment_counter",
             "assert_increment_branch",
         ],
         [
-            "run_docker",
+            "start_docker_stack",
             "assert_stack_ready",
             "capture_baseline_state",
             "read_counter_state",
@@ -1737,13 +2059,15 @@ def second_branch(stack):
     return True
 
 
-def flow():
-    stack = journey_sdk.step(
-        journey_docker.run_docker(
-            compose_file=COMPOSE_FILE,
-            project_name="demo",
-        )
+def start_docker_stack():
+    return journey_docker.run_docker(
+        compose_file=COMPOSE_FILE,
+        project_name="demo",
     )
+
+
+def flow():
+    stack = journey_sdk.step(start_docker_stack)
     anchor = journey_sdk.step(capture_anchor, stack)
     if journey_sdk.branch(start_from=anchor):
         journey_sdk.step(first_branch, stack)
@@ -1819,13 +2143,14 @@ def test_journey_resume_reruns_docker_retry_anchor_without_snapshotting_args(
     def finish() -> bool:
         return True
 
-    def journey():
-        stack = journey_sdk.step(
-            journey_docker.run_docker(
-                compose_file=compose_file,
-                project_name="demo",
-            )
+    def start_docker_stack() -> journey_docker.DockerComposeStack:
+        return journey_docker.run_docker(
+            compose_file=compose_file,
+            project_name="demo",
         )
+
+    def journey():
+        stack = journey_sdk.step(start_docker_stack)
         journey_sdk.step(
             poll,
             retry=1,
@@ -1840,7 +2165,7 @@ def test_journey_resume_reruns_docker_retry_anchor_without_snapshotting_args(
     report = journey_sdk.execute(journey, state=state_file)
 
     assert [record.label for record in report.case_reports[0].records if record.label is not None] == [
-        "run_docker",
+        "start_docker_stack",
         "poll",
         "finish",
     ]
@@ -1873,7 +2198,7 @@ def test_real_docker_smoke_round_trips_one_compose_snapshot(tmp_path: Path):
         compose_file=compose_file,
         project_name=f"journey-smoke-{os.getpid()}",
         wait_timeout=30,
-    )()
+    )
     try:
         assert stack.statuses["app"][0].state == "running"
         journey_docker.store_docker(stack, snapshot_name="smoke")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -13,8 +14,9 @@ import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from typing import Any
 from uuid import uuid4
 
 from journeysdk.logger import JourneyLogLevel, PrettyLine, get_logger, pretty_row
@@ -139,6 +141,64 @@ class DockerContainerStatus:
 
 
 @dataclass(frozen=True)
+class DockerLogMatcher:
+    """Regex matcher for one Docker service log line."""
+
+    service_name: str
+    message: str
+    timeout: float = 60.0
+    poll_interval: float = 0.25
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "service_name",
+            _normalize_regex_pattern(
+                owner="DockerLogMatcher",
+                field="service_name",
+                value=self.service_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "message",
+            _normalize_regex_pattern(
+                owner="DockerLogMatcher",
+                field="message",
+                value=self.message,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "timeout",
+            _normalize_nonnegative_number(
+                owner="DockerLogMatcher",
+                field="timeout",
+                value=self.timeout,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "poll_interval",
+            _normalize_positive_number(
+                owner="DockerLogMatcher",
+                field="poll_interval",
+                value=self.poll_interval,
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class DockerLogMatch:
+    """Matched Docker log line metadata."""
+
+    service: str
+    container_id: str
+    container_name: str
+    line: str
+
+
+@dataclass(frozen=True)
 class DockerComposeStack:
     """Serializable descriptor for one started Docker Compose project."""
 
@@ -147,6 +207,7 @@ class DockerComposeStack:
     project_name: str
     cache_root: str
     wait_timeout: int | None = None
+    log_matchers: tuple[DockerLogMatcher, ...] = ()
 
     @property
     def statuses(self) -> dict[str, tuple[DockerContainerStatus, ...]]:
@@ -159,6 +220,30 @@ class DockerComposeStack:
         """Return live combined logs grouped by Compose service."""
 
         return _load_live_logs(self)
+
+    def wait_for_log(
+        self,
+        *,
+        service_name: str,
+        message: str,
+        timeout: float = 60.0,
+        poll_interval: float = 0.25,
+        since: datetime | str = "now",
+    ) -> DockerLogMatch:
+        """Wait until a matching raw Docker log line appears."""
+
+        matcher = DockerLogMatcher(
+            service_name=service_name,
+            message=message,
+            timeout=timeout,
+            poll_interval=poll_interval,
+        )
+        return _wait_for_docker_log_match(
+            stack=self,
+            matcher=matcher,
+            since=_normalize_docker_logs_since(since),
+            owner="DockerComposeStack.wait_for_log",
+        )
 
     def __store__(self, context: JourneyStoreContext) -> object:
         snapshot_name = _snapshot_name_for_context(context)
@@ -174,6 +259,10 @@ class DockerComposeStack:
             "cache_root": self.cache_root,
             "snapshot_name": snapshot_name,
             "wait_timeout": self.wait_timeout,
+            "log_matchers": [
+                _log_matcher_payload(matcher)
+                for matcher in self.log_matchers
+            ],
         }
 
     @classmethod
@@ -189,6 +278,7 @@ class DockerComposeStack:
             project_name=data["project_name"],
             cache_root=data["cache_root"],
             wait_timeout=data["wait_timeout"],
+            log_matchers=data["log_matchers"],
         )
         _restore_docker_snapshot(
             stack=stack,
@@ -196,11 +286,6 @@ class DockerComposeStack:
             snapshot_root=_context_snapshot_root(context),
         )
         return stack
-
-
-class RunDockerStep(Protocol):
-    def __call__(self) -> DockerComposeStack:
-        ...
 
 
 @dataclass(frozen=True)
@@ -215,8 +300,9 @@ def run_docker(
     compose_file: str | os.PathLike[str] | None = None,
     project_name: str | None = None,
     wait_timeout: int | None = None,
-) -> RunDockerStep:
-    """Return a step callable that starts one local Docker Compose app."""
+    wait_for_logs: Sequence[DockerLogMatcher] = (),
+) -> DockerComposeStack:
+    """Start one local Docker Compose app."""
 
     normalized_compose_file = _normalize_optional_pathlike(
         owner="run_docker",
@@ -233,106 +319,111 @@ def run_docker(
         field="wait_timeout",
         value=wait_timeout,
     )
+    normalized_log_matchers = _normalize_log_matcher_sequence(
+        owner="run_docker",
+        field="wait_for_logs",
+        value=wait_for_logs,
+    )
 
-    def start_stack() -> DockerComposeStack:
-        compose_started_at = time.monotonic()
-        original_compose_path = _resolve_compose_file(normalized_compose_file)
-        resolved_project_name = normalized_project_name or _generate_project_name(
-            original_compose_path
-        )
-        _LOGGER.info(
-            "compose_start",
-            "starting Docker Compose stack",
-            pretty=_docker_row("starting Docker Compose stack"),
+    compose_started_at = time.monotonic()
+    original_compose_path = _resolve_compose_file(normalized_compose_file)
+    resolved_project_name = normalized_project_name or _generate_project_name(
+        original_compose_path
+    )
+    _LOGGER.info(
+        "compose_start",
+        "starting Docker Compose stack",
+        pretty=_docker_row("starting Docker Compose stack"),
+        compose_file=original_compose_path,
+        project=resolved_project_name,
+        wait_timeout=normalized_wait_timeout,
+    )
+    project_cache_dir = _project_cache_dir(
+        cache_root=_CACHE_ROOT,
+        project_name=resolved_project_name,
+    )
+    project_cache_dir.mkdir(parents=True, exist_ok=True)
+    resolved_compose_path = project_cache_dir / "resolved-compose.yml"
+
+    resolved_yaml = _run_cli(
+        _compose_command(
             compose_file=original_compose_path,
-            project=resolved_project_name,
-            wait_timeout=normalized_wait_timeout,
-        )
-        project_cache_dir = _project_cache_dir(
-            cache_root=_CACHE_ROOT,
             project_name=resolved_project_name,
-        )
-        project_cache_dir.mkdir(parents=True, exist_ok=True)
-        resolved_compose_path = project_cache_dir / "resolved-compose.yml"
+            subcommand=["config", "--format", "yaml"],
+        ),
+        owner="run_docker",
+    )
+    resolved_compose_path.write_text(resolved_yaml, encoding="utf-8")
 
-        resolved_yaml = _run_cli(
+    up_command = ["up", "-d", "--wait"]
+    if normalized_wait_timeout is not None:
+        up_command.extend(["--wait-timeout", str(normalized_wait_timeout)])
+    stack = DockerComposeStack(
+        compose_file=str(original_compose_path),
+        resolved_compose_file=str(resolved_compose_path),
+        project_name=resolved_project_name,
+        cache_root=str(_CACHE_ROOT),
+        wait_timeout=normalized_wait_timeout,
+        log_matchers=normalized_log_matchers,
+    )
+    log_since = _docker_logs_since_timestamp()
+    try:
+        _run_cli(
             _compose_command(
-                compose_file=original_compose_path,
+                compose_file=resolved_compose_path,
                 project_name=resolved_project_name,
-                subcommand=["config", "--format", "yaml"],
+                subcommand=up_command,
             ),
             owner="run_docker",
+            failure_level="debug",
         )
-        resolved_compose_path.write_text(resolved_yaml, encoding="utf-8")
-
-        up_command = ["up", "-d", "--wait"]
-        if normalized_wait_timeout is not None:
-            up_command.extend(["--wait-timeout", str(normalized_wait_timeout)])
-        stack = DockerComposeStack(
-            compose_file=str(original_compose_path),
-            resolved_compose_file=str(resolved_compose_path),
-            project_name=resolved_project_name,
-            cache_root=str(_CACHE_ROOT),
-            wait_timeout=normalized_wait_timeout,
-        )
-        try:
-            _run_cli(
-                _compose_command(
-                    compose_file=resolved_compose_path,
-                    project_name=resolved_project_name,
-                    subcommand=up_command,
-                ),
-                owner="run_docker",
-                failure_level="debug",
+    except RuntimeError as exc:
+        if not _compose_wait_failure_is_successful_one_shot(stack):
+            _LOGGER.error(
+                "compose_failure",
+                "Docker Compose stack failed",
+                pretty="Docker Compose stack failed",
+                compose_file=stack.compose_file,
+                resolved_compose_file=stack.resolved_compose_file,
+                project=stack.project_name,
+                wait_timeout=normalized_wait_timeout,
+                error=str(exc),
+                **_duration_fields(compose_started_at),
             )
-        except RuntimeError as exc:
-            if not _compose_wait_failure_is_successful_one_shot(stack):
-                _LOGGER.error(
-                    "compose_failure",
-                    "Docker Compose stack failed",
-                    pretty="Docker Compose stack failed",
-                    compose_file=stack.compose_file,
-                    resolved_compose_file=stack.resolved_compose_file,
-                    project=stack.project_name,
-                    wait_timeout=normalized_wait_timeout,
-                    error=str(exc),
-                    **_duration_fields(compose_started_at),
-                )
-                raise
+            raise
 
-        duration = _duration_fields(compose_started_at)
-        _LOGGER.info(
-            "compose_success",
-            "Docker Compose stack started",
-            pretty=_docker_row(
-                _phase_pretty_text(
-                    "Docker Compose stack started",
-                    duration=duration["duration"],
-                    detail=_pretty_kv(
-                        [
-                            ("project", stack.project_name),
-                            ("compose", stack.compose_file),
-                            ("resolved", stack.resolved_compose_file),
-                            ("wait_timeout", normalized_wait_timeout),
-                        ]
-                    ),
+    _wait_for_docker_log_matchers(
+        stack=stack,
+        matchers=normalized_log_matchers,
+        since=log_since,
+        owner="run_docker",
+    )
+
+    duration = _duration_fields(compose_started_at)
+    _LOGGER.info(
+        "compose_success",
+        "Docker Compose stack started",
+        pretty=_docker_row(
+            _phase_pretty_text(
+                "Docker Compose stack started",
+                duration=duration["duration"],
+                detail=_pretty_kv(
+                    [
+                        ("project", stack.project_name),
+                        ("compose", stack.compose_file),
+                        ("resolved", stack.resolved_compose_file),
+                        ("wait_timeout", normalized_wait_timeout),
+                    ]
                 )
             ),
-            compose_file=stack.compose_file,
-            resolved_compose_file=stack.resolved_compose_file,
-            project=stack.project_name,
-            wait_timeout=normalized_wait_timeout,
-            **duration,
-        )
-        return stack
-
-    _set_step_metadata(
-        start_stack,
-        label="run_docker",
-        owner="run_docker",
-        attrs={},
+        ),
+        compose_file=stack.compose_file,
+        resolved_compose_file=stack.resolved_compose_file,
+        project=stack.project_name,
+        wait_timeout=normalized_wait_timeout,
+        **duration,
     )
-    return start_stack
+    return stack
 
 
 def store_docker(
@@ -990,6 +1081,7 @@ def _restore_docker_snapshot(
         if validated_stack.wait_timeout is not None:
             up_command.extend(["--wait-timeout", str(validated_stack.wait_timeout)])
         up_command.extend(running_services)
+        log_since = _docker_logs_since_timestamp()
         _run_cli(
             _compose_multi_file_command(
                 compose_files=compose_files,
@@ -1008,6 +1100,13 @@ def _restore_docker_snapshot(
             pretty_detail=start_services_detail,
             services=running_services,
             services_count=len(running_services),
+        )
+        _wait_for_docker_log_matchers(
+            stack=validated_stack,
+            matchers=validated_stack.log_matchers,
+            since=log_since,
+            owner="restore_docker",
+            service_names=running_services,
         )
     duration = _duration_fields(restore_started_at)
     _LOGGER.info(
@@ -1094,6 +1193,198 @@ def _load_live_logs(stack: DockerComposeStack) -> dict[str, str]:
         services=len(logs),
     )
     return logs
+
+
+def _wait_for_docker_log_match(
+    *,
+    stack: DockerComposeStack,
+    matcher: DockerLogMatcher,
+    since: str | None,
+    owner: str,
+) -> DockerLogMatch:
+    matches = _wait_for_docker_log_matchers(
+        stack=stack,
+        matchers=(matcher,),
+        since=since,
+        owner=owner,
+    )
+    if not matches:
+        raise RuntimeError(f"{owner}(...) did not run any Docker log matchers.")
+    return matches[0]
+
+
+def _wait_for_docker_log_matchers(
+    *,
+    stack: DockerComposeStack,
+    matchers: Sequence[DockerLogMatcher],
+    since: str | None,
+    owner: str,
+    service_names: Sequence[str] | None = None,
+) -> tuple[DockerLogMatch, ...]:
+    normalized_matchers = _normalize_log_matcher_sequence(
+        owner=owner,
+        field="matchers",
+        value=matchers,
+    )
+    if not normalized_matchers:
+        return ()
+
+    validated_stack = _require_stack(stack=stack, owner=owner)
+    compose_config = _load_compose_config(validated_stack, owner=owner)
+    declared_services = _declared_service_names(compose_config, owner=owner)
+    service_filter = set(service_names) if service_names is not None else None
+    results: list[DockerLogMatch] = []
+    for matcher in normalized_matchers:
+        match = _wait_for_one_docker_log_matcher(
+            stack=validated_stack,
+            matcher=matcher,
+            declared_services=declared_services,
+            service_filter=service_filter,
+            since=since,
+            owner=owner,
+        )
+        if match is not None:
+            results.append(match)
+    return tuple(results)
+
+
+def _wait_for_one_docker_log_matcher(
+    *,
+    stack: DockerComposeStack,
+    matcher: DockerLogMatcher,
+    declared_services: Sequence[str],
+    service_filter: set[str] | None,
+    since: str | None,
+    owner: str,
+) -> DockerLogMatch | None:
+    service_pattern = re.compile(matcher.service_name)
+    message_pattern = re.compile(matcher.message)
+    matched_services = [
+        service for service in declared_services if service_pattern.search(service)
+    ]
+    if not matched_services:
+        raise RuntimeError(
+            f"{owner}(...) could not find a declared Compose service matching "
+            f"{matcher.service_name!r}."
+        )
+
+    eligible_services = matched_services
+    if service_filter is not None:
+        eligible_services = [
+            service for service in matched_services if service in service_filter
+        ]
+        if not eligible_services:
+            _LOGGER.debug(
+                "log_wait_skipped",
+                "skipping Docker log wait for services not started in this restore",
+                owner=owner,
+                project=stack.project_name,
+                service_name_pattern=matcher.service_name,
+                matched_services=matched_services,
+                started_services=sorted(service_filter),
+            )
+            return None
+
+    _LOGGER.debug(
+        "log_wait_start",
+        "waiting for Docker log line",
+        owner=owner,
+        project=stack.project_name,
+        service_name_pattern=matcher.service_name,
+        log_message_pattern=matcher.message,
+        services=eligible_services,
+        timeout=matcher.timeout,
+        since=since,
+    )
+    started_at = time.monotonic()
+    deadline = started_at + matcher.timeout
+    attempts = 0
+    while True:
+        attempts += 1
+        live_containers = _load_live_containers(
+            stack,
+            owner=owner,
+            include_all=True,
+        )
+        for live_container in live_containers:
+            status = live_container.status
+            if status.service not in eligible_services:
+                continue
+            output = _load_raw_container_logs(
+                container_id=status.container_id,
+                since=since,
+                owner=owner,
+            )
+            for line in output.splitlines():
+                if message_pattern.search(line):
+                    duration = _duration_fields(started_at)
+                    match = DockerLogMatch(
+                        service=status.service,
+                        container_id=status.container_id,
+                        container_name=status.container_name,
+                        line=line,
+                    )
+                    _LOGGER.debug(
+                        "log_wait_success",
+                        "matched Docker log line",
+                        owner=owner,
+                        project=stack.project_name,
+                        service=status.service,
+                        container_id=status.container_id,
+                        container_name=status.container_name,
+                        service_name_pattern=matcher.service_name,
+                        log_message_pattern=matcher.message,
+                        attempts=attempts,
+                        **duration,
+                    )
+                    return match
+
+        now = time.monotonic()
+        if now >= deadline:
+            _LOGGER.warning(
+                "log_wait_timeout",
+                "timed out waiting for Docker log line",
+                owner=owner,
+                project=stack.project_name,
+                service_name_pattern=matcher.service_name,
+                log_message_pattern=matcher.message,
+                services=eligible_services,
+                timeout=matcher.timeout,
+                attempts=attempts,
+                **_duration_fields(started_at),
+            )
+            raise TimeoutError(
+                f"{owner}(...) timed out after {matcher.timeout:g}s waiting for "
+                f"Docker log message {matcher.message!r} from service pattern "
+                f"{matcher.service_name!r}."
+            )
+        time.sleep(min(matcher.poll_interval, deadline - now))
+
+
+def _load_raw_container_logs(
+    *,
+    container_id: str,
+    since: str | None,
+    owner: str,
+) -> str:
+    command = ["docker", "logs"]
+    if since is not None:
+        command.extend(["--since", since])
+    command.append(container_id)
+    return _run_cli(command, owner=owner)
+
+
+def _declared_service_names(
+    compose_config: Mapping[str, Any],
+    *,
+    owner: str,
+) -> tuple[str, ...]:
+    services = compose_config.get("services")
+    if not isinstance(services, Mapping):
+        raise RuntimeError(f"{owner}(...) received an invalid Compose services block.")
+    return tuple(
+        service for service in services if isinstance(service, str) and service
+    )
 
 
 def _compose_wait_failure_is_successful_one_shot(stack: DockerComposeStack) -> bool:
@@ -1211,6 +1502,145 @@ def _normalize_optional_positive_int(
     return value
 
 
+def _normalize_nonnegative_number(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError(f"{owner}(..., {field}=...) expects a number.")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{owner}(..., {field}=...) expects a finite number.")
+    if normalized < 0:
+        raise ValueError(f"{owner}(..., {field}=...) expects a non-negative number.")
+    return normalized
+
+
+def _normalize_positive_number(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> float:
+    normalized = _normalize_nonnegative_number(
+        owner=owner,
+        field=field,
+        value=value,
+    )
+    if normalized <= 0:
+        raise ValueError(f"{owner}(..., {field}=...) expects a positive number.")
+    return normalized
+
+
+def _normalize_regex_pattern(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{owner}(..., {field}=...) expects a regex string.")
+    if not value.strip():
+        raise ValueError(f"{owner}(..., {field}=...) expects a non-blank regex string.")
+    try:
+        re.compile(value)
+    except re.error as exc:
+        raise ValueError(
+            f"{owner}(..., {field}=...) received an invalid regex: {exc}."
+        ) from exc
+    return value
+
+
+def _normalize_log_matcher_sequence(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> tuple[DockerLogMatcher, ...]:
+    if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"{owner}(..., {field}=...) expects a sequence of DockerLogMatcher values."
+        )
+    matchers: list[DockerLogMatcher] = []
+    for index, matcher in enumerate(value):
+        if not isinstance(matcher, DockerLogMatcher):
+            raise TypeError(
+                f"{owner}(..., {field}=...) expects DockerLogMatcher values; "
+                f"item {index} was {type(matcher).__name__}."
+            )
+        matchers.append(matcher)
+    return tuple(matchers)
+
+
+def _normalize_docker_logs_since(value: datetime | str) -> str | None:
+    if isinstance(value, datetime):
+        return _datetime_to_docker_timestamp(value)
+    if not isinstance(value, str):
+        raise TypeError(
+            "DockerComposeStack.wait_for_log(..., since=...) expects a string or datetime."
+        )
+    normalized = value.strip()
+    if normalized == "now":
+        return _docker_logs_since_timestamp()
+    if normalized == "all":
+        return None
+    if not normalized:
+        raise ValueError(
+            "DockerComposeStack.wait_for_log(..., since=...) expects a non-blank string."
+        )
+    return normalized
+
+
+def _docker_logs_since_timestamp() -> str:
+    return _datetime_to_docker_timestamp(datetime.now(UTC))
+
+
+def _datetime_to_docker_timestamp(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    utc_value = value.astimezone(UTC)
+    return utc_value.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _log_matcher_payload(matcher: DockerLogMatcher) -> dict[str, object]:
+    return {
+        "service_name": matcher.service_name,
+        "message": matcher.message,
+        "timeout": matcher.timeout,
+        "poll_interval": matcher.poll_interval,
+    }
+
+
+def _require_log_matchers_payload(
+    value: object,
+    *,
+    owner: str,
+) -> tuple[DockerLogMatcher, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"{owner}(...) received invalid payload field 'log_matchers'."
+        )
+    matchers: list[DockerLogMatcher] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise TypeError(
+                f"{owner}(...) received invalid log_matchers payload item {index}."
+            )
+        matchers.append(
+            DockerLogMatcher(
+                service_name=item.get("service_name"),
+                message=item.get("message"),
+                timeout=item.get("timeout", 60.0),
+                poll_interval=item.get("poll_interval", 0.25),
+            )
+        )
+    return tuple(matchers)
+
+
 def _normalize_snapshot_name(*, owner: str, value: object) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{owner}(..., snapshot_name=...) expects a string.")
@@ -1288,6 +1718,10 @@ def _require_stack_payload(
             value=wait_timeout,
         )
     result["wait_timeout"] = wait_timeout
+    result["log_matchers"] = _require_log_matchers_payload(
+        data.get("log_matchers", ()),
+        owner=owner,
+    )
     return result
 
 
@@ -2182,19 +2616,6 @@ def _display_command(args: Sequence[str]) -> str:
     return " ".join(str(item) for item in args)
 
 
-def _set_step_metadata(
-    fn: object,
-    *,
-    label: str,
-    owner: str,
-    attrs: Mapping[str, object],
-) -> None:
-    setattr(fn, "__name__", label)
-    setattr(fn, "__qualname__", f"{owner}.<locals>.{label}")
-    for key, value in attrs.items():
-        setattr(fn, key, value)
-
-
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value.strip().lower()).strip("-")
     return slug or "item"
@@ -2203,7 +2624,8 @@ def _slugify(value: str) -> str:
 __all__ = [
     "DockerComposeStack",
     "DockerContainerStatus",
-    "RunDockerStep",
+    "DockerLogMatch",
+    "DockerLogMatcher",
     "restore_docker",
     "run_docker",
     "store_docker",

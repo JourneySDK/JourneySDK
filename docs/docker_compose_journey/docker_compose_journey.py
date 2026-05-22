@@ -12,6 +12,7 @@ from journeysdk import branch, journey, step
 from journeysdk.touchpoints.docker import (
     DockerComposeStack,
     DockerContainerStatus,
+    DockerLogMatcher,
     run_docker,
 )
 
@@ -238,15 +239,24 @@ def assert_restored_counter_branch(
     return True
 
 
+def start_docker_stack() -> DockerComposeStack:
+    return run_docker(
+        compose_file=_COMPOSE_FILE,
+        project_name="journey-docker-docs",
+        wait_timeout=60,
+        wait_for_logs=[
+            DockerLogMatcher(
+                service_name=r"^app$",
+                message=r"Journey counter app\s+ready",
+                timeout=60,
+            )
+        ],
+    )
+
+
 @journey
 def docker_compose_journey() -> None:
-    stack = step(
-        run_docker(
-            compose_file=_COMPOSE_FILE,
-            project_name="journey-docker-docs",
-            wait_timeout=60,
-        )
-    )
+    stack = step(start_docker_stack)
     step(assert_stack_ready, stack)
     baseline = step(capture_baseline_state, stack)
     if branch(start_from=baseline):
