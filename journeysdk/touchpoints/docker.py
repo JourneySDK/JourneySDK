@@ -13,7 +13,7 @@ import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -21,7 +21,7 @@ from journeysdk.logger import JourneyLogLevel, PrettyLine, get_logger, pretty_ro
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
-_CURRENT_SNAPSHOT_FORMAT = 3
+_CURRENT_SNAPSHOT_FORMAT = 4
 _VOLUME_COPY_IMAGE = "debian:bookworm-slim"
 _SUPPORTED_CONTAINER_STATES = {"running", "restarting", "created", "exited"}
 _STARTED_CONTAINER_STATES = {"running", "restarting"}
@@ -515,7 +515,7 @@ def _store_docker_snapshot(
             existing = volume_entries_by_name.get(volume_entry["volume_name"])
             if existing is not None:
                 continue
-            volume_entry["snapshot_volume_name"] = _snapshot_volume_name(
+            volume_entry["backup_relpath"] = _volume_snapshot_payload_relpath(
                 project_name=validated_stack.project_name,
                 snapshot_name=normalized_snapshot_name,
                 source_volume_name=volume_entry["volume_name"],
@@ -538,51 +538,51 @@ def _store_docker_snapshot(
                 container_ids=stopped_container_ids,
             )
         for volume_entry in volume_entries:
-            backup_detail = _pretty_kv(
+            snapshot_payload_detail = _pretty_kv(
                 [
                     ("volume", volume_entry["volume_name"]),
                     ("service", volume_entry["service"]),
                     ("container", volume_entry["container_name"]),
                     ("from", volume_entry["volume_name"]),
-                    ("to", volume_entry["snapshot_volume_name"]),
+                    ("to", volume_entry["backup_relpath"]),
                 ]
             )
-            backup_started_at = _log_snapshot_phase_start(
+            snapshot_payload_started_at = _log_snapshot_phase_start(
                 prefix="snapshot_store",
-                phase="volume_backup",
+                phase="volume_payload",
                 message="copying Docker volume to snapshot",
                 project_name=validated_stack.project_name,
                 snapshot_name=normalized_snapshot_name,
-                pretty_detail=backup_detail,
+                pretty_detail=snapshot_payload_detail,
                 service=volume_entry["service"],
                 container=volume_entry["container_name"],
                 volume=volume_entry["volume_name"],
-                snapshot_volume=volume_entry["snapshot_volume_name"],
+                backup_relpath=volume_entry["backup_relpath"],
                 target_path=volume_entry["target_path"],
             )
-            _replace_volume_clone(
+            snapshot_payload_dir = _manifest_volume_snapshot_payload_dir(
+                snapshot_dir=snapshot_dir,
+                volume_entry=volume_entry,
+                owner="store_docker",
+            )
+            snapshot_payload_dir.mkdir(parents=True, exist_ok=False)
+            _copy_volume_to_directory(
                 owner="store_docker",
                 source_volume_name=volume_entry["volume_name"],
-                destination_volume_name=volume_entry["snapshot_volume_name"],
-                labels={
-                    "journeysdk.snapshot": "true",
-                    "journeysdk.project": validated_stack.project_name,
-                    "journeysdk.snapshot_name": normalized_snapshot_name,
-                    "journeysdk.source_volume": volume_entry["volume_name"],
-                },
+                destination_dir=snapshot_payload_dir,
             )
             _log_snapshot_phase_success(
                 prefix="snapshot_store",
-                phase="volume_backup",
-                started_at=backup_started_at,
+                phase="volume_payload",
+                started_at=snapshot_payload_started_at,
                 message="copied Docker volume to snapshot",
                 project_name=validated_stack.project_name,
                 snapshot_name=normalized_snapshot_name,
-                pretty_detail=backup_detail,
+                pretty_detail=snapshot_payload_detail,
                 service=volume_entry["service"],
                 container=volume_entry["container_name"],
                 volume=volume_entry["volume_name"],
-                snapshot_volume=volume_entry["snapshot_volume_name"],
+                backup_relpath=volume_entry["backup_relpath"],
                 target_path=volume_entry["target_path"],
             )
     finally:
@@ -757,9 +757,14 @@ def _restore_docker_snapshot(
 
     compose_files = [Path(validated_stack.resolved_compose_file)]
     for volume_entry in volume_entries:
-        _require_volume_exists(
+        snapshot_payload_dir = _manifest_volume_snapshot_payload_dir(
+            snapshot_dir=snapshot_dir,
+            volume_entry=volume_entry,
             owner="restore_docker",
-            volume_name=_manifest_volume_snapshot_name(volume_entry),
+        )
+        _require_snapshot_payload_dir_exists(
+            owner="restore_docker",
+            snapshot_payload_dir=snapshot_payload_dir,
         )
 
     compose_down_detail = _pretty_kv([("project", validated_stack.project_name)])
@@ -899,7 +904,11 @@ def _restore_docker_snapshot(
                 "restore_docker(...) could not find the recreated container for "
                 f"service '{volume_entry['service']}' index {volume_entry['container_index']}."
             )
-        snapshot_volume_name = _manifest_volume_snapshot_name(volume_entry)
+        snapshot_payload_dir = _manifest_volume_snapshot_payload_dir(
+            snapshot_dir=snapshot_dir,
+            volume_entry=volume_entry,
+            owner="restore_docker",
+        )
         destination_volume_name = _container_volume_name_for_target(
             live_container=live_container,
             target_path=volume_entry["target_path"],
@@ -911,7 +920,7 @@ def _restore_docker_snapshot(
                 ("service", volume_entry["service"]),
                 ("container", live_container.status.container_name),
                 ("id", live_container.status.container_id),
-                ("from", snapshot_volume_name),
+                ("from", volume_entry["backup_relpath"]),
                 ("to", destination_volume_name),
                 ("target", volume_entry["target_path"]),
             ]
@@ -927,13 +936,13 @@ def _restore_docker_snapshot(
             container=live_container.status.container_name,
             container_id=live_container.status.container_id,
             volume=volume_entry["volume_name"],
-            snapshot_volume=snapshot_volume_name,
+            backup_relpath=volume_entry["backup_relpath"],
             destination_volume=destination_volume_name,
             target_path=volume_entry["target_path"],
         )
-        _copy_volume_contents(
+        _copy_directory_to_volume(
             owner="restore_docker",
-            source_volume_name=snapshot_volume_name,
+            source_dir=snapshot_payload_dir,
             destination_volume_name=destination_volume_name,
         )
         _log_snapshot_phase_success(
@@ -948,7 +957,7 @@ def _restore_docker_snapshot(
             container=live_container.status.container_name,
             container_id=live_container.status.container_id,
             volume=volume_entry["volume_name"],
-            snapshot_volume=snapshot_volume_name,
+            backup_relpath=volume_entry["backup_relpath"],
             destination_volume=destination_volume_name,
             target_path=volume_entry["target_path"],
         )
@@ -1231,10 +1240,13 @@ def _snapshot_dir(
 ) -> Path:
     if snapshot_root is not None:
         return snapshot_root
-    return _project_cache_dir(
-        cache_root=Path(stack.cache_root),
-        project_name=stack.project_name,
-    ) / snapshot_name
+    return (
+        Path(stack.compose_file).resolve().parent
+        / ".journey"
+        / "docker"
+        / _slugify(stack.project_name)
+        / snapshot_name
+    )
 
 
 def _snapshot_name_for_context(context: JourneyStoreContext) -> str:
@@ -1586,7 +1598,7 @@ def _build_volume_entry(
     }
 
 
-def _snapshot_volume_name(
+def _volume_snapshot_payload_relpath(
     *,
     project_name: str,
     snapshot_name: str,
@@ -1605,51 +1617,41 @@ def _snapshot_volume_name(
             ]
         ).encode("utf-8")
     ).hexdigest()[:16]
-    return "-".join(
-        [
-            "journey-snapshot",
-            _slugify(project_name)[:32],
-            _slugify(snapshot_name)[:32],
-            _slugify(source_volume_name)[:48],
-            digest,
-        ]
-    )
+    payload_dir_name = f"{_slugify(source_volume_name)[:64]}-{digest}"
+    return (Path("volumes") / payload_dir_name).as_posix()
 
 
-def _replace_volume_clone(
+def _copy_volume_to_directory(
     *,
     owner: str,
     source_volume_name: str,
-    destination_volume_name: str,
-    labels: Mapping[str, str],
+    destination_dir: Path,
 ) -> None:
-    _remove_volume_if_exists(owner=owner, volume_name=destination_volume_name)
-    _create_volume(owner=owner, volume_name=destination_volume_name, labels=labels)
-    _copy_volume_contents(
+    _copy_snapshot_contents(
         owner=owner,
-        source_volume_name=source_volume_name,
-        destination_volume_name=destination_volume_name,
+        source_mount=f"type=volume,source={source_volume_name},target=/from,readonly",
+        destination_mount=f"type=bind,source={destination_dir},target=/to",
     )
 
 
-def _create_volume(
+def _copy_directory_to_volume(
     *,
     owner: str,
-    volume_name: str,
-    labels: Mapping[str, str],
-) -> None:
-    command = ["docker", "volume", "create"]
-    for key, value in sorted(labels.items()):
-        command.extend(["--label", f"{key}={value}"])
-    command.append(volume_name)
-    _run_cli(command, owner=owner)
-
-
-def _copy_volume_contents(
-    *,
-    owner: str,
-    source_volume_name: str,
+    source_dir: Path,
     destination_volume_name: str,
+) -> None:
+    _copy_snapshot_contents(
+        owner=owner,
+        source_mount=f"type=bind,source={source_dir},target=/from,readonly",
+        destination_mount=f"type=volume,source={destination_volume_name},target=/to",
+    )
+
+
+def _copy_snapshot_contents(
+    *,
+    owner: str,
+    source_mount: str,
+    destination_mount: str,
 ) -> None:
     _run_cli(
         [
@@ -1657,17 +1659,13 @@ def _copy_volume_contents(
             "run",
             "--rm",
             "--mount",
-            f"type=volume,source={source_volume_name},target=/from,readonly",
+            source_mount,
             "--mount",
-            f"type=volume,source={destination_volume_name},target=/to",
+            destination_mount,
             _VOLUME_COPY_IMAGE,
             "sh",
             "-ec",
-            (
-                "cp -a --reflink=auto --sparse=always /from/. /to/\n"
-                "chown --reference=/from /to\n"
-                "chmod --reference=/from /to"
-            ),
+            "cp -a --reflink=auto --sparse=always /from/. /to/",
         ],
         owner=owner,
     )
@@ -1732,6 +1730,60 @@ def _remove_snapshot_volumes_from_manifest(
         return
     for volume_name in _snapshot_volume_names_from_manifest(manifest):
         _remove_volume_if_exists(owner=owner, volume_name=volume_name)
+
+
+def _manifest_volume_snapshot_payload_dir(
+    *,
+    snapshot_dir: Path,
+    volume_entry: Mapping[str, Any],
+    owner: str,
+) -> Path:
+    relpath = _require_string(
+        owner=owner,
+        label="volume backup_relpath",
+        value=volume_entry.get("backup_relpath"),
+    )
+    if "\\" in relpath:
+        raise RuntimeError(
+            f"{owner}(...) received invalid volume backup_relpath "
+            "in the snapshot manifest."
+        )
+    parsed = PurePosixPath(relpath)
+    if parsed.is_absolute() or not parsed.parts:
+        raise RuntimeError(
+            f"{owner}(...) received invalid volume backup_relpath "
+            "in the snapshot manifest."
+        )
+    if any(part in {"", ".", ".."} for part in parsed.parts):
+        raise RuntimeError(
+            f"{owner}(...) received invalid volume backup_relpath "
+            "in the snapshot manifest."
+        )
+    root = snapshot_dir.resolve()
+    snapshot_payload_dir = root.joinpath(*parsed.parts).resolve()
+    if snapshot_payload_dir != root and root not in snapshot_payload_dir.parents:
+        raise RuntimeError(
+            f"{owner}(...) received invalid volume backup_relpath "
+            "in the snapshot manifest."
+        )
+    return snapshot_payload_dir
+
+
+def _require_snapshot_payload_dir_exists(
+    *,
+    owner: str,
+    snapshot_payload_dir: Path,
+) -> None:
+    if not snapshot_payload_dir.exists():
+        raise FileNotFoundError(
+            f"{owner}(...) could not find Docker snapshot volume payload directory "
+            f"'{snapshot_payload_dir}'."
+        )
+    if not snapshot_payload_dir.is_dir():
+        raise FileNotFoundError(
+            f"{owner}(...) expected Docker snapshot volume payload path "
+            f"'{snapshot_payload_dir}' to be a directory."
+        )
 
 
 def _snapshot_volume_names_from_manifest(manifest: Mapping[str, Any]) -> list[str]:
@@ -1814,7 +1866,8 @@ def _manifest_format(manifest: Mapping[str, Any]) -> int:
         raise RuntimeError(
             "restore_docker(...) received an unsupported Docker snapshot manifest "
             f"format {value!r}. This version only restores format "
-            f"{_CURRENT_SNAPSHOT_FORMAT} volume-clone snapshots; regenerate the snapshot."
+            f"{_CURRENT_SNAPSHOT_FORMAT} filesystem-backed snapshots; "
+            "regenerate the snapshot."
         )
     return value
 
@@ -1835,15 +1888,6 @@ def _manifest_volume_entries(manifest: Mapping[str, Any]) -> list[dict[str, Any]
             "restore_docker(...) received invalid volume metadata in the snapshot manifest."
         )
     return [dict(item) for item in entries]
-
-
-def _manifest_volume_snapshot_name(entry: Mapping[str, Any]) -> str:
-    value = entry.get("snapshot_volume_name")
-    return _require_string(
-        owner="restore_docker",
-        label="volume snapshot_volume_name",
-        value=value,
-    )
 
 
 def _require_single_container_manifest(
@@ -1872,13 +1916,6 @@ def _remove_volume_if_exists(*, owner: str, volume_name: str) -> bool:
         owner=owner,
     )
     return True
-
-
-def _require_volume_exists(*, owner: str, volume_name: str) -> None:
-    if not _volume_exists(owner=owner, volume_name=volume_name):
-        raise FileNotFoundError(
-            f"{owner}(...) could not find Docker snapshot volume '{volume_name}'."
-        )
 
 
 def _volume_exists(*, owner: str, volume_name: str) -> bool:

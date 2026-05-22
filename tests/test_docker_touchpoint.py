@@ -170,7 +170,7 @@ class _FakeDockerRuntime:
         self.logs_by_service = logs_by_service or {
             "web": "web-1  | 2026-04-14T10:00:00Z booted\n",
         }
-        self.volume_names = {"demo_demo_data", "demo_demo_data_snapshot"}
+        self.volume_names = {"demo_demo_data"}
         self.volume_labels: dict[str, dict[str, str]] = {}
         self.phase = "live"
         self.commands: list[tuple[str, list[str]]] = []
@@ -327,10 +327,15 @@ def _write_restore_snapshot(
     *,
     snapshot_name: str = "after_boot",
 ) -> Path:
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / snapshot_name
+    snapshot_dir = journey_docker._snapshot_dir(
+        stack=stack,
+        snapshot_name=snapshot_name,
+    )
+    snapshot_payload_dir = snapshot_dir / "volumes" / "demo-demo-data"
+    snapshot_payload_dir.mkdir(parents=True, exist_ok=True)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "format": 3,
+        "format": 4,
         "project_name": stack.project_name,
         "compose_file": stack.compose_file,
         "resolved_compose_file": stack.resolved_compose_file,
@@ -356,7 +361,7 @@ def _write_restore_snapshot(
                 "container_index": 1,
                 "container_name": "demo-web-1",
                 "target_path": "/data",
-                "snapshot_volume_name": "demo_demo_data_snapshot",
+                "backup_relpath": "volumes/demo-demo-data",
                 "mode": "",
             }
         ],
@@ -720,7 +725,7 @@ def test_store_docker_accepts_compose_ps_json_lines(
 
     journey_docker.store_docker(stack, snapshot_name="after_boot")
 
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["containers"][0]["container_id"] == "web-container-1"
 
@@ -754,7 +759,7 @@ def test_store_docker_matches_abbreviated_compose_ps_ids(
 
     journey_docker.store_docker(stack, snapshot_name="after_boot")
 
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["containers"][0]["container_id"] == full_container_id[:12]
 
@@ -765,7 +770,7 @@ def test_docker_compose_stack_is_pickle_serializable(tmp_path: Path):
     assert restored == stack
 
 
-def test_store_docker_creates_manifest_and_volume_backup(
+def test_store_docker_creates_manifest_and_volume_snapshot_payload(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -775,17 +780,27 @@ def test_store_docker_creates_manifest_and_volume_backup(
 
     journey_docker.store_docker(stack, snapshot_name="after_boot")
 
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
 
     volume_entry = manifest["volumes"][0]
     assert manifest["project_name"] == "demo"
     assert manifest["snapshot_name"] == "after_boot"
-    assert manifest["format"] == 3
+    assert manifest["format"] == 4
+    assert snapshot_dir == (
+        Path(stack.compose_file).parent / ".journey" / "docker" / "demo" / "after_boot"
+    )
     assert "snapshot_image" not in manifest["containers"][0]
     assert volume_entry["volume_name"] == "demo_demo_data"
-    assert volume_entry["snapshot_volume_name"].startswith("journey-snapshot-demo-")
-    assert volume_entry["snapshot_volume_name"] in runtime.volume_names
+    assert "snapshot_volume_name" not in volume_entry
+    assert volume_entry["backup_relpath"].startswith("volumes/demo_demo_data-")
+    snapshot_payload_dir = snapshot_dir / volume_entry["backup_relpath"]
+    assert snapshot_payload_dir.is_dir()
+    assert snapshot_payload_dir.is_relative_to(snapshot_dir)
+    assert not any(
+        command[:3] == ["docker", "volume", "create"]
+        for _, command in runtime.commands
+    )
     assert not any(
         command[:2] == ["docker", "commit"]
         for _, command in runtime.commands
@@ -798,7 +813,7 @@ def test_store_docker_creates_manifest_and_volume_backup(
         )
         for _, command in runtime.commands
     )
-    assert ("demo_demo_data", volume_entry["snapshot_volume_name"]) in runtime.volume_copies
+    assert ("demo_demo_data", str(snapshot_payload_dir)) in runtime.volume_copies
     assert runtime.stopped_container_ids == ["web-container-1"]
     assert runtime.started_container_ids == ["web-container-1"]
     assert not any(
@@ -807,12 +822,41 @@ def test_store_docker_creates_manifest_and_volume_backup(
     )
 
 
+def test_store_docker_replaces_filesystem_snapshot_without_extra_volume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    snapshot_payload_dir = snapshot_dir / manifest["volumes"][0]["backup_relpath"]
+    stale_file = snapshot_payload_dir / "stale.txt"
+    stale_file.write_text("old", encoding="utf-8")
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    snapshot_payload_dir = snapshot_dir / manifest["volumes"][0]["backup_relpath"]
+    assert snapshot_payload_dir.is_dir()
+    assert not stale_file.exists()
+    assert runtime.volume_names == {"demo_demo_data"}
+    assert not any(
+        command[:3] == ["docker", "volume", "create"]
+        for _, command in runtime.commands
+    )
+    assert runtime.volume_copies.count(("demo_demo_data", str(snapshot_payload_dir))) == 2
+
+
 def test_store_docker_removes_replaced_snapshot_volumes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
     stack = _build_stack(tmp_path)
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     (snapshot_dir / "manifest.json").write_text(
         json.dumps(
@@ -836,6 +880,47 @@ def test_store_docker_removes_replaced_snapshot_volumes(
     assert "old_demo_snapshot" not in runtime.volume_names
 
 
+def test_store_docker_dedupes_multiple_mounts_of_one_volume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime(
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="web-container-1",
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+                mounts=[
+                    {
+                        "Type": "volume",
+                        "Name": "demo_demo_data",
+                        "Destination": "/data",
+                        "Mode": "",
+                        "RW": True,
+                    },
+                    {
+                        "Type": "volume",
+                        "Name": "demo_demo_data",
+                        "Destination": "/data-again",
+                        "Mode": "",
+                        "RW": True,
+                    },
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    journey_docker.store_docker(stack, snapshot_name="after_boot")
+
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert [volume["volume_name"] for volume in manifest["volumes"]] == ["demo_demo_data"]
+    assert len(runtime.volume_copies) == 1
+
+
 def test_store_docker_info_logs_compact_snapshot_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -855,7 +940,7 @@ def test_store_docker_info_logs_compact_snapshot_summary(
     records_by_event = {record["event"]: record for record in records}
     assert "snapshot_store_start" in records_by_event
     assert "snapshot_store_success" in records_by_event
-    assert "snapshot_store_volume_backup_success" not in records_by_event
+    assert "snapshot_store_volume_payload_success" not in records_by_event
     assert "snapshot_store_manifest_write_success" not in records_by_event
     success = records_by_event["snapshot_store_success"]
     snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
@@ -901,7 +986,7 @@ def test_store_docker_debug_logs_snapshot_phase_timings(
     volume_record = next(
         record
         for record in records
-        if record["event"] == "snapshot_store_volume_backup_success"
+        if record["event"] == "snapshot_store_volume_payload_success"
     )
     assert volume_record["level"] == "DEBUG"
     assert volume_record["volume"] == "demo_demo_data"
@@ -926,7 +1011,7 @@ def test_store_docker_structured_info_hides_snapshot_phase_events(
 
     output = capsys.readouterr().out
     assert "event=snapshot_store_success" in output
-    assert "event=snapshot_store_volume_backup_success" not in output
+    assert "event=snapshot_store_volume_payload_success" not in output
     assert "event=snapshot_store_manifest_write_success" not in output
 
 
@@ -973,7 +1058,7 @@ def test_store_docker_debug_pretty_logs_identify_containers_and_volumes(
     output = capsys.readouterr().out
     assert (
         "copying Docker volume to snapshot: volume=demo_demo_data service=web "
-        "container=demo-web-1 from=demo_demo_data to=journey-snapshot-demo-"
+        "container=demo-web-1 from=demo_demo_data to=volumes/demo_demo_data-"
     ) in output
     assert "writing Docker snapshot manifest" in output
     assert "stored Docker Compose snapshot" in output
@@ -1014,7 +1099,7 @@ def test_store_docker_ignores_bind_mounts_and_snapshots_managed_volumes(
 
     journey_docker.store_docker(stack, snapshot_name="after_boot")
 
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert [volume["volume_name"] for volume in manifest["volumes"]] == ["demo_demo_data"]
     assert all(
@@ -1090,7 +1175,7 @@ def test_restarting_containers_are_treated_as_started_services(
     journey_docker.store_docker(stack, snapshot_name="after_boot")
     journey_docker.restore_docker(stack, snapshot_name="after_boot")
 
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["containers"][0]["state"] == "restarting"
     assert manifest["volumes"] == []
@@ -1146,12 +1231,13 @@ def test_store_docker_rejects_multi_container_service(
     assert "one container per service" in str(exc_info.value)
 
 
-def test_restore_docker_recreates_stack_and_restores_backups(
+def test_restore_docker_recreates_stack_and_restores_snapshot_payloads(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
     stack = _build_stack(tmp_path, wait_timeout=42)
-    _write_restore_snapshot(stack)
+    snapshot_dir = _write_restore_snapshot(stack)
+    snapshot_payload_dir = snapshot_dir / "volumes" / "demo-demo-data"
 
     runtime = _FakeDockerRuntime()
     monkeypatch.setattr(journey_docker, "_run_cli", runtime)
@@ -1160,7 +1246,7 @@ def test_restore_docker_recreates_stack_and_restores_backups(
 
     override_path = Path(stack.cache_root) / stack.project_name / "restore-after_boot.override.yml"
     assert not override_path.exists()
-    assert ("demo_demo_data_snapshot", "demo_demo_data") in runtime.volume_copies
+    assert (str(snapshot_payload_dir), "demo_demo_data") in runtime.volume_copies
     assert any(
         command[:3] == ["docker", "run", "--rm"]
         and any(
@@ -1203,10 +1289,10 @@ def test_restore_docker_rejects_legacy_manifest(
     tmp_path: Path,
 ):
     stack = _build_stack(tmp_path)
-    snapshot_dir = Path(stack.cache_root) / stack.project_name / "after_boot"
-    backup_dir = snapshot_dir / "volumes" / "demo-demo-data"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    (backup_dir / "snapshot.txt").write_text("saved", encoding="utf-8")
+    snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
+    snapshot_payload_dir = snapshot_dir / "volumes" / "demo-demo-data"
+    snapshot_payload_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_payload_dir / "snapshot.txt").write_text("saved", encoding="utf-8")
     manifest = {
         "format": 1,
         "project_name": stack.project_name,
@@ -1251,7 +1337,27 @@ def test_restore_docker_rejects_legacy_manifest(
     with pytest.raises(RuntimeError) as exc_info:
         journey_docker.restore_docker(stack, snapshot_name="after_boot")
 
-    assert "only restores format 3 volume-clone snapshots" in str(exc_info.value)
+    assert "only restores format 4 filesystem-backed snapshots" in str(exc_info.value)
+
+
+def test_restore_docker_rejects_unsafe_backup_relpath(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    snapshot_dir = _write_restore_snapshot(stack)
+    manifest_path = snapshot_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["volumes"][0]["backup_relpath"] = "../escape"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        journey_docker.restore_docker(stack, snapshot_name="after_boot")
+
+    assert "invalid volume backup_relpath" in str(exc_info.value)
+    assert not any("down" in command for _, command in runtime.commands)
 
 
 def test_restore_docker_info_logs_compact_snapshot_summary(
@@ -1381,7 +1487,7 @@ def test_restore_docker_debug_pretty_logs_identify_volumes_and_services(
     )
     assert (
         "restoring Docker volume contents: volume=demo_demo_data service=web "
-        "container=demo-web-1 id=web-container-2 from=demo_demo_data_snapshot "
+        "container=demo-web-1 id=web-container-2 from=volumes/demo-demo-data "
         "to=demo_demo_data target=/data"
     ) in output
     assert "starting restored Docker Compose services: services=web count=1" in output
@@ -1705,6 +1811,7 @@ def test_real_docker_smoke_round_trips_one_compose_snapshot(tmp_path: Path):
                 "-p",
                 stack.project_name,
                 "down",
+                "--volumes",
                 "--remove-orphans",
             ],
             owner="test_real_docker_smoke_round_trips_one_compose_snapshot",

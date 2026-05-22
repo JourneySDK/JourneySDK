@@ -374,10 +374,12 @@ elif branch(start_from=baseline):
     step(assert_compose_logs, stack)
 ```
 
-Current Docker snapshots restore Docker-managed volume contents only. Services should keep durable, replay-relevant
-state in managed volumes so restarted containers can behave correctly after restore. Bind mounts are allowed but treated
-as external host state and are not copied or restored; external volumes, read-only volume mounts, unsupported mount
-types, and multi-container services are rejected so managed Docker state can stay predictable.
+Current Docker snapshots restore Docker-managed volume contents only. Snapshot payloads are stored under `.journey`
+beside the state artifacts so they can be copied or removed with the rest of Journey's local state. Services should
+keep durable, replay-relevant state in managed volumes so restarted containers can behave correctly after restore. Bind
+mounts are allowed but treated as external host state and are not copied or restored; external volumes, read-only
+volume mounts, unsupported mount types, and multi-container services are rejected so managed Docker state can stay
+predictable.
 
 ```python
 from journeysdk import step

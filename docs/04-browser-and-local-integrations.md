@@ -206,10 +206,12 @@ anchor unless existing state or retry behavior causes replay.
 
 Docker snapshotting is strict about the state it owns. It rolls back
 Docker-managed volume contents only, so services should keep durable,
-replay-relevant state in managed volumes and tolerate container restarts. Bind
-mounts are allowed as external host state and are not copied or restored;
-external volumes, read-only volume mounts, unsupported mount types, and
-multi-container services are rejected. Keep Docker-backed journey steps procedure-sized: tiny do/assert fragments add
+replay-relevant state in managed volumes and tolerate container restarts. The
+snapshot payload lives under `.journey` with the rest of Journey's local state,
+so copying or removing `.journey` includes Docker replay data. Bind mounts are
+allowed as external host state and are not copied or restored; external volumes,
+read-only volume mounts, unsupported mount types, and multi-container services
+are rejected. Keep Docker-backed journey steps procedure-sized: tiny do/assert fragments add
 more boundaries, and only explicit `branch(start_from=...)` or positive `retry=...` boundaries should need Docker
 snapshot storage.
 
