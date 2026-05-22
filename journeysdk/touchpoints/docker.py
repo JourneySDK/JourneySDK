@@ -396,6 +396,7 @@ def run_docker(
         stack=stack,
         matchers=normalized_log_matchers,
         since=log_since,
+        since_container_start=True,
         owner="run_docker",
     )
 
@@ -1220,6 +1221,7 @@ def _wait_for_docker_log_matchers(
     since: str | None,
     owner: str,
     service_names: Sequence[str] | None = None,
+    since_container_start: bool = False,
 ) -> tuple[DockerLogMatch, ...]:
     normalized_matchers = _normalize_log_matcher_sequence(
         owner=owner,
@@ -1242,6 +1244,7 @@ def _wait_for_docker_log_matchers(
             service_filter=service_filter,
             since=since,
             owner=owner,
+            since_container_start=since_container_start,
         )
         if match is not None:
             results.append(match)
@@ -1256,6 +1259,7 @@ def _wait_for_one_docker_log_matcher(
     service_filter: set[str] | None,
     since: str | None,
     owner: str,
+    since_container_start: bool,
 ) -> DockerLogMatch | None:
     service_pattern = re.compile(matcher.service_name)
     message_pattern = re.compile(matcher.message)
@@ -1295,6 +1299,7 @@ def _wait_for_one_docker_log_matcher(
         services=eligible_services,
         timeout=matcher.timeout,
         since=since,
+        since_container_start=since_container_start,
     )
     started_at = time.monotonic()
     deadline = started_at + matcher.timeout
@@ -1310,9 +1315,14 @@ def _wait_for_one_docker_log_matcher(
             status = live_container.status
             if status.service not in eligible_services:
                 continue
+            log_since = _docker_log_since_for_container(
+                status=status,
+                fallback_since=since,
+                since_container_start=since_container_start,
+            )
             output = _load_raw_container_logs(
                 container_id=status.container_id,
-                since=since,
+                since=log_since,
                 owner=owner,
             )
             for line in output.splitlines():
@@ -1359,6 +1369,23 @@ def _wait_for_one_docker_log_matcher(
                 f"{matcher.service_name!r}."
             )
         time.sleep(min(matcher.poll_interval, deadline - now))
+
+
+def _docker_log_since_for_container(
+    *,
+    status: DockerContainerStatus,
+    fallback_since: str | None,
+    since_container_start: bool,
+) -> str | None:
+    if not since_container_start:
+        return fallback_since
+    started_at = status.started_at
+    if started_at is None:
+        return fallback_since
+    normalized = started_at.strip()
+    if not normalized or normalized.startswith("0001-01-01T00:00:00"):
+        return fallback_since
+    return normalized
 
 
 def _load_raw_container_logs(

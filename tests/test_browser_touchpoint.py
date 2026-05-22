@@ -444,10 +444,27 @@ class _FakeAIMessage:
         content: object = "",
         tool_calls: list[dict[str, object]] | None = None,
         invalid_tool_calls: list[object] | None = None,
+        usage_metadata: dict[str, object] | None = None,
+        response_metadata: dict[str, object] | None = None,
     ) -> None:
         self.content = content
         self.tool_calls = tool_calls or []
         self.invalid_tool_calls = invalid_tool_calls or []
+        self.usage_metadata = usage_metadata
+        self.response_metadata = response_metadata or {}
+
+
+class _FakeStructuredResponse(dict):
+    def __init__(
+        self,
+        payload: dict[str, object],
+        *,
+        usage_metadata: dict[str, object],
+        model_name: str,
+    ) -> None:
+        super().__init__(payload)
+        self.usage_metadata = usage_metadata
+        self.response_metadata = {"model_name": model_name}
 
 
 class _FakeStructuredLangChainModel:
@@ -461,7 +478,12 @@ class _FakeStructuredLangChainModel:
         self._schema = schema
         self._method = method
 
-    def invoke(self, messages: list[object]) -> object:
+    def invoke(
+        self,
+        messages: list[object],
+        *,
+        config: dict[str, object] | None = None,
+    ) -> object:
         self._prompt_model.structured_calls.append(
             {
                 "messages": list(messages),
@@ -471,7 +493,16 @@ class _FakeStructuredLangChainModel:
         )
         if not self._prompt_model._structured_responses:
             raise AssertionError("No fake structured LLM responses remaining.")
-        return self._prompt_model._structured_responses.pop(0)
+        response = self._prompt_model._structured_responses.pop(0)
+        usage_metadata = self._prompt_model.next_structured_usage_metadata()
+        if usage_metadata is None:
+            return response
+        assert isinstance(response, dict)
+        return _FakeStructuredResponse(
+            response,
+            usage_metadata=usage_metadata,
+            model_name=self._prompt_model.model_name,
+        )
 
 
 class _FakeLangChainPromptModel:
@@ -480,9 +511,17 @@ class _FakeLangChainPromptModel:
         responses: list[str | dict[str, object]],
         *,
         structured_responses: list[object] | None = None,
+        usage_metadata: list[dict[str, object] | None] | None = None,
+        structured_usage_metadata: list[dict[str, object] | None] | None = None,
+        direct_usage_metadata: list[dict[str, object] | None] | None = None,
+        model_name: str = "fake:model",
     ) -> None:
         self._responses = list(responses)
         self._structured_responses = list(structured_responses or [])
+        self._usage_metadata = list(usage_metadata or [])
+        self._structured_usage_metadata = list(structured_usage_metadata or [])
+        self._direct_usage_metadata = list(direct_usage_metadata or [])
+        self.model_name = model_name
         self.calls: list[dict[str, object]] = []
         self.direct_calls: list[dict[str, object]] = []
         self.structured_calls: list[dict[str, object]] = []
@@ -499,15 +538,47 @@ class _FakeLangChainPromptModel:
     def add_structured_responses(self, responses: list[object]) -> None:
         self._structured_responses.extend(responses)
 
-    def invoke(self, messages: list[object]) -> _FakeAIMessage:
+    def next_usage_metadata(self) -> dict[str, object] | None:
+        if not self._usage_metadata:
+            return None
+        return self._usage_metadata.pop(0)
+
+    def next_structured_usage_metadata(self) -> dict[str, object] | None:
+        if not self._structured_usage_metadata:
+            return None
+        return self._structured_usage_metadata.pop(0)
+
+    def next_direct_usage_metadata(self) -> dict[str, object] | None:
+        if not self._direct_usage_metadata:
+            return None
+        return self._direct_usage_metadata.pop(0)
+
+    def invoke(
+        self,
+        messages: list[object],
+        *,
+        config: dict[str, object] | None = None,
+    ) -> _FakeAIMessage:
         self.direct_calls.append({"messages": list(messages)})
         if not self._responses:
             raise AssertionError("No fake direct LLM responses remaining.")
         self._response_index += 1
         response = self._responses.pop(0)
+        usage_metadata = self.next_direct_usage_metadata()
+        response_metadata = (
+            {"model_name": self.model_name} if usage_metadata is not None else None
+        )
         if isinstance(response, str):
-            return _FakeAIMessage(content=response)
-        return _FakeAIMessage(content=response.get("content", ""))
+            return _FakeAIMessage(
+                content=response,
+                usage_metadata=usage_metadata,
+                response_metadata=response_metadata,
+            )
+        return _FakeAIMessage(
+            content=response.get("content", ""),
+            usage_metadata=usage_metadata,
+            response_metadata=response_metadata,
+        )
 
 
 class _FakeLangChainAgent:
@@ -559,8 +630,18 @@ class _FakeLangChainAgent:
             raise AssertionError("No fake LLM responses remaining.")
         self._prompt_model._response_index += 1
         response = self._prompt_model._responses.pop(0)
+        usage_metadata = self._prompt_model.next_usage_metadata()
+        response_metadata = (
+            {"model_name": self._prompt_model.model_name}
+            if usage_metadata is not None
+            else None
+        )
         if isinstance(response, str):
-            return _FakeAIMessage(content=response)
+            return _FakeAIMessage(
+                content=response,
+                usage_metadata=usage_metadata,
+                response_metadata=response_metadata,
+            )
         else:
             message = dict(response)
             tool_calls = message.get("tool_calls")
@@ -581,6 +662,8 @@ class _FakeLangChainAgent:
                 content=message.get("content", ""),
                 tool_calls=normalized_tool_calls,
                 invalid_tool_calls=invalid_tool_calls,
+                usage_metadata=usage_metadata,
+                response_metadata=response_metadata,
             )
 
 
@@ -2217,6 +2300,65 @@ def test_journey_browser_prompt_runs_action_work_on_prompt_thread(monkeypatch):
     page.prompt("click sign in", model="openai:gpt-4.1-mini")
 
     assert click_thread_ids == [prompt_thread_id]
+
+
+def test_journey_browser_prompt_logs_langchain_usage_metadata(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login page",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        ["Done."],
+        structured_responses=[_finalization("Done.")],
+        usage_metadata=[
+            {
+                "input_tokens": 30,
+                "output_tokens": 8,
+                "total_tokens": 38,
+                "total_cost_usd": 0.00011,
+            }
+        ],
+        structured_usage_metadata=[
+            {
+                "input_tokens": 12,
+                "output_tokens": 4,
+                "total_tokens": 16,
+                "total_cost_usd": 0.00005,
+            }
+        ],
+        model_name="fake-browser-model",
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt(
+        "finish",
+        model="openai:gpt-4.1-mini",
+        memory=None,
+    ) == "Done."
+
+    log_output = capsys.readouterr().out
+    assert (
+        "action_loop model=fake-browser-model "
+        "tokens=input:30 output:8 total:38"
+    ) in log_output
+    assert (
+        "finalization model=fake-browser-model "
+        "tokens=input:12 output:4 total:16"
+    ) in log_output
+    assert "Done. tokens=input:42 output:12 total:54" in log_output
+    assert "cost=" not in log_output
 
 
 def test_journey_browser_prompt_returns_structured_output(monkeypatch):

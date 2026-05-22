@@ -318,6 +318,25 @@ def test_logger_writes_jsonl_records_to_stdout(capsys: pytest.CaptureFixture[str
     assert "Human only" not in captured.out
 
 
+def test_logger_keeps_token_count_fields_visible(capsys: pytest.CaptureFixture[str]):
+    configure_logging("info", output_format="jsonl")
+
+    get_logger("component").info(
+        "usage",
+        "usage metadata",
+        input_tokens=10,
+        output_tokens=4,
+        total_tokens=14,
+        api_token="secret-token",
+    )
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["input_tokens"] == 10
+    assert record["output_tokens"] == 4
+    assert record["total_tokens"] == 14
+    assert record["api_token"] == "[redacted]"
+
+
 def test_logger_rejects_invalid_level() -> None:
     with pytest.raises(ValueError):
         configure_logging("verbose")  # type: ignore[arg-type]

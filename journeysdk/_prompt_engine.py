@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
-from threading import Event, Thread, get_ident
+from threading import Event, Lock, Thread, get_ident
 from typing import TypeVar, cast
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
+from langchain_core.callbacks import BaseCallbackHandler
 
 from journeysdk._prompt_memory import (
     PromptMemoryEntry,
@@ -39,6 +40,7 @@ from journeysdk.logger import (
 _T = TypeVar("_T")
 _PROMPT_DETAIL_INDENT = 10
 _PROMPT_LABEL_WIDTH = 25
+PromptModelCall = Callable[[str, Callable[[dict[str, object]], object]], object]
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,16 @@ class PromptMemoryCompileContext:
     final_output: str | dict[str, object]
     log_records: tuple[JourneyLogRecord, ...]
     final_observation: PromptObservation
+    call_model: PromptModelCall | None = None
+
+    def invoke_model(
+        self,
+        operation: str,
+        callback: Callable[[dict[str, object]], _T],
+    ) -> _T:
+        if self.call_model is None:
+            return callback({})
+        return cast(_T, self.call_model(operation, callback))
 
 
 @dataclass
@@ -115,6 +127,141 @@ _AUTH_FAILURE_TERMS = (
     "credentials",
     "x-api-key",
 )
+
+_INPUT_TOKEN_KEYS = ("input_tokens", "prompt_tokens")
+_OUTPUT_TOKEN_KEYS = ("output_tokens", "completion_tokens")
+_TOTAL_TOKEN_KEYS = ("total_tokens",)
+
+
+@dataclass(frozen=True)
+class _PromptUsageRecord:
+    operation: str
+    model: str
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+
+
+@dataclass(frozen=True)
+class _PromptUsageTotals:
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    model_calls: int
+
+
+class _PromptUsageCallbackHandler(BaseCallbackHandler):
+    def __init__(
+        self,
+        tracker: _PromptUsageTracker,
+        *,
+        operation: str,
+        model: str,
+        logger: JourneyLogger,
+    ) -> None:
+        super().__init__()
+        self._tracker = tracker
+        self._operation = operation
+        self._model = model
+        self._logger = logger
+
+    def on_llm_end(self, response: object, **kwargs: object) -> None:
+        self._tracker.collect(
+            operation=self._operation,
+            result=response,
+            configured_model=self._model,
+        )
+        self._tracker.emit_unemitted(logger=self._logger)
+
+
+class _PromptUsageTracker:
+    def __init__(self) -> None:
+        self._records: list[_PromptUsageRecord] = []
+        self._emitted_count = 0
+        self._lock = Lock()
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return len(self._records)
+
+    def call(
+        self,
+        *,
+        operation: str,
+        configured_model: str,
+        logger: JourneyLogger,
+        callback: Callable[[dict[str, object]], _T],
+    ) -> _T:
+        start_index = self.count
+        config = {
+            "callbacks": [
+                _PromptUsageCallbackHandler(
+                    self,
+                    operation=operation,
+                    model=configured_model,
+                    logger=logger,
+                )
+            ]
+        }
+        try:
+            result = callback(config)
+        except BaseException:
+            self.emit_unemitted(logger=logger)
+            raise
+        if self.count == start_index:
+            self.collect(
+                operation=operation,
+                result=result,
+                configured_model=configured_model,
+            )
+        self.emit_unemitted(logger=logger)
+        return result
+
+    def collect(
+        self,
+        *,
+        operation: str,
+        result: object,
+        configured_model: str,
+    ) -> None:
+        for value in _iter_usage_values(result):
+            record = _prompt_usage_record(
+                operation=operation,
+                configured_model=configured_model,
+                value=value,
+            )
+            if record is not None:
+                with self._lock:
+                    self._records.append(record)
+
+    def emit_unemitted(self, *, logger: JourneyLogger) -> None:
+        while True:
+            with self._lock:
+                if self._emitted_count >= len(self._records):
+                    return
+                record = self._records[self._emitted_count]
+                self._emitted_count += 1
+            logger.info(
+                "prompt_model_usage",
+                f"model usage: {_format_prompt_usage(record)}",
+                pretty=pretty_row(
+                    "model usage",
+                    _format_prompt_usage(record),
+                    indent=_PROMPT_DETAIL_INDENT,
+                    label_width=_PROMPT_LABEL_WIDTH,
+                    style="accent",
+                ),
+                operation=record.operation,
+                model=record.model,
+                input_tokens=record.input_tokens,
+                output_tokens=record.output_tokens,
+                total_tokens=record.total_tokens,
+            )
+
+    def totals(self) -> _PromptUsageTotals:
+        with self._lock:
+            return _aggregate_prompt_usage(list(self._records))
 
 
 class PromptActionContext:
@@ -183,6 +330,7 @@ class PromptEngineSession:
         self._compile_memory = compile_memory
         self._format_memory = format_memory or _format_prompt_memory_for_prompt
         self._prompt_model: object | None = None
+        self._usage_tracker = _PromptUsageTracker()
         self._action_records: list[JourneyLogRecord] = []
         self._memory_log_records: list[JourneyLogRecord] = []
         self._prompt_thread_id = get_ident()
@@ -374,10 +522,16 @@ class PromptEngineSession:
         messages: list[object],
     ) -> object:
         try:
-            response = self._invoke_agent_on_worker(
-                lambda: agent.invoke(
-                    {"messages": messages},
-                    config={"recursion_limit": max(6, self._max_steps * 3 + 3)},
+            response = self._call_model(
+                "action_loop",
+                lambda config: self._invoke_agent_on_worker(
+                    lambda: agent.invoke(
+                        {"messages": messages},
+                        config={
+                            **config,
+                            "recursion_limit": max(6, self._max_steps * 3 + 3),
+                        },
+                    )
                 )
             )
         except PromptControlError:
@@ -390,6 +544,18 @@ class PromptEngineSession:
                 hint=_prompt_model_failure_hint(self._model, exc),
             ) from exc
         return response
+
+    def _call_model(
+        self,
+        operation: str,
+        callback: Callable[[dict[str, object]], _T],
+    ) -> _T:
+        return self._usage_tracker.call(
+            operation=operation,
+            configured_model=self._model,
+            logger=self._logger,
+            callback=callback,
+        )
 
     def _invoke_agent_on_worker(self, callback: Callable[[], _T]) -> _T:
         if get_ident() != self._prompt_thread_id:
@@ -486,26 +652,45 @@ class PromptEngineSession:
             observation=final_observation,
             step_index=step_index,
         )
+        try:
+            self._write_memory(
+                final_output=final_output,
+                final_observation=final_observation,
+            )
+        except Exception:
+            self._log_finish(step_index=step_index, final_output=final_output)
+            raise
+        self._log_finish(step_index=step_index, final_output=final_output)
+        return final_output
+
+    def _log_finish(
+        self,
+        *,
+        step_index: int,
+        final_output: str | dict[str, object],
+    ) -> None:
+        output_summary = _prompt_output_summary(final_output)
+        usage = self._usage_tracker.totals()
+        usage_detail = _format_prompt_usage_totals(usage)
         self._logger.info(
             "prompt_finish",
             f"step {step_index}/{self._max_steps}: finished with output: "
-            f"{_prompt_output_summary(final_output)}",
+            f"{output_summary}; {usage_detail}",
             pretty=pretty_row(
                 f"{step_index}/{self._max_steps} finish",
-                _prompt_output_summary(final_output),
+                f"{output_summary} {usage_detail}",
                 indent=10,
                 label_width=25,
                 style="success",
             ),
             step=step_index,
             max_steps=self._max_steps,
-            output=_prompt_output_summary(final_output),
+            output=output_summary,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            total_tokens=usage.total_tokens,
+            model_calls=usage.model_calls,
         )
-        self._write_memory(
-            final_output=final_output,
-            final_observation=final_observation,
-        )
-        return final_output
 
     def _finalize_output(
         self,
@@ -577,10 +762,15 @@ class PromptEngineSession:
                 self._finalization_schema().json_schema,
                 method="json_schema",
             )
-            return structured_model.invoke(
-                self._build_finalization_messages(
-                    completion_text=completion_text,
-                    observation=observation,
+            messages = self._build_finalization_messages(
+                completion_text=completion_text,
+                observation=observation,
+            )
+            return self._call_model(
+                "finalization",
+                lambda config: structured_model.invoke(
+                    messages,
+                    config=config,
                 )
             )
         except Exception as exc:
@@ -770,6 +960,7 @@ class PromptEngineSession:
                 final_output=final_output,
                 log_records=tuple(self._memory_log_records or self._action_records),
                 final_observation=final_observation,
+                call_model=self._call_model,
             )
         )
         if draft is None:
@@ -829,6 +1020,181 @@ def _format_prompt_memory_for_prompt(
             *rendered_sections,
         ]
     )
+
+
+def _iter_usage_values(result: object) -> Iterator[object]:
+    messages = list(_iter_result_messages(result))
+    for message in messages:
+        yield message
+    if any(_has_usage_payload(message) for message in messages):
+        return
+    if _has_usage_payload(result):
+        yield result
+
+
+def _iter_result_messages(result: object) -> Iterator[object]:
+    if isinstance(result, dict):
+        messages = result.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                yield message
+    generations = getattr(result, "generations", None)
+    if isinstance(generations, list):
+        for generation_group in generations:
+            if not isinstance(generation_group, list):
+                continue
+            for generation in generation_group:
+                message = getattr(generation, "message", None)
+                if message is not None:
+                    yield message
+
+
+def _has_usage_payload(value: object) -> bool:
+    sources = _usage_sources(value)
+    if not sources:
+        return False
+    return (
+        _first_int(sources, _INPUT_TOKEN_KEYS) is not None
+        or _first_int(sources, _OUTPUT_TOKEN_KEYS) is not None
+        or _first_int(sources, _TOTAL_TOKEN_KEYS) is not None
+    )
+
+
+def _prompt_usage_record(
+    *,
+    operation: str,
+    configured_model: str,
+    value: object,
+) -> _PromptUsageRecord | None:
+    sources = _usage_sources(value)
+    if not sources:
+        return None
+    input_tokens = _first_int(sources, _INPUT_TOKEN_KEYS)
+    output_tokens = _first_int(sources, _OUTPUT_TOKEN_KEYS)
+    total_tokens = _first_int(sources, _TOTAL_TOKEN_KEYS)
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    model = _usage_model(value, configured_model=configured_model, sources=sources)
+    if (
+        input_tokens is None
+        and output_tokens is None
+        and total_tokens is None
+    ):
+        return None
+    return _PromptUsageRecord(
+        operation=operation,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _usage_sources(value: object) -> list[Mapping[str, object]]:
+    sources: list[Mapping[str, object]] = []
+    for candidate in (
+        getattr(value, "usage_metadata", None),
+        getattr(value, "response_metadata", None),
+        getattr(value, "llm_output", None),
+        value if isinstance(value, Mapping) else None,
+    ):
+        mapping = _as_mapping(candidate)
+        if mapping is not None:
+            sources.append(mapping)
+    for source in tuple(sources):
+        for key in ("usage_metadata", "usage", "token_usage", "usage_details"):
+            mapping = _as_mapping(source.get(key))
+            if mapping is not None:
+                sources.append(mapping)
+    return sources
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _usage_model(
+    value: object,
+    *,
+    configured_model: str,
+    sources: list[Mapping[str, object]],
+) -> str:
+    for source in sources:
+        for key in ("model_name", "model", "ls_model_name"):
+            model = source.get(key)
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+    response_metadata = _as_mapping(getattr(value, "response_metadata", None))
+    if response_metadata is not None:
+        model = response_metadata.get("model_name")
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+    return configured_model
+
+
+def _first_int(sources: list[Mapping[str, object]], keys: tuple[str, ...]) -> int | None:
+    for source in sources:
+        for key in keys:
+            value = _int_value(source.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _int_value(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _aggregate_prompt_usage(
+    records: list[_PromptUsageRecord],
+) -> _PromptUsageTotals:
+    return _PromptUsageTotals(
+        input_tokens=_sum_known_int(record.input_tokens for record in records),
+        output_tokens=_sum_known_int(record.output_tokens for record in records),
+        total_tokens=_sum_known_int(record.total_tokens for record in records),
+        model_calls=len(records),
+    )
+
+
+def _sum_known_int(values: Iterator[int | None]) -> int | None:
+    known = [value for value in values if value is not None]
+    if not known:
+        return None
+    return sum(known)
+
+
+def _format_prompt_usage(record: _PromptUsageRecord) -> str:
+    return (
+        f"{record.operation} model={record.model} "
+        f"{_format_prompt_usage_totals(record)}"
+    )
+
+
+def _format_prompt_usage_totals(
+    usage: _PromptUsageRecord | _PromptUsageTotals,
+) -> str:
+    return (
+        "tokens="
+        f"input:{_format_optional_int(usage.input_tokens)} "
+        f"output:{_format_optional_int(usage.output_tokens)} "
+        f"total:{_format_optional_int(usage.total_tokens)}"
+    )
+
+
+def _format_optional_int(value: int | None) -> str:
+    if value is None:
+        return "unknown"
+    return str(value)
 
 
 def _prompt_output_summary(value: str | dict[str, object]) -> str:

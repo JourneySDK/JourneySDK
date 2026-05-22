@@ -873,6 +873,104 @@ def test_run_docker_accepts_wait_failure_when_one_shot_service_exits_zero(
     assert stack.project_name == "demo-project"
 
 
+def test_run_docker_log_wait_uses_container_start_after_accepted_wait_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    matcher = journey_docker.DockerLogMatcher(
+        service_name=r"web",
+        message=r"server\s+ready",
+        timeout=0,
+        poll_interval=0.01,
+    )
+    runtime = _FakeDockerRuntime(
+        compose_config={
+            "services": {
+                "setup": {"image": "demo-setup:latest"},
+                "web": {"image": "demo-web:latest"},
+            },
+            "volumes": {"demo_data": {}},
+        },
+        compose_config_yaml=(
+            "services:\n"
+            "  setup:\n"
+            "    image: demo-setup:latest\n"
+            "  web:\n"
+            "    image: demo-web:latest\n"
+        ),
+        live_ps_rows=[
+            _ps_row("setup-container-1", "demo-setup-1", "setup"),
+            _ps_row("web-container-1", "demo-web-1", "web"),
+        ],
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="setup-container-1",
+                name="demo-setup-1",
+                service="setup",
+                image="demo-setup:latest",
+                state="exited",
+                health=None,
+            ),
+            _inspect_row(
+                container_id="web-container-1",
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+            ),
+        ],
+    )
+
+    def run_cli(
+        args: object,
+        *,
+        owner: str,
+        failure_level: object | None = None,
+    ) -> str:
+        assert isinstance(args, list)
+        if args[:2] == ["docker", "logs"]:
+            runtime.commands.append((owner, list(args)))
+            if args == [
+                "docker",
+                "logs",
+                "--since",
+                "2026-04-14T10:00:00Z",
+                "web-container-1",
+            ]:
+                return "server ready\n"
+            return ""
+        output = runtime(args, owner=owner, failure_level=failure_level)
+        if args[:2] == ["docker", "compose"] and "up" in args:
+            raise RuntimeError("container demo-setup-1 exited (0)")
+        return output
+
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", run_cli)
+
+    stack = journey_docker.run_docker(
+        compose_file=compose_file,
+        project_name="demo-project",
+        wait_timeout=15,
+        wait_for_logs=[matcher],
+    )
+
+    docker_logs_commands = [
+        command
+        for owner, command in runtime.commands
+        if owner == "run_docker" and command[:2] == ["docker", "logs"]
+    ]
+    assert stack.log_matchers == (matcher,)
+    assert docker_logs_commands == [
+        [
+            "docker",
+            "logs",
+            "--since",
+            "2026-04-14T10:00:00Z",
+            "web-container-1",
+        ]
+    ]
+
+
 def test_docker_run_cli_logs_subprocess_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

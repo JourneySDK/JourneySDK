@@ -406,17 +406,22 @@ class _PromptSession:
     ) -> PromptMemoryDraft | None:
         try:
             model = _load_langchain_model(self._model)
-            response = model.invoke(
-                [
-                    {
-                        "role": "system",
-                        "content": _PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE,
-                    },
-                    {
-                        "role": "user",
-                        "content": _memory_compile_prompt(context),
-                    },
-                ]
+            messages = [
+                {
+                    "role": "system",
+                    "content": _PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE,
+                },
+                {
+                    "role": "user",
+                    "content": _memory_compile_prompt(context),
+                },
+            ]
+            response = context.invoke_model(
+                "memory_compile",
+                lambda config: model.invoke(
+                    messages,
+                    config=config,
+                ),
             )
             response_text = _extract_langchain_text(
                 response,

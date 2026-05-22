@@ -51,6 +51,16 @@ _SENSITIVE_FIELD_FRAGMENTS = (
     "secret",
     "token",
 )
+_TOKEN_COUNT_FIELD_NAMES = {
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "prompt_tokens",
+    "completion_tokens",
+    "cache_creation_tokens",
+    "cache_read_tokens",
+    "reasoning_tokens",
+}
 _ANSI_STYLES: dict[PrettyStyle, str] = {
     "default": "",
     "heading": "\033[1m",
@@ -555,6 +565,8 @@ def _format_value(value: object) -> str:
 
 def _is_sensitive_field(key: str) -> bool:
     normalized = key.lower()
+    if normalized in _TOKEN_COUNT_FIELD_NAMES:
+        return False
     return any(fragment in normalized for fragment in _SENSITIVE_FIELD_FRAGMENTS)
 
 
