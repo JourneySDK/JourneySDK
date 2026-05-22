@@ -12,6 +12,8 @@ from threading import Event, Lock, Thread, get_ident
 from typing import TypeVar, cast
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain.chat_models import init_chat_model
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -41,6 +43,12 @@ _T = TypeVar("_T")
 _PROMPT_DETAIL_INDENT = 10
 _PROMPT_LABEL_WIDTH = 25
 PromptModelCall = Callable[[str, Callable[[dict[str, object]], object]], object]
+_OBSERVATION_RECORDS_MARKER = "Observation records JSON:"
+_COMPACTED_OBSERVATION_TEXT = (
+    "Previous Journey observation omitted to reduce prompt history size. "
+    "Use the latest observation message for the current page state; prior "
+    "action and tool messages remain in this conversation."
+)
 
 
 @dataclass(frozen=True)
@@ -112,6 +120,19 @@ class PromptFailedError(PromptControlError):
 
 class PromptMaxStepsError(PromptControlError):
     """The prompt exhausted the configured step budget."""
+
+
+class _PromptObservationCompactionMiddleware(AgentMiddleware):
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        return handler(
+            request.override(
+                messages=_compact_prompt_observation_messages(request.messages),
+            )
+        )
 
 
 _PROMPT_PROVIDER_ENV_VARS = {
@@ -1022,6 +1043,98 @@ def _format_prompt_memory_for_prompt(
     )
 
 
+def _compact_prompt_observation_messages(messages: list[object]) -> list[object]:
+    observation_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if _is_prompt_observation_message(message)
+    ]
+    if len(observation_indexes) <= 1:
+        return messages
+
+    compacted = list(messages)
+    initial_observation_index = observation_indexes[0]
+    for index in observation_indexes[:-1]:
+        compacted[index] = _compact_prompt_observation_message(
+            messages[index],
+            preserve_initial_context=index == initial_observation_index,
+        )
+    return compacted
+
+
+def _is_prompt_observation_message(message: object) -> bool:
+    content = _message_content(message)
+    return any(_OBSERVATION_RECORDS_MARKER in text for text in _content_texts(content))
+
+
+def _compact_prompt_observation_message(
+    message: object,
+    *,
+    preserve_initial_context: bool,
+) -> object:
+    compacted_text = _compacted_observation_text(
+        _first_observation_text(_message_content(message)),
+        preserve_initial_context=preserve_initial_context,
+    )
+    return _with_message_content(message, [{"type": "text", "text": compacted_text}])
+
+
+def _message_content(message: object) -> object:
+    if isinstance(message, Mapping):
+        return message.get("content")
+    return getattr(message, "content", None)
+
+
+def _content_texts(content: object) -> Iterator[str]:
+    if isinstance(content, str):
+        yield content
+        return
+    if not isinstance(content, list):
+        return
+    for item in content:
+        if isinstance(item, str):
+            yield item
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            yield text
+
+
+def _first_observation_text(content: object) -> str:
+    for text in _content_texts(content):
+        if _OBSERVATION_RECORDS_MARKER in text:
+            return text
+    return ""
+
+
+def _compacted_observation_text(
+    text: str,
+    *,
+    preserve_initial_context: bool,
+) -> str:
+    if preserve_initial_context:
+        prefix = text.split(_OBSERVATION_RECORDS_MARKER, 1)[0].rstrip()
+        if prefix:
+            return "\n\n".join([prefix, _COMPACTED_OBSERVATION_TEXT])
+    return _COMPACTED_OBSERVATION_TEXT
+
+
+def _with_message_content(message: object, content: object) -> object:
+    if isinstance(message, Mapping):
+        updated = dict(message)
+        updated["content"] = content
+        return updated
+    model_copy = getattr(message, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update={"content": content})
+    copy_method = getattr(message, "copy", None)
+    if callable(copy_method):
+        return copy_method(update={"content": content})
+    return message
+
+
 def _iter_usage_values(result: object) -> Iterator[object]:
     messages = list(_iter_result_messages(result))
     for message in messages:
@@ -1363,6 +1476,7 @@ def _create_langchain_agent(
         model,
         tools=tools,
         system_prompt=system_prompt,
+        middleware=(_PromptObservationCompactionMiddleware(),),
     )
 
 

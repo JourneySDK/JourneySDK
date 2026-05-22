@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 import pytest
 
@@ -20,6 +21,7 @@ from journeysdk._prompt_engine import (
     PromptMemoryReplayResult,
     PromptObservation,
     PromptTextSection,
+    _compact_prompt_observation_messages,
 )
 from journeysdk.logger import (
     JourneyLogRecord,
@@ -293,6 +295,175 @@ def _finalization(
         "failure_reason": reason,
         "output": output,
     }
+
+
+def _prompt_observation_content(
+    label: str,
+    *,
+    prefix: str = "Instruction:\nfinish",
+) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "text",
+            "text": "\n".join(
+                [
+                    prefix,
+                    "",
+                    "Observation records JSON:",
+                    json.dumps(
+                        [
+                            {
+                                "event": "page",
+                                "label": label,
+                            }
+                        ],
+                        indent=2,
+                    ),
+                    "",
+                    "Active page visible text:",
+                    f"{label}-visible-text",
+                    "",
+                    "Active page rendered HTML:",
+                    f"{label}-rendered-html",
+                ]
+            ),
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{label}"},
+        },
+    ]
+
+
+def _content_text(content: object) -> str:
+    assert isinstance(content, list)
+    first = content[0]
+    assert isinstance(first, dict)
+    text = first.get("text")
+    assert isinstance(text, str)
+    return text
+
+
+def _has_image_content(content: object) -> bool:
+    assert isinstance(content, list)
+    return any(
+        isinstance(item, dict) and item.get("type") == "image_url"
+        for item in content
+    )
+
+
+def test_prompt_engine_observation_compaction_leaves_single_observation_unchanged() -> None:
+    messages: list[object] = [
+        HumanMessage(content=_prompt_observation_content("initial")),
+    ]
+
+    compacted = _compact_prompt_observation_messages(messages)
+
+    assert compacted is messages
+    assert compacted[0] is messages[0]
+    assert "initial-rendered-html" in _content_text(messages[0].content)
+    assert _has_image_content(messages[0].content)
+
+
+def test_prompt_engine_observation_compaction_keeps_only_latest_full_observation() -> None:
+    messages: list[object] = [
+        HumanMessage(
+            content=_prompt_observation_content(
+                "initial",
+                prefix=(
+                    "Instruction:\nfinish\n\n"
+                    "Prompt memory:\nUse cached selectors from a successful run."
+                ),
+            )
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "fake_echo",
+                    "args": {"text": "first"},
+                    "id": "call-1",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=_prompt_observation_content("old-tool"),
+            tool_call_id="call-1",
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "fake_echo",
+                    "args": {"text": "second"},
+                    "id": "call-2",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=_prompt_observation_content("latest"),
+            tool_call_id="call-2",
+        ),
+    ]
+
+    compacted = _compact_prompt_observation_messages(messages)
+
+    initial_text = _content_text(compacted[0].content)
+    assert "Prompt memory:" in initial_text
+    assert "initial-rendered-html" not in initial_text
+    assert "Previous Journey observation omitted" in initial_text
+    assert not _has_image_content(compacted[0].content)
+
+    old_tool_text = _content_text(compacted[2].content)
+    assert "old-tool-rendered-html" not in old_tool_text
+    assert "Previous Journey observation omitted" in old_tool_text
+    assert not _has_image_content(compacted[2].content)
+
+    latest_text = _content_text(compacted[4].content)
+    assert "latest-rendered-html" in latest_text
+    assert _has_image_content(compacted[4].content)
+
+    assert compacted[1].tool_calls[0]["id"] == "call-1"
+    assert compacted[2].tool_call_id == "call-1"
+    assert compacted[3].tool_calls[0]["id"] == "call-2"
+    assert compacted[4].tool_call_id == "call-2"
+
+
+def test_prompt_engine_observation_compaction_preserves_dict_message_pairing() -> None:
+    messages: list[object] = [
+        {
+            "role": "user",
+            "content": _prompt_observation_content("initial"),
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "name": "fake_echo",
+                    "args": {"text": "hello"},
+                    "id": "call-1",
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": _prompt_observation_content("latest"),
+        },
+    ]
+
+    compacted = _compact_prompt_observation_messages(messages)
+
+    assert compacted[1] == messages[1]
+    assert isinstance(compacted[0], dict)
+    assert compacted[0]["role"] == "user"
+    assert not _has_image_content(compacted[0]["content"])
+    assert "initial-rendered-html" not in _content_text(compacted[0]["content"])
+    assert isinstance(compacted[2], dict)
+    assert compacted[2]["tool_call_id"] == "call-1"
+    assert "latest-rendered-html" in _content_text(compacted[2]["content"])
+    assert _has_image_content(compacted[2]["content"])
 
 
 def test_prompt_engine_runs_action_adapter_and_persists_action_records(
