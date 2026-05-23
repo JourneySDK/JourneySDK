@@ -35,7 +35,6 @@ from journeysdk._prompt_output import (
 )
 from journeysdk._prompt_engine import (
     PromptEngineSession,
-    PromptImage,
     PromptMemoryCompileContext,
     PromptMemoryDraft,
     PromptMemoryReplayResult,
@@ -56,6 +55,7 @@ JOURNEY_BROWSER_PROMPT_MODEL_ENV = "JOURNEY_BROWSER_PROMPT_MODEL"
 DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL = "anthropic:claude-sonnet-4-6"
 
 _PROMPT_RUN_CODE_ACTION_NAME = "journey_run_code"
+_PROMPT_SCREENSHOT_ACTION_NAME = "journey_screenshot"
 _BROWSER_REPLAY_SECTION = "Replay code"
 _BROWSER_SUCCESS_CHECK_SECTION = "Success check code"
 _BROWSER_NOTES_SECTION = "Notes"
@@ -67,6 +67,8 @@ completion signal describing the current visible result. A structured finalizer 
 instruction succeeded and will produce the returned output.
 
 Use journey_run_code to execute one Python snippet against the active page.
+Use journey_screenshot only when rendered HTML, visible text, page records, and prior action results are not enough
+to understand the current visual state.
 
 Available names:
 - page: the active Playwright sync Page
@@ -75,7 +77,9 @@ Available names:
 - switch_page(index): switch the active page to a known page index and return that Page
 
 Rules:
-- Inspect the rendered HTML and screenshot, then choose the fewest Playwright commands needed.
+- Inspect rendered HTML, visible text, page records, and prior action results first, then choose the fewest Playwright
+  commands needed.
+- Call journey_screenshot only when visual layout, screenshots, canvas, images, clipping, or styling are necessary.
 - Prefer robust Playwright locators such as get_by_role, get_by_text, get_by_label, and locator.
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
 - Use switch_page(index) before acting on a popup or tab listed in known pages.
@@ -86,9 +90,9 @@ Rules:
   because the page displays the final error state.
 - If the previous step was rejected, correct the action arguments or Python and try again.
 - If prompt memory is provided, use it as a hint from prior successful runs,
-  but trust the current rendered HTML and screenshot over stale memory.
-- The completion signal should be factual and based on the rendered HTML, visible text, screenshot, known pages, and
-  executed steps.
+  but trust the current rendered HTML, visible text, and requested screenshots over stale memory.
+- The completion signal should be factual and based on the rendered HTML, visible text, requested screenshots, known
+  pages, and executed steps.
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
@@ -321,7 +325,6 @@ class _PromptSession:
         pages = self._prompt_page_payloads()
         active_page = self._pages[self._active_page_index]
         rendered_html = _rendered_html(active_page)
-        screenshot_data_url = _png_data_url(active_page)
         visible_text = _visible_text(active_page)
         return PromptObservation(
             signature=_page_memory_signature(pages[self._active_page_index]),
@@ -338,7 +341,6 @@ class _PromptSession:
                     tag="rendered-html",
                 ),
             ),
-            images=(PromptImage(screenshot_data_url),),
             visible_text=visible_text,
         )
 
@@ -351,7 +353,15 @@ class _PromptSession:
                 lambda: self._run_code_tool(code, context=context)
             )
 
-        return [journey_run_code]
+        @tool(_PROMPT_SCREENSHOT_ACTION_NAME)
+        def journey_screenshot() -> list[dict[str, object]]:
+            """Capture one screenshot of the active Journey browser page."""
+
+            return context.run_on_prompt_thread(
+                lambda: self._run_screenshot_tool(context=context)
+            )
+
+        return [journey_run_code, journey_screenshot]
 
     def _replay_memory(
         self,
@@ -522,6 +532,99 @@ class _PromptSession:
         )
         context.record_action(step)
         return context.observation_or_stop(step_index=step_index)
+
+    def _run_screenshot_tool(
+        self,
+        *,
+        context: PromptActionContext,
+    ) -> list[dict[str, object]]:
+        step_index = context.next_step_index()
+        previous_page_count = len(self._pages)
+        previous_active_page_index = self._active_page_index
+        context.record_memory_log(
+            _emit_prompt_log(
+                f"step {step_index}/{self._max_steps}: AI will capture screenshot",
+                event="prompt_action",
+                pretty=_prompt_row(
+                    f"{step_index}/{self._max_steps} action",
+                    "capture screenshot",
+                    style="accent",
+                ),
+                step=step_index,
+                max_steps=self._max_steps,
+                action="capture screenshot",
+            )
+        )
+        try:
+            self._discover_pages()
+            active_page = self._pages[self._active_page_index]
+            page_summary = _page_summary(
+                self._prompt_page_payloads()[self._active_page_index]
+            )
+            screenshot_data_url = _png_data_url(active_page)
+        except Exception as exc:
+            self._raise_keyboard_interrupt_if_forced_prompt_abort(exc)
+            for record in self._log_new_pages(
+                previous_page_count=previous_page_count,
+            ):
+                context.record_memory_log(record)
+            for record in self._log_active_page_change(
+                previous_active_page_index=previous_active_page_index,
+            ):
+                context.record_memory_log(record)
+            self._append_rejected_action(
+                context=context,
+                step_index=step_index,
+                action_type="screenshot",
+                target="active page",
+                detail=_format_python_error(exc),
+            )
+            return context.observation_or_stop(step_index=step_index)
+
+        for record in self._log_new_pages(previous_page_count=previous_page_count):
+            context.record_memory_log(record)
+        for record in self._log_active_page_change(
+            previous_active_page_index=previous_active_page_index,
+        ):
+            context.record_memory_log(record)
+        context.record_action(
+            _prompt_action_record(
+                step_index=step_index,
+                max_steps=self._max_steps,
+                page_index=self._active_page_index,
+                action_type="screenshot",
+                target="active page",
+                status="ok",
+                detail=f"Captured screenshot of {page_summary}.",
+            )
+        )
+        context.record_memory_log(
+            _emit_prompt_log(
+                f"step {step_index}/{self._max_steps}: captured screenshot on "
+                f"{page_summary}",
+                event="prompt_screenshot",
+                pretty=_prompt_row(
+                    f"{step_index}/{self._max_steps} ok",
+                    f"screenshot captured on {page_summary}",
+                    style="success",
+                ),
+                step=step_index,
+                max_steps=self._max_steps,
+                page=self._active_page_index,
+                page_summary=page_summary,
+            )
+        )
+        context.raise_if_step_limit_reached(step_index=step_index)
+        return [
+            {
+                "type": "text",
+                "text": f"Screenshot captured for {page_summary}.",
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": screenshot_data_url},
+            },
+        ]
 
     def _append_rejected_action(
         self,

@@ -703,6 +703,29 @@ def _run_code(code: str) -> dict[str, object]:
     )
 
 
+def _take_screenshot() -> dict[str, object]:
+    return _prompt_action_call("journey_screenshot", {})
+
+
+def _content_has_image(content: object) -> bool:
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("type") == "image_url"
+        for item in content
+    )
+
+
+def _message_has_image(message: object) -> bool:
+    if isinstance(message, dict):
+        return _content_has_image(message.get("content"))
+    return _content_has_image(getattr(message, "content", None))
+
+
+def _messages_have_image(messages: list[object]) -> bool:
+    return any(_message_has_image(message) for message in messages)
+
+
 def _finalization(
     output: str | dict[str, object],
     *,
@@ -2203,6 +2226,10 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
         for call in fake_model.calls
     )
     assert len(fake_model.structured_calls) == 1
+    assert not any(
+        _messages_have_image(call["messages"]) for call in fake_model.calls
+    )
+    assert not _messages_have_image(fake_model.structured_calls[0]["messages"])
     assert not hasattr(journey_browser_prompt, "_COLLECT_ELEMENTS_SCRIPT")
     first_prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
     assert "<journey-rendered-html>" in first_prompt_text
@@ -2232,17 +2259,13 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
     assert "success_criteria_met" in finalization_prompt_text
     assert events == [
         ("prompt_rendered_html", "Login page"),
-        ("prompt_screenshot", "Login page"),
         ("prompt_click", "Login page", "#sign-in", 5000),
         ("prompt_wait_for_load_state", "Welcome popup", "load", 5000),
         ("prompt_rendered_html", "Login page"),
-        ("prompt_screenshot", "Login page"),
         ("prompt_rendered_html", "Welcome popup"),
-        ("prompt_screenshot", "Welcome popup"),
         ("prompt_wait_for_load_state", "Welcome popup", "networkidle", 2000),
         ("prompt_wait_for_timeout", "Welcome popup", 500),
         ("prompt_rendered_html", "Welcome popup"),
-        ("prompt_screenshot", "Welcome popup"),
     ]
     assert "[journey]" not in log_output
     assert "AI prompt" in log_output
@@ -2259,6 +2282,174 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
         "3/15 finish               The opened popup title is Welcome popup."
         in log_output
     )
+
+
+def test_journey_browser_prompt_does_not_attach_screenshots_to_observations(
+    monkeypatch,
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Dashboard",
+        url="http://example.test/dashboard",
+        context=context,
+        events=events,
+        visible_texts={"Ready"},
+    )
+    context.pages.append(page)
+    fake_model = _FakeLangChainPromptModel(
+        ["Done."],
+        structured_responses=[_finalization("Done.")],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    assert page.prompt("finish", model="openai:gpt-4.1-mini") == "Done."
+
+    assert not _messages_have_image(fake_model.calls[0]["messages"])
+    assert not _messages_have_image(fake_model.structured_calls[0]["messages"])
+    assert events == [
+        ("prompt_rendered_html", "Dashboard"),
+        ("prompt_wait_for_load_state", "Dashboard", "networkidle", 2000),
+        ("prompt_wait_for_timeout", "Dashboard", 500),
+        ("prompt_rendered_html", "Dashboard"),
+    ]
+
+
+def test_journey_browser_prompt_screenshot_tool_returns_image_when_requested(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Visual page",
+        url="http://example.test/visual",
+        context=context,
+        events=events,
+        visible_texts={"Visual ready"},
+    )
+    context.pages.append(page)
+    fake_model = _FakeLangChainPromptModel(
+        [
+            _take_screenshot(),
+            "The screenshot shows the visual page.",
+        ],
+        structured_responses=[_finalization("The screenshot shows the visual page.")],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    assert (
+        page.prompt("inspect visual layout", model="openai:gpt-4.1-mini")
+        == "The screenshot shows the visual page."
+    )
+    log_output = capsys.readouterr().out
+
+    assert len(fake_model.calls) == 2
+    assert not _messages_have_image(fake_model.calls[0]["messages"])
+    screenshot_message = fake_model.calls[1]["messages"][-1]
+    assert _message_has_image(screenshot_message)
+    assert (
+        "Screenshot captured for page 0 'Visual page' at http://example.test/visual."
+        in screenshot_message["content"][0]["text"]
+    )
+    assert not _messages_have_image(fake_model.structured_calls[0]["messages"])
+    assert events == [
+        ("prompt_rendered_html", "Visual page"),
+        ("prompt_screenshot", "Visual page"),
+        ("prompt_wait_for_load_state", "Visual page", "networkidle", 2000),
+        ("prompt_wait_for_timeout", "Visual page", 500),
+        ("prompt_rendered_html", "Visual page"),
+    ]
+    assert "1/15 action               capture screenshot" in log_output
+    assert "1/15 ok                   screenshot captured on page 0" in log_output
+
+
+def test_journey_browser_prompt_screenshot_tool_uses_active_page(monkeypatch):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login page",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    popup_page = _make_prompt_page(
+        title="Welcome popup",
+        url="http://example.test/sign-in-popup",
+        context=context,
+        events=events,
+        visible_texts={"Welcome popup"},
+    )
+    context.pages.extend([page, popup_page])
+    fake_model = _FakeLangChainPromptModel(
+        [
+            _run_code("switch_page(1)"),
+            _take_screenshot(),
+            "The popup screenshot was captured.",
+        ],
+        structured_responses=[_finalization("The popup screenshot was captured.")],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    assert (
+        page.prompt("inspect the popup", model="openai:gpt-4.1-mini")
+        == "The popup screenshot was captured."
+    )
+
+    screenshot_message = fake_model.calls[2]["messages"][-1]
+    assert _message_has_image(screenshot_message)
+    assert "page 1 'Welcome popup'" in screenshot_message["content"][0]["text"]
+    assert ("prompt_screenshot", "Welcome popup") in events
+    assert ("prompt_screenshot", "Login page") not in events
+
+
+def test_journey_browser_prompt_screenshot_tool_counts_toward_max_steps(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Visual page",
+        url="http://example.test/visual",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    fake_model = _FakeLangChainPromptModel([_take_screenshot()])
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    with pytest.raises(RuntimeError, match="reached max_steps=1"):
+        page.prompt(
+            "inspect visual layout",
+            model="openai:gpt-4.1-mini",
+            max_steps=1,
+        )
+    log_output = capsys.readouterr().out
+
+    assert events == [
+        ("prompt_rendered_html", "Visual page"),
+        ("prompt_screenshot", "Visual page"),
+    ]
+    assert "1/1 action" in log_output
+    assert "capture screenshot" in log_output
+    assert "Last action was ok: screenshot" in log_output
 
 
 def test_journey_browser_prompt_runs_action_work_on_prompt_thread(monkeypatch):
@@ -2788,17 +2979,13 @@ def test_journey_browser_prompt_retries_rejected_python(
     assert '"status": "rejected"' in fake_model.calls[1]["messages"][-1]["content"][0]["text"]
     assert events == [
         ("prompt_rendered_html", "Chat"),
-        ("prompt_screenshot", "Chat"),
         ("prompt_click", "Chat", "#attach", 5000),
         ("prompt_rendered_html", "Chat"),
-        ("prompt_screenshot", "Chat"),
         ("prompt_fill", "Chat", "#composer", "I need to fix a toilet", 5000),
         ("prompt_rendered_html", "Chat"),
-        ("prompt_screenshot", "Chat"),
         ("prompt_wait_for_load_state", "Chat", "networkidle", 2000),
         ("prompt_wait_for_timeout", "Chat", 500),
         ("prompt_rendered_html", "Chat"),
-        ("prompt_screenshot", "Chat"),
     ]
     assert "1/15 action               click selector '#attach'" in log_output
     assert 'page.locator("#attach").click(timeout=timeout_ms)' in log_output
@@ -2858,6 +3045,7 @@ def test_journey_browser_prompt_compiles_and_replays_named_memory(
 
     first_model = _FakeLangChainPromptModel(
         [
+            _take_screenshot(),
             _run_code(
                 "\n".join(
                     [

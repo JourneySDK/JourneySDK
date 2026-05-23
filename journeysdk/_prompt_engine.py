@@ -49,6 +49,11 @@ _COMPACTED_OBSERVATION_TEXT = (
     "Use the latest observation message for the current page state; prior "
     "action and tool messages remain in this conversation."
 )
+_SCREENSHOT_TOOL_NAME = "journey_screenshot"
+_COMPACTED_SCREENSHOT_TEXT = (
+    "Previous Journey screenshot omitted to reduce prompt history size. "
+    "Use newer observations and action results for the current page state."
+)
 
 
 @dataclass(frozen=True)
@@ -301,6 +306,9 @@ class PromptActionContext:
     def observation_or_stop(self, *, step_index: int) -> list[dict[str, object]]:
         return self._session.action_observation_or_stop(step_index=step_index)
 
+    def raise_if_step_limit_reached(self, *, step_index: int) -> None:
+        self._session.raise_if_step_limit_reached(step_index=step_index)
+
     def run_on_prompt_thread(self, callback: Callable[[], _T]) -> _T:
         return self._session.run_on_prompt_thread(callback)
 
@@ -395,12 +403,15 @@ class PromptEngineSession:
         step_index: int,
     ) -> list[dict[str, object]]:
         observation = self._build_observation()
-        if step_index >= self._max_steps:
-            self._raise_max_steps()
+        self.raise_if_step_limit_reached(step_index=step_index)
         return self._build_observation_content(
             observation=observation,
             include_memory=False,
         )
+
+    def raise_if_step_limit_reached(self, *, step_index: int) -> None:
+        if step_index >= self._max_steps:
+            self._raise_max_steps()
 
     def raise_prompt_failed(self, *, step_index: int, reason: str) -> None:
         normalized_reason = reason.strip() or "The requested task could not be completed."
@@ -1049,16 +1060,24 @@ def _compact_prompt_observation_messages(messages: list[object]) -> list[object]
         for index, message in enumerate(messages)
         if _is_prompt_observation_message(message)
     ]
-    if len(observation_indexes) <= 1:
+    latest_observation_index = observation_indexes[-1] if observation_indexes else -1
+    stale_screenshot_indexes = _stale_screenshot_tool_result_indexes(
+        messages,
+        latest_observation_index=latest_observation_index,
+    )
+    if len(observation_indexes) <= 1 and not stale_screenshot_indexes:
         return messages
 
     compacted = list(messages)
-    initial_observation_index = observation_indexes[0]
-    for index in observation_indexes[:-1]:
-        compacted[index] = _compact_prompt_observation_message(
-            messages[index],
-            preserve_initial_context=index == initial_observation_index,
-        )
+    if len(observation_indexes) > 1:
+        initial_observation_index = observation_indexes[0]
+        for index in observation_indexes[:-1]:
+            compacted[index] = _compact_prompt_observation_message(
+                messages[index],
+                preserve_initial_context=index == initial_observation_index,
+            )
+    for index in stale_screenshot_indexes:
+        compacted[index] = _compact_screenshot_tool_result_message(messages[index])
     return compacted
 
 
@@ -1119,6 +1138,76 @@ def _compacted_observation_text(
         if prefix:
             return "\n\n".join([prefix, _COMPACTED_OBSERVATION_TEXT])
     return _COMPACTED_OBSERVATION_TEXT
+
+
+def _stale_screenshot_tool_result_indexes(
+    messages: list[object],
+    *,
+    latest_observation_index: int,
+) -> list[int]:
+    if latest_observation_index < 0:
+        return []
+    screenshot_tool_call_ids = _screenshot_tool_call_ids(messages)
+    if not screenshot_tool_call_ids:
+        return []
+    indexes: list[int] = []
+    for index, message in enumerate(messages[:latest_observation_index]):
+        tool_call_id = _message_tool_call_id(message)
+        if (
+            tool_call_id in screenshot_tool_call_ids
+            and _content_has_image(_message_content(message))
+        ):
+            indexes.append(index)
+    return indexes
+
+
+def _screenshot_tool_call_ids(messages: list[object]) -> set[str]:
+    tool_call_ids: set[str] = set()
+    for message in messages:
+        for tool_call in _message_tool_calls(message):
+            if tool_call.get("name") != _SCREENSHOT_TOOL_NAME:
+                continue
+            tool_call_id = tool_call.get("id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                tool_call_ids.add(tool_call_id)
+    return tool_call_ids
+
+
+def _message_tool_calls(message: object) -> Iterator[Mapping[str, object]]:
+    raw_tool_calls = None
+    if isinstance(message, Mapping):
+        raw_tool_calls = message.get("tool_calls")
+    else:
+        raw_tool_calls = getattr(message, "tool_calls", None)
+    if not isinstance(raw_tool_calls, list):
+        return
+    for tool_call in raw_tool_calls:
+        if isinstance(tool_call, Mapping):
+            yield tool_call
+
+
+def _message_tool_call_id(message: object) -> str | None:
+    if isinstance(message, Mapping):
+        value = message.get("tool_call_id")
+    else:
+        value = getattr(message, "tool_call_id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _content_has_image(content: object) -> bool:
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(item, Mapping) and item.get("type") == "image_url"
+        for item in content
+    )
+
+
+def _compact_screenshot_tool_result_message(message: object) -> object:
+    return _with_message_content(
+        message,
+        [{"type": "text", "text": _COMPACTED_SCREENSHOT_TEXT}],
+    )
 
 
 def _with_message_content(message: object, content: object) -> object:

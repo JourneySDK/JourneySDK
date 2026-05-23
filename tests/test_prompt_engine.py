@@ -335,6 +335,19 @@ def _prompt_observation_content(
     ]
 
 
+def _prompt_screenshot_content(label: str) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "text",
+            "text": f"Screenshot captured for {label}.",
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{label}"},
+        },
+    ]
+
+
 def _content_text(content: object) -> str:
     assert isinstance(content, list)
     first = content[0]
@@ -464,6 +477,76 @@ def test_prompt_engine_observation_compaction_preserves_dict_message_pairing() -
     assert compacted[2]["tool_call_id"] == "call-1"
     assert "latest-rendered-html" in _content_text(compacted[2]["content"])
     assert _has_image_content(compacted[2]["content"])
+
+
+def test_prompt_engine_observation_compaction_keeps_current_screenshot_tool_result() -> None:
+    messages: list[object] = [
+        HumanMessage(content=_prompt_observation_content("initial")),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "journey_screenshot",
+                    "args": {},
+                    "id": "screenshot-1",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=_prompt_screenshot_content("current"),
+            tool_call_id="screenshot-1",
+        ),
+    ]
+
+    compacted = _compact_prompt_observation_messages(messages)
+
+    assert compacted is messages
+    assert _has_image_content(messages[2].content)
+    assert "Screenshot captured for current." in _content_text(messages[2].content)
+
+
+def test_prompt_engine_observation_compaction_strips_stale_screenshot_tool_result() -> None:
+    messages: list[object] = [
+        HumanMessage(content=_prompt_observation_content("initial")),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "journey_screenshot",
+                    "args": {},
+                    "id": "screenshot-1",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=_prompt_screenshot_content("old"),
+            tool_call_id="screenshot-1",
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "fake_echo",
+                    "args": {"text": "continue"},
+                    "id": "call-2",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=_prompt_observation_content("latest"),
+            tool_call_id="call-2",
+        ),
+    ]
+
+    compacted = _compact_prompt_observation_messages(messages)
+
+    assert compacted[1].tool_calls[0]["id"] == "screenshot-1"
+    assert compacted[2].tool_call_id == "screenshot-1"
+    assert not _has_image_content(compacted[2].content)
+    assert "Previous Journey screenshot omitted" in _content_text(compacted[2].content)
+    assert "old" not in _content_text(compacted[2].content)
+    assert "latest-rendered-html" in _content_text(compacted[4].content)
+    assert _has_image_content(compacted[4].content)
 
 
 def test_prompt_engine_runs_action_adapter_and_persists_action_records(
