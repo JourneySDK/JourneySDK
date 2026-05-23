@@ -383,8 +383,8 @@ Read `docs/browser_prompt_journey/browser_prompt_journey.py`.
 
   SDK already includes Playwright and LangChain. Set your provider credentials with the normal provider ...
 environment variables such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Browser prompts default to
-`anthropic:claude-sonnet-4-6`; override that with LangChain's `provider:model` syntax such as
-`model="anthropic:claude-sonnet-4-5"`, or set `JOURNEY_BROWSER_PROMPT_MODEL`.
+`anthropic:claude-haiku-4-5`; override that with LangChain's `provider:model` syntax such as
+`model="anthropic:claude-haiku-4-5"`, or set `JOURNEY_BROWSER_PROMPT_MODEL`.
 
 The helper can stay small. Without `output=...`, `page.prompt(...)` returns a plain string. With `output=...`, Journey
 uses the model provider's structured-output feature and returns a dictionary with those fields:

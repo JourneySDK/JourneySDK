@@ -808,7 +808,7 @@ class JourneyBrowserPage(PlaywrightPage):
         Args:
             instruction: Natural-language task for the prompt loop.
             model: Optional LangChain model identifier. Defaults to
-                `anthropic:claude-sonnet-4-6`, or the value of
+                `anthropic:claude-haiku-4-5`, or the value of
                 `JOURNEY_BROWSER_PROMPT_MODEL` when set.
             max_steps: Maximum generated Python snippets before failing.
             action_timeout_seconds: Timeout passed to generated Playwright actions.

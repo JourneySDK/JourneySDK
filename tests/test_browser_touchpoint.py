@@ -2140,10 +2140,10 @@ def test_journey_browser_prompt_model_initialization_auth_failure_has_hint(
     )
 
     with pytest.raises(RuntimeError, match="failed to initialize LangChain model") as exc_info:
-        page.prompt("click sign in", model="anthropic:claude-sonnet-4-6")
+        page.prompt("click sign in", model="anthropic:claude-haiku-4-5")
     hint = getattr(exc_info.value, "hint", "")
     assert "ANTHROPIC_API_KEY" in hint
-    assert "JOURNEY_BROWSER_PROMPT_MODEL=anthropic:claude-sonnet-4-6" in hint
+    assert "JOURNEY_BROWSER_PROMPT_MODEL=anthropic:claude-haiku-4-5" in hint
 
 
 def test_journey_browser_prompt_delegates_action_execution_to_langchain_agent():
@@ -2214,7 +2214,7 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
 
     result = page.prompt(
         'click on a "Sign in" button and get the title of the opened popup',
-        model="anthropic:claude-sonnet-4-5",
+        model="anthropic:claude-haiku-4-5",
     )
     log_output = capsys.readouterr().out
 
@@ -2270,7 +2270,7 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
     assert "[journey]" not in log_output
     assert "AI prompt" in log_output
     assert 'click on a "Sign in" button and get the title' in log_output
-    assert "model=anthropic:claude-sonnet-4-5" in log_output
+    assert "model=anthropic:claude-haiku-4-5" in log_output
     assert "page 0 'Login page' at http://example.test/login" in log_output
     assert "1/15 action               click selector '#sign-in'" in log_output
     assert "1/15 code" in log_output

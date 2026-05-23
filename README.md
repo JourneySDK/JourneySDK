@@ -455,8 +455,8 @@ def capture_popup_title() -> dict[str, object]:
 ```
 
 Set provider credentials with the provider's normal environment variables such as `OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY`. Browser prompts default to `anthropic:claude-sonnet-4-6`; override that by passing a LangChain
-model identifier like `model="anthropic:claude-sonnet-4-5"` or by setting `JOURNEY_BROWSER_PROMPT_MODEL`.
+`ANTHROPIC_API_KEY`. Browser prompts default to `anthropic:claude-haiku-4-5`; override that by passing a LangChain
+model identifier like `model="anthropic:claude-haiku-4-5"` or by setting `JOURNEY_BROWSER_PROMPT_MODEL`.
 By default, each `page.prompt(...)` inside a journey step stores a replayable fast path from successful runs in a
 generated callsite memory file in the journey root: the current directory where you run `journey`, or `Path.cwd()` when
 using `journeysdk.execute(...)` directly. Pass `memory="sign-in-popup"` to choose a stable name such as

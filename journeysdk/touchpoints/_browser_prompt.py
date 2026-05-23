@@ -52,7 +52,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page as PlaywrightPage
 
 JOURNEY_BROWSER_PROMPT_MODEL_ENV = "JOURNEY_BROWSER_PROMPT_MODEL"
-DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL = "anthropic:claude-sonnet-4-6"
+DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL = "anthropic:claude-haiku-4-5"
 
 _PROMPT_RUN_CODE_ACTION_NAME = "journey_run_code"
 _PROMPT_SCREENSHOT_ACTION_NAME = "journey_screenshot"

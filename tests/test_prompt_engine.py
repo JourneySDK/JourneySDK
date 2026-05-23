@@ -1169,7 +1169,7 @@ def test_prompt_engine_model_call_auth_failure_has_actionable_hint() -> None:
             component="fake-action",
             owner="fake.prompt(...)",
             instruction="echo hello",
-            model="anthropic:claude-sonnet-4-6",
+            model="anthropic:claude-haiku-4-5",
             max_steps=3,
             memory_path=None,
             output_schema=None,
@@ -1183,7 +1183,7 @@ def test_prompt_engine_model_call_auth_failure_has_actionable_hint() -> None:
 
     hint = getattr(exc_info.value, "hint", "")
     assert "ANTHROPIC_API_KEY" in hint
-    assert "JOURNEY_BROWSER_PROMPT_MODEL=anthropic:claude-sonnet-4-6" in hint
+    assert "JOURNEY_BROWSER_PROMPT_MODEL=anthropic:claude-haiku-4-5" in hint
 
 
 def test_prompt_memory_round_trips_markdown_entry(tmp_path: Path) -> None:
