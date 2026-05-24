@@ -126,6 +126,21 @@ class _FakePromptModel:
             if callable(on_llm_end):
                 on_llm_end(result)
 
+    def emit_chat_model_start(
+        self,
+        config: dict[str, object] | None,
+        messages: list[object],
+    ) -> None:
+        if not self.emit_callbacks or config is None:
+            return
+        callbacks = config.get("callbacks")
+        if not isinstance(callbacks, list):
+            return
+        for callback in callbacks:
+            on_chat_model_start = getattr(callback, "on_chat_model_start", None)
+            if callable(on_chat_model_start):
+                on_chat_model_start({}, [messages])
+
 
 class _FakeStructuredPromptModel:
     def __init__(
@@ -144,6 +159,7 @@ class _FakeStructuredPromptModel:
         *,
         config: dict[str, object] | None = None,
     ) -> object:
+        self._prompt_model.emit_chat_model_start(config, list(messages))
         self._prompt_model.structured_calls.append(
             {
                 "messages": list(messages),
@@ -192,6 +208,7 @@ class _FakeAgent:
             *raw_messages,
         ]
         while True:
+            self._model.emit_chat_model_start(config, list(messages))
             self._model.calls.append({"messages": list(messages)})
             response = self._model._responses.pop(0)
             self._model._response_index += 1
@@ -345,6 +362,22 @@ def _prompt_screenshot_content(label: str) -> list[dict[str, object]]:
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{label}"},
         },
+    ]
+
+
+def _prompt_inspect_dom_content(label: str) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "text",
+            "text": "\n".join(
+                [
+                    f"Raw DOM for {label}:",
+                    "<journey-dom-inspection>",
+                    f"<div id=\"{label}\">old raw dom</div>",
+                    "</journey-dom-inspection>",
+                ]
+            ),
+        }
     ]
 
 
@@ -549,6 +582,50 @@ def test_prompt_engine_observation_compaction_strips_stale_screenshot_tool_resul
     assert _has_image_content(compacted[4].content)
 
 
+def test_prompt_engine_observation_compaction_strips_stale_dom_inspection_result() -> None:
+    messages: list[object] = [
+        HumanMessage(content=_prompt_observation_content("initial")),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "journey_inspect_dom",
+                    "args": {"selector": "#details"},
+                    "id": "dom-1",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=_prompt_inspect_dom_content("details"),
+            tool_call_id="dom-1",
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "fake_echo",
+                    "args": {"text": "continue"},
+                    "id": "call-2",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=_prompt_observation_content("latest"),
+            tool_call_id="call-2",
+        ),
+    ]
+
+    compacted = _compact_prompt_observation_messages(messages)
+
+    assert compacted[1].tool_calls[0]["id"] == "dom-1"
+    assert compacted[2].tool_call_id == "dom-1"
+    assert "Previous Journey DOM inspection omitted" in _content_text(
+        compacted[2].content
+    )
+    assert "old raw dom" not in _content_text(compacted[2].content)
+    assert "latest-rendered-html" in _content_text(compacted[4].content)
+
+
 def test_prompt_engine_runs_action_adapter_and_persists_action_records(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -639,7 +716,7 @@ def test_prompt_engine_runs_action_adapter_and_persists_action_records(
     assert "Observation records JSON:" in first_prompt_text
     assert "Known pages JSON:" not in first_prompt_text
     assert "Executed steps JSON:" not in second_prompt_text
-    assert '"event": "action"' in second_prompt_text
+    assert '"event":"action"' in second_prompt_text
     assert "fake-visible-text" in first_prompt_text
     assert len(model.structured_calls) == 1
     assert model.structured_calls[0]["schema"]["title"] == "journey_prompt_finalization"
@@ -926,6 +1003,68 @@ def test_prompt_engine_logs_model_usage_in_jsonl(
     assert finish["model_calls"] == 2
 
 
+def test_prompt_engine_logs_model_payload_metrics_in_jsonl(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model = _FakePromptModel(
+        ["done"],
+        structured_responses=[_finalization("done")],
+        usage_metadata=[
+            {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
+        ],
+        structured_usage_metadata=[
+            {"input_tokens": 13, "output_tokens": 5, "total_tokens": 18}
+        ],
+        emit_callbacks=True,
+    )
+
+    configure_logging("info", output_format="jsonl")
+    try:
+        PromptEngineSession(
+            component="fake-action",
+            owner="fake.prompt(...)",
+            instruction="finish",
+            model="fake:model",
+            max_steps=3,
+            memory_path=None,
+            output_schema=None,
+            system_prompt="Return done.",
+            logger=get_logger("fake-prompt"),
+            build_observation=lambda: PromptObservation(
+                signature="fake://ready",
+                records=(),
+                sections=(
+                    PromptTextSection(
+                        heading="Fake visible text",
+                        tag="fake-visible-text",
+                        text="Ready",
+                    ),
+                ),
+            ),
+            build_actions=lambda context: [],
+            load_model=lambda model_name: model,
+            create_agent=_fake_create_agent,
+        ).run()
+    finally:
+        configure_logging("info", output_format="pretty")
+
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    payload_records = [
+        record for record in records if record["event"] == "prompt_model_payload"
+    ]
+    assert [record["operation"] for record in payload_records] == [
+        "action_loop",
+        "finalization",
+    ]
+    assert all(record["text_chars"] > 0 for record in payload_records)
+    assert all(record["approximate_tokens"] > 0 for record in payload_records)
+    assert all(record["image_count"] == 0 for record in payload_records)
+    assert "Instruction" in payload_records[0]["section_char_counts"]
+    assert "Return the finalization object using this schema" in payload_records[1][
+        "section_char_counts"
+    ]
+
+
 def test_prompt_engine_logs_token_usage_without_cost_fields(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -996,15 +1135,7 @@ def test_prompt_engine_includes_memory_compile_usage_in_finish(
     def compile_memory(context: PromptMemoryCompileContext) -> PromptMemoryDraft:
         context.invoke_model(
             "memory_compile",
-            lambda config: _FakeAIMessage(
-                content="compiled",
-                usage_metadata={
-                    "input_tokens": 5,
-                    "output_tokens": 2,
-                    "total_tokens": 7,
-                },
-                response_metadata={"model_name": "fake-model-v1"},
-            ),
+            lambda config: _memory_compile_fake_response(config),
         )
         return PromptMemoryDraft(
             sections=(
@@ -1014,6 +1145,26 @@ def test_prompt_engine_includes_memory_compile_usage_in_finish(
                     language="python",
                 ),
             )
+        )
+
+    def _memory_compile_fake_response(config: dict[str, object]) -> _FakeAIMessage:
+        callbacks = config.get("callbacks")
+        assert isinstance(callbacks, list)
+        for callback in callbacks:
+            on_chat_model_start = getattr(callback, "on_chat_model_start", None)
+            if callable(on_chat_model_start):
+                on_chat_model_start(
+                    {},
+                    [[{"role": "user", "content": "Memory compile prompt."}]],
+                )
+        return _FakeAIMessage(
+            content="compiled",
+            usage_metadata={
+                "input_tokens": 5,
+                "output_tokens": 2,
+                "total_tokens": 7,
+            },
+            response_metadata={"model_name": "fake-model-v1"},
         )
 
     PromptEngineSession(
@@ -1037,6 +1188,7 @@ def test_prompt_engine_includes_memory_compile_usage_in_finish(
     ).run()
 
     log_output = capsys.readouterr().out
+    assert "memory_compile text_chars=" in log_output
     assert "memory_compile model=fake-model-v1" in log_output
     assert "tokens=input:20 output:9 total:29" in log_output
     assert "cost=" not in log_output

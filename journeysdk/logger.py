@@ -56,6 +56,7 @@ _TOKEN_COUNT_FIELD_NAMES = {
     "output_tokens",
     "total_tokens",
     "prompt_tokens",
+    "approximate_tokens",
     "completion_tokens",
     "cache_creation_tokens",
     "cache_read_tokens",

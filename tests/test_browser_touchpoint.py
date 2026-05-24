@@ -707,6 +707,13 @@ def _take_screenshot() -> dict[str, object]:
     return _prompt_action_call("journey_screenshot", {})
 
 
+def _inspect_dom(selector: str | None = None) -> dict[str, object]:
+    arguments: dict[str, object] = {}
+    if selector is not None:
+        arguments["selector"] = selector
+    return _prompt_action_call("journey_inspect_dom", arguments)
+
+
 def _content_has_image(content: object) -> bool:
     if not isinstance(content, list):
         return False
@@ -808,6 +815,36 @@ def _prompt_html(
     return f"<html><head><title>{title}</title></head><body>{body}</body></html>"
 
 
+def _prompt_html_for_selector(html: str, selector: str) -> str | None:
+    if selector == "html":
+        return html
+    if selector == "body":
+        body_start = html.find("<body")
+        body_end = html.find("</body>")
+        if body_start == -1 or body_end == -1:
+            return None
+        return html[body_start : body_end + len("</body>")]
+    if not selector.startswith("#"):
+        return None
+    target_id = selector.removeprefix("#")
+    marker = f'id="{target_id}"'
+    marker_index = html.find(marker)
+    if marker_index == -1:
+        return None
+    start = html.rfind("<", 0, marker_index)
+    if start == -1:
+        return None
+    tag_end = html.find(">", start)
+    if tag_end == -1:
+        return None
+    tag_name = html[start + 1 : tag_end].split()[0].removesuffix("/")
+    close_marker = f"</{tag_name}>"
+    close_index = html.find(close_marker, tag_end)
+    if close_index == -1:
+        return html[start : tag_end + 1]
+    return html[start : close_index + len(close_marker)]
+
+
 def _prompt_visible_text(
     *,
     elements: list[dict[str, object]],
@@ -861,6 +898,12 @@ def _make_prompt_page(
         return f"png:{self._fake_prompt_title}".encode("utf-8")
 
     def evaluate(self, script: str, items: object | None = None) -> object:
+        if "document.querySelector(selector)" in script:
+            assert items is None or isinstance(items, str)
+            events.append(("prompt_inspect_dom", self._fake_prompt_title, items))
+            if items is None:
+                return self._fake_prompt_html
+            return _prompt_html_for_selector(self._fake_prompt_html, items)
         if "document.documentElement.outerHTML" in script:
             events.append(("prompt_rendered_html", self._fake_prompt_title))
             return self._fake_prompt_html
@@ -900,6 +943,45 @@ def _make_prompt_page(
     page.wait_for_load_state = MethodType(wait_for_load_state, page)
     page.wait_for_timeout = MethodType(wait_for_timeout, page)
     return page
+
+
+def test_semantic_dom_snapshot_keeps_actionable_dom_and_drops_noise():
+    semantic_dom = journey_browser_prompt._semantic_dom_from_html(
+        """
+        <html>
+          <head>
+            <style>.hidden { display: none; }</style>
+            <script>window.__APP_STATE__ = {"huge": true}</script>
+          </head>
+          <body>
+            <main id="app" class="Layout_shell__abc123 cl-root">
+              <button id="submit" data-testid="submit-button" class="cl-formButtonPrimary Button_text__rYg_f">
+                Continue
+                <svg><path d="M0 0 L1000 1000"></path></svg>
+              </button>
+              <label for="email">Email address</label>
+              <input id="email" name="email" type="email" placeholder="Enter email" aria-invalid="false" />
+              <a href="/help?token=secret" role="link">Help</a>
+              <p hidden>Invisible text</p>
+            </main>
+          </body>
+        </html>
+        """
+    )
+
+    assert '<main class="cl-root" id="app">' in semantic_dom
+    assert 'data-testid="submit-button"' in semantic_dom
+    assert 'class="cl-formButtonPrimary"' in semantic_dom
+    assert ">Continue<" in semantic_dom
+    assert 'for="email"' in semantic_dom
+    assert 'name="email"' in semantic_dom
+    assert 'placeholder="Enter email"' in semantic_dom
+    assert 'href="/help?token=secret"' in semantic_dom
+    assert "window.__APP_STATE__" not in semantic_dom
+    assert "display: none" not in semantic_dom
+    assert "Button_text__rYg_f" not in semantic_dom
+    assert "<path" not in semantic_dom
+    assert "Invisible text" not in semantic_dom
 
 
 def test_journey_browser_page_round_trips_rehydration_payload(tmp_path: Path):
@@ -2232,31 +2314,32 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
     assert not _messages_have_image(fake_model.structured_calls[0]["messages"])
     assert not hasattr(journey_browser_prompt, "_COLLECT_ELEMENTS_SCRIPT")
     first_prompt_text = fake_model.calls[0]["messages"][1]["content"][0]["text"]
-    assert "<journey-rendered-html>" in first_prompt_text
+    assert "<journey-semantic-dom>" in first_prompt_text
     assert "Observation records JSON:" in first_prompt_text
     assert "Known pages JSON:" not in first_prompt_text
-    assert '"event": "page"' in first_prompt_text
-    assert '"is_original": true' in first_prompt_text
+    assert '"event":"page"' in first_prompt_text
+    assert '"is_original":true' in first_prompt_text
     second_prompt_text = fake_model.calls[1]["messages"][-1]["content"][0]["text"]
     assert "Executed steps JSON:" not in second_prompt_text
-    assert '"event": "action"' in second_prompt_text
+    assert '"event":"action"' in second_prompt_text
     assert 'page.locator(\\"#sign-in\\").click(timeout=timeout_ms)' in second_prompt_text
     assert '<button id="sign-in" role="button">Sign in</button>' in first_prompt_text
     assert '"actions": [' not in first_prompt_text
     assert '"id": "e1"' not in first_prompt_text
     assert (
-        fake_model.calls[1]["messages"][-1]["content"][0]["text"].find('"title": "Welcome popup"')
+        fake_model.calls[1]["messages"][-1]["content"][0]["text"].find('"title":"Welcome popup"')
         != -1
     )
     final_prompt_text = fake_model.calls[2]["messages"][-1]["content"][0]["text"]
     assert "Observation records JSON:" in final_prompt_text
     assert "Executed steps JSON:" not in final_prompt_text
-    assert '"event": "action"' in final_prompt_text
-    assert '"action_type": "python"' in final_prompt_text
+    assert '"event":"action"' in final_prompt_text
+    assert '"action_type":"python"' in final_prompt_text
     assert "Final return value requested: plain text" in final_prompt_text
     finalization_prompt_text = fake_model.structured_calls[0]["messages"][1]["content"][0]["text"]
     assert "Return the finalization object using this schema" in finalization_prompt_text
     assert "success_criteria_met" in finalization_prompt_text
+    assert "<journey-semantic-dom>" not in finalization_prompt_text
     assert events == [
         ("prompt_rendered_html", "Login page"),
         ("prompt_click", "Login page", "#sign-in", 5000),
@@ -2265,7 +2348,6 @@ def test_journey_browser_prompt_clicks_popup_and_returns_text(
         ("prompt_rendered_html", "Welcome popup"),
         ("prompt_wait_for_load_state", "Welcome popup", "networkidle", 2000),
         ("prompt_wait_for_timeout", "Welcome popup", 500),
-        ("prompt_rendered_html", "Welcome popup"),
     ]
     assert "[journey]" not in log_output
     assert "AI prompt" in log_output
@@ -2315,7 +2397,6 @@ def test_journey_browser_prompt_does_not_attach_screenshots_to_observations(
         ("prompt_rendered_html", "Dashboard"),
         ("prompt_wait_for_load_state", "Dashboard", "networkidle", 2000),
         ("prompt_wait_for_timeout", "Dashboard", 500),
-        ("prompt_rendered_html", "Dashboard"),
     ]
 
 
@@ -2366,7 +2447,6 @@ def test_journey_browser_prompt_screenshot_tool_returns_image_when_requested(
         ("prompt_screenshot", "Visual page"),
         ("prompt_wait_for_load_state", "Visual page", "networkidle", 2000),
         ("prompt_wait_for_timeout", "Visual page", 500),
-        ("prompt_rendered_html", "Visual page"),
     ]
     assert "1/15 action               capture screenshot" in log_output
     assert "1/15 ok                   screenshot captured on page 0" in log_output
@@ -2450,6 +2530,58 @@ def test_journey_browser_prompt_screenshot_tool_counts_toward_max_steps(
     assert "1/1 action" in log_output
     assert "capture screenshot" in log_output
     assert "Last action was ok: screenshot" in log_output
+
+
+def test_journey_browser_prompt_inspect_dom_tool_returns_scoped_raw_dom(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Details",
+        url="http://example.test/details",
+        context=context,
+        events=events,
+        html=(
+            "<html><body>"
+            '<main id="app"><div id="details"><span>Raw child</span></div></main>'
+            "</body></html>"
+        ),
+    )
+    context.pages.append(page)
+    fake_model = _FakeLangChainPromptModel(
+        [
+            _inspect_dom("#details"),
+            "The details DOM is available.",
+        ],
+        structured_responses=[_finalization("The details DOM is available.")],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model: fake_model,
+    )
+
+    assert (
+        page.prompt("inspect details DOM", model="openai:gpt-4.1-mini")
+        == "The details DOM is available."
+    )
+    log_output = capsys.readouterr().out
+
+    inspect_message = fake_model.calls[1]["messages"][-1]
+    assert not _message_has_image(inspect_message)
+    inspect_text = inspect_message["content"][0]["text"]
+    assert "Raw DOM for #details" in inspect_text
+    assert '<div id="details"><span>Raw child</span></div>' in inspect_text
+    assert events == [
+        ("prompt_rendered_html", "Details"),
+        ("prompt_inspect_dom", "Details", "#details"),
+        ("prompt_wait_for_load_state", "Details", "networkidle", 2000),
+        ("prompt_wait_for_timeout", "Details", 500),
+    ]
+    assert "1/15 action               inspect DOM for #details" in log_output
+    assert "1/15 ok                   DOM inspected for #details" in log_output
 
 
 def test_journey_browser_prompt_runs_action_work_on_prompt_thread(monkeypatch):
@@ -2976,7 +3108,7 @@ def test_journey_browser_prompt_retries_rejected_python(
     assert '<div id="composer" role="textbox">Message</div>' in fake_model.calls[0][
         "messages"
     ][1]["content"][0]["text"]
-    assert '"status": "rejected"' in fake_model.calls[1]["messages"][-1]["content"][0]["text"]
+    assert '"status":"rejected"' in fake_model.calls[1]["messages"][-1]["content"][0]["text"]
     assert events == [
         ("prompt_rendered_html", "Chat"),
         ("prompt_click", "Chat", "#attach", 5000),
@@ -2985,7 +3117,6 @@ def test_journey_browser_prompt_retries_rejected_python(
         ("prompt_rendered_html", "Chat"),
         ("prompt_wait_for_load_state", "Chat", "networkidle", 2000),
         ("prompt_wait_for_timeout", "Chat", 500),
-        ("prompt_rendered_html", "Chat"),
     ]
     assert "1/15 action               click selector '#attach'" in log_output
     assert 'page.locator("#attach").click(timeout=timeout_ms)' in log_output
@@ -3102,6 +3233,7 @@ def test_journey_browser_prompt_compiles_and_replays_named_memory(
     assert 'page.locator("#password-field").fill("1111", timeout=timeout_ms)' in memory_text
     assert '"1212"' not in memory_text
     assert "rendered-html" not in memory_text
+    assert "semantic-dom" not in memory_text
     assert "data:image" not in memory_text
     assert "png:Chat" not in memory_text
     assert '<div id="composer"' not in memory_text
@@ -3737,8 +3869,8 @@ def test_journey_browser_prompt_retries_invalid_action_arguments(monkeypatch):
 
     assert result == "Recovered."
     second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
-    assert '"action_type": "tool"' in second_prompt_text
-    assert '"status": "rejected"' in second_prompt_text
+    assert '"action_type":"tool"' in second_prompt_text
+    assert '"status":"rejected"' in second_prompt_text
 
 
 def test_journey_browser_prompt_retries_invalid_python(monkeypatch):
@@ -3767,8 +3899,8 @@ def test_journey_browser_prompt_retries_invalid_python(monkeypatch):
 
     assert result == "Recovered."
     second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
-    assert '"target": "page.locator(\\"#sign-in\\""' in second_prompt_text
-    assert '"status": "rejected"' in second_prompt_text
+    assert '"target":"page.locator(\\"#sign-in\\""' in second_prompt_text
+    assert '"status":"rejected"' in second_prompt_text
     assert "SyntaxError:" in second_prompt_text
 
 

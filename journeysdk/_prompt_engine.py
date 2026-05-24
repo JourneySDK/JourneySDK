@@ -50,8 +50,13 @@ _COMPACTED_OBSERVATION_TEXT = (
     "action and tool messages remain in this conversation."
 )
 _SCREENSHOT_TOOL_NAME = "journey_screenshot"
+_INSPECT_DOM_TOOL_NAME = "journey_inspect_dom"
 _COMPACTED_SCREENSHOT_TEXT = (
     "Previous Journey screenshot omitted to reduce prompt history size. "
+    "Use newer observations and action results for the current page state."
+)
+_COMPACTED_INSPECT_DOM_TEXT = (
+    "Previous Journey DOM inspection omitted to reduce prompt history size. "
     "Use newer observations and action results for the current page state."
 )
 
@@ -176,6 +181,14 @@ class _PromptUsageTotals:
     model_calls: int
 
 
+@dataclass(frozen=True)
+class _PromptPayloadStats:
+    text_chars: int
+    approximate_tokens: int
+    image_count: int
+    section_char_counts: tuple[tuple[str, int], ...]
+
+
 class _PromptUsageCallbackHandler(BaseCallbackHandler):
     def __init__(
         self,
@@ -191,6 +204,31 @@ class _PromptUsageCallbackHandler(BaseCallbackHandler):
         self._model = model
         self._logger = logger
 
+    def on_chat_model_start(
+        self,
+        serialized: object,
+        messages: object,
+        **kwargs: object,
+    ) -> None:
+        for message_batch in _iter_chat_message_batches(messages):
+            self._emit_payload_stats(message_batch)
+
+    def on_llm_start(
+        self,
+        serialized: object,
+        prompts: object,
+        **kwargs: object,
+    ) -> None:
+        if not isinstance(prompts, list):
+            return
+        prompt_messages = [
+            {"role": "user", "content": prompt}
+            for prompt in prompts
+            if isinstance(prompt, str)
+        ]
+        if prompt_messages:
+            self._emit_payload_stats(prompt_messages)
+
     def on_llm_end(self, response: object, **kwargs: object) -> None:
         self._tracker.collect(
             operation=self._operation,
@@ -198,6 +236,37 @@ class _PromptUsageCallbackHandler(BaseCallbackHandler):
             configured_model=self._model,
         )
         self._tracker.emit_unemitted(logger=self._logger)
+
+    def _emit_payload_stats(self, messages: list[object]) -> None:
+        stats = _prompt_payload_stats(messages)
+        sections = dict(stats.section_char_counts)
+        self._logger.info(
+            "prompt_model_payload",
+            (
+                f"{self._operation} payload "
+                f"text_chars={stats.text_chars} "
+                f"approx_tokens={stats.approximate_tokens} "
+                f"images={stats.image_count}"
+            ),
+            pretty=pretty_row(
+                "model payload",
+                (
+                    f"{self._operation} "
+                    f"text_chars={stats.text_chars} "
+                    f"approx_tokens={stats.approximate_tokens} "
+                    f"images={stats.image_count}"
+                ),
+                indent=_PROMPT_DETAIL_INDENT,
+                label_width=_PROMPT_LABEL_WIDTH,
+                style="accent",
+            ),
+            operation=self._operation,
+            model=self._model,
+            text_chars=stats.text_chars,
+            approximate_tokens=stats.approximate_tokens,
+            image_count=stats.image_count,
+            section_char_counts=sections,
+        )
 
 
 class _PromptUsageTracker:
@@ -328,6 +397,7 @@ class PromptEngineSession:
         logger: JourneyLogger,
         build_observation: Callable[[], PromptObservation],
         build_actions: Callable[[PromptActionContext], list[object]],
+        build_final_observation: Callable[[], PromptObservation] | None = None,
         load_model: Callable[[str], object] | None = None,
         create_agent: Callable[..., object] | None = None,
         before_final_observation: Callable[[], None] | None = None,
@@ -348,6 +418,7 @@ class PromptEngineSession:
         self._logger = logger
         self._build_observation = build_observation
         self._build_actions = build_actions
+        self._build_final_observation = build_final_observation
         self._load_model = load_model or _load_langchain_model
         self._create_agent = create_agent or _create_langchain_agent
         self._before_final_observation = before_final_observation
@@ -491,11 +562,7 @@ class PromptEngineSession:
                 *memory_section,
                 "",
                 "Observation records JSON:",
-                json.dumps(
-                    self._observation_record_dicts(observation),
-                    sort_keys=True,
-                    indent=2,
-                ),
+                _json_prompt(self._observation_record_dicts(observation)),
                 *self._render_text_sections(observation.sections),
                 *output_section,
                 "",
@@ -677,7 +744,11 @@ class PromptEngineSession:
         response_text = _extract_langchain_text(response, owner=self._owner).strip()
         if self._before_final_observation is not None:
             self._before_final_observation()
-        final_observation = self._build_observation()
+        final_observation = (
+            self._build_final_observation()
+            if self._build_final_observation is not None
+            else self._build_observation()
+        )
         step_index = len(self._action_records) + 1
         final_output = self._finalize_output(
             response_text,
@@ -831,19 +902,11 @@ class PromptEngineSession:
                 *completion_section,
                 "",
                 "Observation records JSON:",
-                json.dumps(
-                    self._observation_record_dicts(observation),
-                    sort_keys=True,
-                    indent=2,
-                ),
-                *self._render_text_sections(observation.sections),
+                _json_prompt(self._observation_record_dicts(observation)),
+                *self._render_finalization_sections(observation.sections),
                 "",
                 "Return the finalization object using this schema:",
-                json.dumps(
-                    self._finalization_schema().properties,
-                    sort_keys=True,
-                    indent=2,
-                ),
+                _json_prompt(self._finalization_schema().properties),
             ]
         )
         content = [
@@ -883,6 +946,14 @@ class PromptEngineSession:
                 "content": content,
             },
         ]
+
+    def _render_finalization_sections(
+        self,
+        sections: tuple[PromptTextSection, ...],
+    ) -> list[str]:
+        return self._render_text_sections(
+            tuple(section for section in sections if section.tag == "visible-text")
+        )
 
     def _finalization_schema(self) -> PromptOutputSchema:
         if self._output_schema is None:
@@ -1054,6 +1125,10 @@ def _format_prompt_memory_for_prompt(
     )
 
 
+def _json_prompt(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
 def _compact_prompt_observation_messages(messages: list[object]) -> list[object]:
     observation_indexes = [
         index
@@ -1065,7 +1140,15 @@ def _compact_prompt_observation_messages(messages: list[object]) -> list[object]
         messages,
         latest_observation_index=latest_observation_index,
     )
-    if len(observation_indexes) <= 1 and not stale_screenshot_indexes:
+    stale_inspect_dom_indexes = _stale_inspect_dom_tool_result_indexes(
+        messages,
+        latest_observation_index=latest_observation_index,
+    )
+    if (
+        len(observation_indexes) <= 1
+        and not stale_screenshot_indexes
+        and not stale_inspect_dom_indexes
+    ):
         return messages
 
     compacted = list(messages)
@@ -1078,6 +1161,8 @@ def _compact_prompt_observation_messages(messages: list[object]) -> list[object]
             )
     for index in stale_screenshot_indexes:
         compacted[index] = _compact_screenshot_tool_result_message(messages[index])
+    for index in stale_inspect_dom_indexes:
+        compacted[index] = _compact_inspect_dom_tool_result_message(messages[index])
     return compacted
 
 
@@ -1145,27 +1230,57 @@ def _stale_screenshot_tool_result_indexes(
     *,
     latest_observation_index: int,
 ) -> list[int]:
+    return _stale_tool_result_indexes(
+        messages,
+        latest_observation_index=latest_observation_index,
+        tool_name=_SCREENSHOT_TOOL_NAME,
+        require_image=True,
+    )
+
+
+def _stale_inspect_dom_tool_result_indexes(
+    messages: list[object],
+    *,
+    latest_observation_index: int,
+) -> list[int]:
+    return _stale_tool_result_indexes(
+        messages,
+        latest_observation_index=latest_observation_index,
+        tool_name=_INSPECT_DOM_TOOL_NAME,
+        require_image=False,
+    )
+
+
+def _stale_tool_result_indexes(
+    messages: list[object],
+    *,
+    latest_observation_index: int,
+    tool_name: str,
+    require_image: bool,
+) -> list[int]:
     if latest_observation_index < 0:
         return []
-    screenshot_tool_call_ids = _screenshot_tool_call_ids(messages)
-    if not screenshot_tool_call_ids:
+    tool_call_ids = _tool_call_ids(messages, tool_name=tool_name)
+    if not tool_call_ids:
         return []
     indexes: list[int] = []
     for index, message in enumerate(messages[:latest_observation_index]):
         tool_call_id = _message_tool_call_id(message)
+        if tool_call_id not in tool_call_ids:
+            continue
         if (
-            tool_call_id in screenshot_tool_call_ids
-            and _content_has_image(_message_content(message))
+            not require_image
+            or _content_has_image(_message_content(message))
         ):
             indexes.append(index)
     return indexes
 
 
-def _screenshot_tool_call_ids(messages: list[object]) -> set[str]:
+def _tool_call_ids(messages: list[object], *, tool_name: str) -> set[str]:
     tool_call_ids: set[str] = set()
     for message in messages:
         for tool_call in _message_tool_calls(message):
-            if tool_call.get("name") != _SCREENSHOT_TOOL_NAME:
+            if tool_call.get("name") != tool_name:
                 continue
             tool_call_id = tool_call.get("id")
             if isinstance(tool_call_id, str) and tool_call_id:
@@ -1210,6 +1325,13 @@ def _compact_screenshot_tool_result_message(message: object) -> object:
     )
 
 
+def _compact_inspect_dom_tool_result_message(message: object) -> object:
+    return _with_message_content(
+        message,
+        [{"type": "text", "text": _COMPACTED_INSPECT_DOM_TEXT}],
+    )
+
+
 def _with_message_content(message: object, content: object) -> object:
     if isinstance(message, Mapping):
         updated = dict(message)
@@ -1222,6 +1344,65 @@ def _with_message_content(message: object, content: object) -> object:
     if callable(copy_method):
         return copy_method(update={"content": content})
     return message
+
+
+def _iter_chat_message_batches(messages: object) -> Iterator[list[object]]:
+    if not isinstance(messages, list):
+        return
+    if messages and all(isinstance(item, list) for item in messages):
+        for batch in messages:
+            if isinstance(batch, list):
+                yield list(batch)
+        return
+    yield list(messages)
+
+
+def _prompt_payload_stats(messages: list[object]) -> _PromptPayloadStats:
+    text_chars = 0
+    image_count = 0
+    section_char_counts: dict[str, int] = {}
+    for message in messages:
+        content = _message_content(message)
+        for text in _content_texts(content):
+            text_chars += len(text)
+            for section, char_count in _section_char_counts(text):
+                section_char_counts[section] = (
+                    section_char_counts.get(section, 0) + char_count
+                )
+        image_count += _content_image_count(content)
+    return _PromptPayloadStats(
+        text_chars=text_chars,
+        approximate_tokens=max(1, (text_chars + 3) // 4) if text_chars else 0,
+        image_count=image_count,
+        section_char_counts=tuple(sorted(section_char_counts.items())),
+    )
+
+
+def _section_char_counts(text: str) -> Iterator[tuple[str, int]]:
+    current_section = "message"
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if _is_prompt_section_heading(stripped):
+            current_section = stripped.removesuffix(":")
+        yield current_section, len(line)
+
+
+def _is_prompt_section_heading(line: str) -> bool:
+    if not line.endswith(":") or line.startswith("<") or len(line) > 100:
+        return False
+    if not line:
+        return False
+    return all(character.isalnum() or character in " _-/()." for character in line[:-1])
+
+
+def _content_image_count(content: object) -> int:
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1
+        for item in content
+        if isinstance(item, Mapping) and item.get("type") == "image_url"
+    )
 
 
 def _iter_usage_values(result: object) -> Iterator[object]:

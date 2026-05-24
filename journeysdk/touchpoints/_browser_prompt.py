@@ -6,6 +6,9 @@ import ast
 import base64
 import json
 import re
+from dataclasses import dataclass, field
+from html import escape as html_escape
+from html.parser import HTMLParser
 from pathlib import Path
 from types import FrameType
 from typing import cast
@@ -56,6 +59,7 @@ DEFAULT_JOURNEY_BROWSER_PROMPT_MODEL = "anthropic:claude-haiku-4-5"
 
 _PROMPT_RUN_CODE_ACTION_NAME = "journey_run_code"
 _PROMPT_SCREENSHOT_ACTION_NAME = "journey_screenshot"
+_PROMPT_INSPECT_DOM_ACTION_NAME = "journey_inspect_dom"
 _BROWSER_REPLAY_SECTION = "Replay code"
 _BROWSER_SUCCESS_CHECK_SECTION = "Success check code"
 _BROWSER_NOTES_SECTION = "Notes"
@@ -67,8 +71,10 @@ completion signal describing the current visible result. A structured finalizer 
 instruction succeeded and will produce the returned output.
 
 Use journey_run_code to execute one Python snippet against the active page.
-Use journey_screenshot only when rendered HTML, visible text, page records, and prior action results are not enough
-to understand the current visual state.
+Use journey_inspect_dom only when the semantic DOM snapshot is insufficient and you need raw DOM for a specific
+selector or page area.
+Use journey_screenshot only when semantic DOM, visible text, page records, and prior action results are not enough
+to understand visual state.
 
 Available names:
 - page: the active Playwright sync Page
@@ -77,8 +83,9 @@ Available names:
 - switch_page(index): switch the active page to a known page index and return that Page
 
 Rules:
-- Inspect rendered HTML, visible text, page records, and prior action results first, then choose the fewest Playwright
+- Inspect semantic DOM, visible text, page records, and prior action results first, then choose the fewest Playwright
   commands needed.
+- Call journey_inspect_dom with a narrow selector when raw DOM is needed for an element or page area.
 - Call journey_screenshot only when visual layout, screenshots, canvas, images, clipping, or styling are necessary.
 - Prefer robust Playwright locators such as get_by_role, get_by_text, get_by_label, and locator.
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
@@ -90,8 +97,8 @@ Rules:
   because the page displays the final error state.
 - If the previous step was rejected, correct the action arguments or Python and try again.
 - If prompt memory is provided, use it as a hint from prior successful runs,
-  but trust the current rendered HTML, visible text, and requested screenshots over stale memory.
-- The completion signal should be factual and based on the rendered HTML, visible text, requested screenshots, known
+  but trust the current semantic DOM, visible text, DOM inspections, and requested screenshots over stale memory.
+- The completion signal should be factual and based on semantic DOM, visible text, DOM inspections, requested screenshots, known
   pages, and executed steps.
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
@@ -120,14 +127,24 @@ Rules:
 - If a later fallback corrected an earlier value, keep only the corrected value.
 - Success check code must assert all required success criteria from the instruction, including "Expect ..." clauses.
 - Prefer robust Playwright locators and pass timeout=timeout_ms to waits/actions.
-- Do not include screenshots, rendered HTML, hidden reasoning, or prose outside the requested sections.
+- Do not include screenshots, semantic DOM, raw DOM, hidden reasoning, or prose outside the requested sections.
 """
 
 _RENDERED_HTML_SCRIPT = "() => document.documentElement ? document.documentElement.outerHTML : ''"
+_INSPECT_DOM_SCRIPT = (
+    """(selector) => {
+  const root = selector ? document.querySelector(selector) : document.documentElement;
+  return root ? root.outerHTML : null;
+}"""
+)
 _VISIBLE_TEXT_SCRIPT = "() => document.body ? document.body.innerText : ''"
 _PROMPT_LOGGER = get_logger("browser-prompt")
 _PROMPT_DETAIL_INDENT = 10
 _PROMPT_LABEL_WIDTH = 25
+_SEMANTIC_DOM_MAX_LINES = 1200
+_SEMANTIC_DOM_MAX_TEXT_LENGTH = 240
+_SEMANTIC_DOM_MAX_ATTR_LENGTH = 240
+_SEMANTIC_DOM_MAX_CLASS_TOKENS = 6
 _MEMORY_DRAFT_FENCE_PATTERN = re.compile(
     r"^```(?P<language>[A-Za-z0-9_-]*)\n(?P<body>.*?)\n```",
     re.MULTILINE | re.DOTALL,
@@ -197,6 +214,7 @@ class _PromptSession:
                 logger=_PROMPT_LOGGER,
                 build_observation=self._build_observation,
                 build_actions=self._build_agent_actions,
+                build_final_observation=self._build_final_observation,
                 load_model=_load_langchain_model,
                 create_agent=_create_langchain_agent,
                 before_final_observation=self._settle_active_page_for_final_output,
@@ -324,7 +342,7 @@ class _PromptSession:
         self._discover_pages()
         pages = self._prompt_page_payloads()
         active_page = self._pages[self._active_page_index]
-        rendered_html = _rendered_html(active_page)
+        semantic_dom = _semantic_dom_snapshot(active_page)
         visible_text = _visible_text(active_page)
         return PromptObservation(
             signature=_page_memory_signature(pages[self._active_page_index]),
@@ -336,9 +354,27 @@ class _PromptSession:
                     tag="visible-text",
                 ),
                 PromptTextSection(
-                    heading="Active page rendered HTML",
-                    text=rendered_html,
-                    tag="rendered-html",
+                    heading="Active page semantic DOM",
+                    text=semantic_dom,
+                    tag="semantic-dom",
+                ),
+            ),
+            visible_text=visible_text,
+        )
+
+    def _build_final_observation(self) -> PromptObservation:
+        self._discover_pages()
+        pages = self._prompt_page_payloads()
+        active_page = self._pages[self._active_page_index]
+        visible_text = _visible_text(active_page)
+        return PromptObservation(
+            signature=_page_memory_signature(pages[self._active_page_index]),
+            records=tuple(_page_record(page) for page in pages),
+            sections=(
+                PromptTextSection(
+                    heading="Active page visible text",
+                    text=visible_text,
+                    tag="visible-text",
                 ),
             ),
             visible_text=visible_text,
@@ -361,7 +397,15 @@ class _PromptSession:
                 lambda: self._run_screenshot_tool(context=context)
             )
 
-        return [journey_run_code, journey_screenshot]
+        @tool(_PROMPT_INSPECT_DOM_ACTION_NAME)
+        def journey_inspect_dom(selector: str | None = None) -> list[dict[str, object]]:
+            """Inspect raw DOM for the active page or a specific CSS selector."""
+
+            return context.run_on_prompt_thread(
+                lambda: self._run_inspect_dom_tool(selector, context=context)
+            )
+
+        return [journey_run_code, journey_screenshot, journey_inspect_dom]
 
     def _replay_memory(
         self,
@@ -626,6 +670,106 @@ class _PromptSession:
             },
         ]
 
+    def _run_inspect_dom_tool(
+        self,
+        selector: str | None,
+        *,
+        context: PromptActionContext,
+    ) -> list[dict[str, object]]:
+        step_index = context.next_step_index()
+        previous_page_count = len(self._pages)
+        previous_active_page_index = self._active_page_index
+        normalized_selector = _normalize_optional_selector(selector)
+        target = normalized_selector or "document"
+        context.record_memory_log(
+            _emit_prompt_log(
+                f"step {step_index}/{self._max_steps}: AI will inspect DOM for {target}",
+                event="prompt_action",
+                pretty=_prompt_row(
+                    f"{step_index}/{self._max_steps} action",
+                    f"inspect DOM for {target}",
+                    style="accent",
+                ),
+                step=step_index,
+                max_steps=self._max_steps,
+                action=f"inspect DOM for {target}",
+            )
+        )
+        try:
+            self._discover_pages()
+            active_page = self._pages[self._active_page_index]
+            page_summary = _page_summary(
+                self._prompt_page_payloads()[self._active_page_index]
+            )
+            dom = _inspect_dom(active_page, normalized_selector)
+        except Exception as exc:
+            self._raise_keyboard_interrupt_if_forced_prompt_abort(exc)
+            for record in self._log_new_pages(
+                previous_page_count=previous_page_count,
+            ):
+                context.record_memory_log(record)
+            for record in self._log_active_page_change(
+                previous_active_page_index=previous_active_page_index,
+            ):
+                context.record_memory_log(record)
+            self._append_rejected_action(
+                context=context,
+                step_index=step_index,
+                action_type="inspect_dom",
+                target=target,
+                detail=_format_python_error(exc),
+            )
+            return context.observation_or_stop(step_index=step_index)
+
+        for record in self._log_new_pages(previous_page_count=previous_page_count):
+            context.record_memory_log(record)
+        for record in self._log_active_page_change(
+            previous_active_page_index=previous_active_page_index,
+        ):
+            context.record_memory_log(record)
+        context.record_action(
+            _prompt_action_record(
+                step_index=step_index,
+                max_steps=self._max_steps,
+                page_index=self._active_page_index,
+                action_type="inspect_dom",
+                target=target,
+                status="ok",
+                detail=f"Inspected DOM for {target} on {page_summary}.",
+            )
+        )
+        context.record_memory_log(
+            _emit_prompt_log(
+                f"step {step_index}/{self._max_steps}: inspected DOM for "
+                f"{target} on {page_summary}",
+                event="prompt_dom_inspection",
+                pretty=_prompt_row(
+                    f"{step_index}/{self._max_steps} ok",
+                    f"DOM inspected for {target}",
+                    style="success",
+                ),
+                step=step_index,
+                max_steps=self._max_steps,
+                page=self._active_page_index,
+                target=target,
+                page_summary=page_summary,
+            )
+        )
+        context.raise_if_step_limit_reached(step_index=step_index)
+        return [
+            {
+                "type": "text",
+                "text": "\n".join(
+                    [
+                        f"Raw DOM for {target} on {page_summary}:",
+                        "<journey-dom-inspection>",
+                        dom,
+                        "</journey-dom-inspection>",
+                    ]
+                ),
+            }
+        ]
+
     def _append_rejected_action(
         self,
         *,
@@ -781,17 +925,67 @@ def _memory_compile_prompt(context: PromptMemoryCompileContext) -> str:
             if isinstance(context.final_output, dict)
             else json.dumps(context.final_output),
             "",
-            "Action and recovery log records JSON:",
-            json.dumps(
-                [record.to_dict() for record in context.log_records],
-                sort_keys=True,
-                indent=2,
-            ),
+            "Action transcript:",
+            _memory_compile_action_transcript(context.log_records),
             "",
             "Final visible text:",
             context.final_observation.visible_text,
         ]
     )
+
+
+def _memory_compile_action_transcript(
+    records: tuple[JourneyLogRecord, ...],
+) -> str:
+    lines: list[str] = []
+    for record in records:
+        payload = record.to_dict()
+        event = payload.get("event")
+        step = payload.get("step") or payload.get("step_label") or "?"
+        if event == "prompt_action":
+            action = _compact_log_value(payload.get("action"))
+            lines.append(f"- step {step}: action: {action}")
+        elif event == "prompt_code":
+            code = payload.get("code")
+            if isinstance(code, str) and code.strip():
+                lines.append(f"  code: {code.strip()}")
+        elif event == "prompt_rejected":
+            detail = _compact_log_value(payload.get("detail"), max_length=600)
+            lines.append(f"  rejected: {detail}")
+        elif event == "prompt_step_success":
+            page = payload.get("page")
+            lines.append(f"  ok: active page {page}")
+        elif event == "page_discovered":
+            title = _compact_log_value(payload.get("title"))
+            url = _compact_log_value(payload.get("url"))
+            lines.append(f"  discovered page: {title} {url}".rstrip())
+        elif event == "active_page_change":
+            summary = _compact_log_value(payload.get("page_summary"))
+            lines.append(f"  active page: {summary}")
+        elif event == "prompt_screenshot":
+            summary = _compact_log_value(payload.get("page_summary"))
+            lines.append(f"  screenshot: {summary}")
+        elif event == "prompt_dom_inspection":
+            target = _compact_log_value(payload.get("target"))
+            lines.append(f"  DOM inspected: {target}")
+        elif event == "action":
+            status = _compact_log_value(payload.get("status"))
+            action_type = _compact_log_value(payload.get("action_type"))
+            target = _compact_log_value(payload.get("target"))
+            detail = _compact_log_value(payload.get("detail"), max_length=600)
+            lines.append(
+                f"- step {step}: {status} {action_type} target={target} detail={detail}"
+            )
+    return "\n".join(lines) if lines else "- no recorded actions"
+
+
+def _compact_log_value(value: object, *, max_length: int = 240) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3].rstrip() + "..."
 
 
 def _parse_memory_draft(text: str) -> PromptMemoryDraft:
@@ -920,6 +1114,270 @@ def _memory_draft_text_section(text: str, heading: str) -> str:
             end = index
             break
     return "\n".join(lines[start:end]).strip()
+
+
+@dataclass
+class _SemanticDomNode:
+    tag: str
+    attrs: dict[str, str] = field(default_factory=dict)
+    text_parts: list[str] = field(default_factory=list)
+    children: list[_SemanticDomNode] = field(default_factory=list)
+
+
+class _SemanticDomParser(HTMLParser):
+    _SKIP_SUBTREE_TAGS = {"script", "style", "noscript", "template", "svg", "path"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.root = _SemanticDomNode("document")
+        self._stack: list[_SemanticDomNode] = [self.root]
+        self._skip_depth = 0
+        self._hidden_depth = 0
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        normalized_tag = tag.lower()
+        if self._skip_depth:
+            self._skip_depth += 1
+            return
+        if normalized_tag in self._SKIP_SUBTREE_TAGS:
+            self._skip_depth = 1
+            return
+        if self._hidden_depth or _is_hidden_raw_attrs(attrs):
+            self._hidden_depth += 1
+            return
+        normalized_attrs = _semantic_attrs(attrs)
+        node = _SemanticDomNode(normalized_tag, normalized_attrs)
+        self._stack[-1].children.append(node)
+        self._stack.append(node)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if self._hidden_depth:
+            self._hidden_depth -= 1
+            return
+        normalized_tag = tag.lower()
+        for index in range(len(self._stack) - 1, 0, -1):
+            if self._stack[index].tag == normalized_tag:
+                del self._stack[index:]
+                return
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth or self._hidden_depth:
+            return
+        text = _normalize_dom_text(data)
+        if text:
+            self._stack[-1].text_parts.append(text)
+
+
+_SEMANTIC_ATTRS = {
+    "alt",
+    "aria-checked",
+    "aria-controls",
+    "aria-current",
+    "aria-describedby",
+    "aria-expanded",
+    "aria-invalid",
+    "aria-label",
+    "aria-labelledby",
+    "aria-required",
+    "aria-selected",
+    "for",
+    "href",
+    "id",
+    "name",
+    "placeholder",
+    "role",
+    "title",
+    "type",
+}
+_SEMANTIC_DATA_ATTRS = {"data-testid", "data-test", "data-test-id"}
+_SEMANTIC_LANDMARK_TAGS = {
+    "article",
+    "aside",
+    "dialog",
+    "fieldset",
+    "footer",
+    "form",
+    "header",
+    "main",
+    "nav",
+    "section",
+    "table",
+    "tbody",
+    "thead",
+    "tr",
+    "ul",
+    "ol",
+}
+_SEMANTIC_INTERACTIVE_TAGS = {
+    "a",
+    "button",
+    "input",
+    "label",
+    "option",
+    "select",
+    "summary",
+    "textarea",
+}
+_SEMANTIC_TEXT_TAGS = {
+    "caption",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "p",
+    "td",
+    "th",
+}
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+
+
+def _semantic_dom_snapshot(page: PlaywrightPage) -> str:
+    return _semantic_dom_from_html(_rendered_html(page))
+
+
+def _semantic_dom_from_html(html: str) -> str:
+    parser = _SemanticDomParser()
+    parser.feed(html)
+    parser.close()
+    lines = _render_semantic_dom_lines(parser.root)
+    if not lines:
+        return "<empty semantic DOM>"
+    if len(lines) > _SEMANTIC_DOM_MAX_LINES:
+        trimmed = lines[:_SEMANTIC_DOM_MAX_LINES]
+        trimmed.append("<!-- semantic DOM truncated -->")
+        return "\n".join(trimmed)
+    return "\n".join(lines)
+
+
+def _semantic_attrs(attrs: list[tuple[str, str | None]]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for raw_name, raw_value in attrs:
+        name = raw_name.lower()
+        value = "" if raw_value is None else _normalize_dom_text(raw_value)
+        if name == "class":
+            class_value = _semantic_class_value(value)
+            if class_value:
+                normalized[name] = class_value
+            continue
+        if name in _SEMANTIC_ATTRS or name in _SEMANTIC_DATA_ATTRS:
+            normalized[name] = _truncate_dom_value(value, _SEMANTIC_DOM_MAX_ATTR_LENGTH)
+    return normalized
+
+
+def _semantic_class_value(value: str) -> str:
+    kept: list[str] = []
+    for token in value.split():
+        if len(kept) >= _SEMANTIC_DOM_MAX_CLASS_TOKENS:
+            break
+        if len(token) > 40:
+            continue
+        if re.search(r"__[A-Za-z0-9_-]{4,}$", token):
+            continue
+        kept.append(token)
+    return " ".join(kept)
+
+
+def _is_hidden_raw_attrs(attrs: list[tuple[str, str | None]]) -> bool:
+    normalized = {
+        name.lower(): "" if value is None else value
+        for name, value in attrs
+    }
+    if "hidden" in normalized:
+        return True
+    if normalized.get("aria-hidden", "").lower() == "true":
+        return True
+    style = normalized.get("style", "").lower()
+    return (
+        "display:none" in style.replace(" ", "")
+        or "visibility:hidden" in style.replace(" ", "")
+    )
+
+
+def _render_semantic_dom_lines(
+    node: _SemanticDomNode,
+    *,
+    depth: int = 0,
+) -> list[str]:
+    rendered_children: list[str] = []
+    for child in node.children:
+        rendered_children.extend(_render_semantic_dom_lines(child, depth=depth + 1))
+    if node.tag == "document":
+        return rendered_children
+    direct_text = _truncate_dom_value(
+        " ".join(node.text_parts),
+        _SEMANTIC_DOM_MAX_TEXT_LENGTH,
+    )
+    meaningful = _is_semantic_node(node, direct_text=direct_text, child_lines=rendered_children)
+    if not meaningful:
+        return rendered_children
+    indent = "  " * max(depth - 1, 0)
+    attrs = _format_semantic_attrs(node.attrs)
+    tag_open = f"<{node.tag}{attrs}>"
+    if not rendered_children:
+        if node.tag in _VOID_TAGS:
+            return [f"{indent}<{node.tag}{attrs}>"]
+        if direct_text:
+            return [f"{indent}{tag_open}{html_escape(direct_text)}</{node.tag}>"]
+        return [f"{indent}{tag_open}</{node.tag}>"]
+    lines = [f"{indent}{tag_open}"]
+    if direct_text:
+        lines.append(f"{indent}  {html_escape(direct_text)}")
+    lines.extend(rendered_children)
+    lines.append(f"{indent}</{node.tag}>")
+    return lines
+
+
+def _is_semantic_node(
+    node: _SemanticDomNode,
+    *,
+    direct_text: str,
+    child_lines: list[str],
+) -> bool:
+    if node.attrs:
+        return True
+    if node.tag in _SEMANTIC_INTERACTIVE_TAGS or node.tag in _SEMANTIC_LANDMARK_TAGS:
+        return True
+    if direct_text and node.tag in _SEMANTIC_TEXT_TAGS:
+        return True
+    return bool(child_lines) and node.tag in _SEMANTIC_LANDMARK_TAGS
+
+
+def _format_semantic_attrs(attrs: dict[str, str]) -> str:
+    if not attrs:
+        return ""
+    parts = [
+        f'{name}="{html_escape(value, quote=True)}"'
+        for name, value in sorted(attrs.items())
+    ]
+    return " " + " ".join(parts)
+
+
+def _normalize_dom_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _truncate_dom_value(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3].rstrip() + "..."
 
 
 def prompt_page(
@@ -1297,6 +1755,30 @@ def _png_data_url(page: PlaywrightPage) -> str:
         )
     encoded = base64.b64encode(png_bytes).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _normalize_optional_selector(selector: object) -> str | None:
+    if selector is None:
+        return None
+    if not isinstance(selector, str):
+        raise TypeError(
+            "journey_inspect_dom selector must be a CSS selector string or null."
+        )
+    normalized = selector.strip()
+    return normalized or None
+
+
+def _inspect_dom(page: PlaywrightPage, selector: str | None) -> str:
+    if selector is None:
+        return _rendered_html(page)
+    html = page.evaluate(_INSPECT_DOM_SCRIPT, selector)
+    if html is None:
+        raise RuntimeError(f"CSS selector {selector!r} did not match any element.")
+    if not isinstance(html, str):
+        raise RuntimeError(
+            "JourneyBrowserPage.prompt(...) expected DOM inspection to return a string."
+        )
+    return html
 
 
 def _rendered_html(page: PlaywrightPage) -> str:

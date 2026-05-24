@@ -31,7 +31,7 @@ def start_hey_alfie_services() -> DockerComposeStack:
 def sign_in(_stack: DockerComposeStack) -> JourneyBrowserPage:
     page = open_page("http://localhost:3000/", headless=False)
     page.prompt(
-        'Sign in as e2etest@heyalfie.com using password "1212" '
+        'Sign in as journeytest@heyalfie.com using password "1212" '
         '(or "1111" if not working). Expect no errors.',
         memory="sign-in",
     )
