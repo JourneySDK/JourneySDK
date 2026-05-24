@@ -67,7 +67,7 @@ def browser_resume_journey() -> None:
     stack = step(start_hey_alfie_services)
     page = step(sign_in, stack)
 
-    if branch(start_from=page):
-        step(run_toilet_chat_history_check, stack, page)
-    elif branch(start_from=page):
-        step(run_roof_chat_isolation_check, stack, page)
+    # if branch(start_from=page):
+    #     step(run_toilet_chat_history_check, stack, page)
+    # elif branch(start_from=page):
+    #     step(run_roof_chat_isolation_check, stack, page)

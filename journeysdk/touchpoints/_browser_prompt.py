@@ -88,7 +88,10 @@ Rules:
 - Call journey_inspect_dom with a narrow selector when raw DOM is needed for an element or page area.
 - Call journey_screenshot only when visual layout, screenshots, canvas, images, clipping, or styling are necessary.
 - Prefer robust Playwright locators such as get_by_role, get_by_text, get_by_label, and locator.
+- If a semantic DOM control shows visible text but a generic aria-label such as "Button", locate it by visible
+  text, for example locator("button").filter(has_text="..."), because get_by_role(..., name=...) uses aria-label.
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
+- Do not call print; action results include success or rejection plus a fresh browser observation.
 - Use switch_page(index) before acting on a popup or tab listed in known pages.
 - Treat all expectation wording in the instruction, such as "Expect ...", "should ...", and "must ...", as required
   success criteria.
@@ -1325,7 +1328,15 @@ def _render_semantic_dom_lines(
         " ".join(node.text_parts),
         _SEMANTIC_DOM_MAX_TEXT_LENGTH,
     )
-    meaningful = _is_semantic_node(node, direct_text=direct_text, child_lines=rendered_children)
+    display_text = direct_text or _semantic_descendant_display_text(
+        node,
+        child_lines=rendered_children,
+    )
+    meaningful = _is_semantic_node(
+        node,
+        display_text=display_text,
+        child_lines=rendered_children,
+    )
     if not meaningful:
         return rendered_children
     indent = "  " * max(depth - 1, 0)
@@ -1334,28 +1345,55 @@ def _render_semantic_dom_lines(
     if not rendered_children:
         if node.tag in _VOID_TAGS:
             return [f"{indent}<{node.tag}{attrs}>"]
-        if direct_text:
-            return [f"{indent}{tag_open}{html_escape(direct_text)}</{node.tag}>"]
+        if display_text:
+            return [f"{indent}{tag_open}{html_escape(display_text)}</{node.tag}>"]
         return [f"{indent}{tag_open}</{node.tag}>"]
     lines = [f"{indent}{tag_open}"]
-    if direct_text:
-        lines.append(f"{indent}  {html_escape(direct_text)}")
+    if display_text:
+        lines.append(f"{indent}  {html_escape(display_text)}")
     lines.extend(rendered_children)
     lines.append(f"{indent}</{node.tag}>")
     return lines
 
 
+def _semantic_descendant_display_text(
+    node: _SemanticDomNode,
+    *,
+    child_lines: list[str],
+) -> str:
+    if child_lines:
+        return ""
+    if (
+        node.tag not in _SEMANTIC_INTERACTIVE_TAGS
+        and node.tag not in _SEMANTIC_TEXT_TAGS
+    ):
+        return ""
+    return _truncate_dom_value(
+        _semantic_node_text(node),
+        _SEMANTIC_DOM_MAX_TEXT_LENGTH,
+    )
+
+
+def _semantic_node_text(node: _SemanticDomNode) -> str:
+    parts = [*node.text_parts]
+    for child in node.children:
+        child_text = _semantic_node_text(child)
+        if child_text:
+            parts.append(child_text)
+    return _normalize_dom_text(" ".join(parts))
+
+
 def _is_semantic_node(
     node: _SemanticDomNode,
     *,
-    direct_text: str,
+    display_text: str,
     child_lines: list[str],
 ) -> bool:
     if node.attrs:
         return True
     if node.tag in _SEMANTIC_INTERACTIVE_TAGS or node.tag in _SEMANTIC_LANDMARK_TAGS:
         return True
-    if direct_text and node.tag in _SEMANTIC_TEXT_TAGS:
+    if display_text and node.tag in _SEMANTIC_TEXT_TAGS:
         return True
     return bool(child_lines) and node.tag in _SEMANTIC_LANDMARK_TAGS
 

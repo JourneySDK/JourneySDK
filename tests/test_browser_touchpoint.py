@@ -956,9 +956,13 @@ def test_semantic_dom_snapshot_keeps_actionable_dom_and_drops_noise():
           <body>
             <main id="app" class="Layout_shell__abc123 cl-root">
               <button id="submit" data-testid="submit-button" class="cl-formButtonPrimary Button_text__rYg_f">
-                Continue
+                <span class="Button_text__rYg_f">Continue</span>
                 <svg><path d="M0 0 L1000 1000"></path></svg>
               </button>
+              <button aria-label="Button">
+                <span class="Button_text__rYg_f">Log in</span>
+              </button>
+              <a href="/login"><span>Sign in link</span></a>
               <label for="email">Email address</label>
               <input id="email" name="email" type="email" placeholder="Enter email" aria-invalid="false" />
               <a href="/help?token=secret" role="link">Help</a>
@@ -973,6 +977,8 @@ def test_semantic_dom_snapshot_keeps_actionable_dom_and_drops_noise():
     assert 'data-testid="submit-button"' in semantic_dom
     assert 'class="cl-formButtonPrimary"' in semantic_dom
     assert ">Continue<" in semantic_dom
+    assert '<button aria-label="Button">Log in</button>' in semantic_dom
+    assert '<a href="/login">Sign in link</a>' in semantic_dom
     assert 'for="email"' in semantic_dom
     assert 'name="email"' in semantic_dom
     assert 'placeholder="Enter email"' in semantic_dom
