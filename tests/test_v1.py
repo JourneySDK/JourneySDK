@@ -1643,6 +1643,34 @@ def test_execute_returned_step_exit_objects_defer_during_develop_step_pause(tmp_
     assert events[-1] == "cleanup:None"
 
 
+def test_execute_returned_case_exit_objects_defer_during_develop_step_pause(tmp_path):
+    events: list[str] = []
+    state_file = tmp_path / "pause.state"
+
+    def publish():
+        events.append("publish")
+        return _CaseExitValue(events, "case_cleanup")
+
+    def journey():
+        journey_sdk.step(publish)
+
+    plan = journey_sdk.compile_journey(journey)
+
+    paused = journey_executor._execute_plan(
+        journey,
+        plan=plan,
+        develop_step="publish",
+        state=state_file,
+    )
+
+    assert isinstance(paused, journey_executor._PausedExecution)
+    assert events == ["publish"]
+    paused.close_pending_exits()
+    assert events == ["publish", "case_cleanup:case_exit_None"]
+    paused.close_pending_exits()
+    assert events == ["publish", "case_cleanup:case_exit_None"]
+
+
 def test_execute_step_lifecycle_reaches_post_exit_before_graceful_interrupt(tmp_path):
     events: list[str] = []
     state_file = tmp_path / "lifecycle.state"

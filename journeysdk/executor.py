@@ -266,6 +266,7 @@ def _dedupe_step_exit_objects(
 class _PausedExecution:
     paused_step: PausedStepState
     _pending_exit_objects: tuple[_StepExitObject, ...] = ()
+    _pending_case_exit_objects: tuple[_CaseExitObject, ...] = ()
     _pending_exits_closed: bool = field(default=False, init=False, repr=False)
 
     def close_pending_exits(self) -> None:
@@ -273,14 +274,29 @@ class _PausedExecution:
             return
         self._pending_exits_closed = True
 
-        failures: list[BaseException] = []
+        step_failures: list[BaseException] = []
         for value in reversed(self._pending_exit_objects):
             try:
                 value.__exit__(None, None, None)
             except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
-                failures.append(cleanup_exc)
-        if failures:
-            raise RuntimeError(_cleanup_failure_message(failures))
+                step_failures.append(cleanup_exc)
+
+        case_failures: list[BaseException] = []
+        for value in reversed(self._pending_case_exit_objects):
+            try:
+                value.__case_exit__(None, None, None)
+            except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
+                case_failures.append(cleanup_exc)
+
+        if step_failures and case_failures:
+            raise RuntimeError(
+                f"{_cleanup_failure_message(step_failures)}; "
+                f"{_case_cleanup_failure_message(case_failures)}"
+            )
+        if step_failures:
+            raise RuntimeError(_cleanup_failure_message(step_failures))
+        if case_failures:
+            raise RuntimeError(_case_cleanup_failure_message(case_failures))
 
 
 @dataclass(frozen=True)
@@ -2825,6 +2841,12 @@ class _RunSession:
                 failures.append(cleanup_exc)
         return failures
 
+    def _pop_case_exit_objects(self) -> tuple[_CaseExitObject, ...]:
+        case_exit_objects = tuple(self._case_exit_objects)
+        self._case_exit_objects.clear()
+        self._case_exit_object_ids.clear()
+        return case_exit_objects
+
     def step(
         self,
         fn: StepFunction[P, R],
@@ -3955,6 +3977,7 @@ def _execute_plan(
                 return _PausedExecution(
                     pause_request.paused_step,
                     pause_request.pending_exit_objects,
+                    run_session._pop_case_exit_objects(),
                 )
             except BaseException as exc:
                 cleanup_failures = run_session._close_case_exit_objects(

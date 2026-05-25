@@ -6,59 +6,58 @@ instruction: Sign in as journeytest@heyalfie.com using password "1212" (or "1111
 instruction_sha256: 396c48189cc09db61204ed7bb155f7b84b148f96b40c7c69d40f76c506b75daf
 observation_signature: {"title":"Hey Alfie \u2014 Find Trusted Tradespeople","url":"http://localhost:3000/"}
 observation_signature_sha256: 5e58857408d0bfed065fecf9ba02ca556ad2c7b4b374854340e663c77a77eada
-run_count: 1
-updated_at: 2026-05-24T15:55:52.207020Z
+run_count: 3
+updated_at: 2026-05-25T08:43:37.619242Z
 
 ## Replay code
 ```python
-# Click the "Log in" button
-log_in_button = page.locator("button").filter(has_text="Log in")
-log_in_button.click(timeout=timeout_ms)
-
-# Wait for login form to load
+# Wait for the page to fully load
 page.wait_for_load_state('networkidle', timeout=timeout_ms)
 
-# Fill in the email address field
-email_input = page.locator("input[placeholder='Enter your email address']")
-email_input.fill("journeytest@heyalfie.com", timeout=timeout_ms)
+# Click on the "Log in" button
+page.locator('button:has-text("Log in")').click(timeout=timeout_ms)
+page.wait_for_load_state('networkidle', timeout=timeout_ms)
 
-# Fill in the password field with fallback password "1111"
-password_input = page.locator("input[type='password']")
-password_input.fill("1111", timeout=timeout_ms)
+# Fill in the email field
+page.locator('input#identifier-field').fill('journeytest@heyalfie.com', timeout=timeout_ms)
 
-# Click the "Continue" button to submit the login form
-continue_button = page.locator("button").filter(has_text="Continue")
-continue_button.click(timeout=timeout_ms)
+# Fill in the password field with fallback password
+page.locator('input#password-field').fill('1111', timeout=timeout_ms)
 
-# Wait for dashboard to load
+# Click the Continue button
+page.locator('button.cl-formButtonPrimary').click(timeout=timeout_ms)
+
+# Wait for the page to load after sign-in
 page.wait_for_load_state('networkidle', timeout=timeout_ms)
 ```
 
 ## Success check code
 ```python
-# Verify sign-in was successful by checking for dashboard elements
-assert page.locator("text=Start a new chat").is_visible(timeout=timeout_ms), "Dashboard not visible after sign-in"
-assert page.locator("text=Home").is_visible(timeout=timeout_ms), "Home navigation not visible"
-assert page.locator("text=Job bookings").is_visible(timeout=timeout_ms), "Job bookings not visible"
+# Verify user is authenticated and on dashboard
+assert 'Hey Alfie' in page.title(), f"Title check failed: {page.title()}"
+assert 'localhost:3000' in page.url, f"URL check failed: {page.url}"
+
+# Verify dashboard content is visible
+page.wait_for_selector('text=Start a new chat', timeout=timeout_ms)
+page.wait_for_selector('text=Home', timeout=timeout_ms)
+page.wait_for_selector('text=Explore all services', timeout=timeout_ms)
+page.wait_for_selector('text=RECENT CHATS', timeout=timeout_ms)
 
 # Verify no error messages are displayed
-error_locators = [
-    page.locator("text=Invalid credentials"),
-    page.locator("text=Error"),
-    page.locator(".error"),
-    page.locator("[role='alert']")
-]
-for error_loc in error_locators:
-    assert not error_loc.is_visible(timeout=1000), "Error message detected on page"
+error_selectors = ['text=error', 'text=Error', 'text=failed', 'text=Failed']
+for selector in error_selectors:
+    count = page.locator(selector).count()
+    assert count == 0, f"Error message found: {selector}"
 ```
 
 ## Notes
-- Initial password "1212" failed; fallback password "1111" succeeded
-- Login form uses email placeholder and password input type selectors
-- Dashboard displays user greeting "Hey Journey" and navigation menu confirming successful authentication
-- No errors encountered after using correct password
+- Primary password "1212" failed; fallback password "1111" succeeded
+- Use `input#identifier-field` for email and `input#password-field` for password
+- Use `button.cl-formButtonPrimary` for the Continue/submit button
+- Dashboard loads with "Hey Journey," greeting, navigation menu, RECENT CHATS section, and service cards
+- All success criteria verified: authenticated user, dashboard elements present, no errors
 
 ## Final output
 ```text
-Sign-in successful! User journeytest@heyalfie.com has been logged in using password "1111". The dashboard is now displayed with no errors.
+Sign-in successful. User authenticated as journeytest@heyalfie.com. Dashboard loaded with no errors. Page displays 'Hey Journey,' greeting and all expected dashboard elements including navigation menu, recent chats section, service cards, and to-do list.
 ```
