@@ -63,10 +63,13 @@ unknown value themselves. The public typing contract is covered by
 ## Touchpoint Lifecycle Protocols
 
 Official touchpoints that open live resources should follow the Journey rehydration
-protocol and step lifecycle documented in the README. Lifecycle-aware
-touchpoint tests should cover successful cleanup of returned handles, nested returned
-handles, cleanup failure, the outside-step guard for resource helpers, explicit
-cleanup for non-returned live resources, and rehydration of returned values.
+protocol plus the step and case lifecycle documented in the README. Use
+`__exit__` for resources that must close after one step, and `__case_exit__`
+for resources that must stay live across multiple steps in one case.
+Lifecycle-aware touchpoint tests should cover successful cleanup of returned
+handles, nested returned handles, cleanup failure, the outside-step guard for
+resource helpers, explicit cleanup for non-returned live resources, case-exit
+cleanup where applicable, and rehydration of returned values.
 
 ## Prompt Memory Pattern
 

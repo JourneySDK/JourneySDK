@@ -237,6 +237,11 @@ are rejected. Keep Docker-backed journey steps procedure-sized: tiny do/assert f
 more boundaries, and only explicit `branch(start_from=...)` or positive `retry=...` boundaries should need Docker
 snapshot storage.
 
+`DockerComposeStack` also implements Journey's case-exit lifecycle. The Compose
+project stays live across steps in the same case, then Journey runs Compose
+`down --remove-orphans` when the case exits successfully or unsuccessfully.
+Volumes are preserved by default.
+
 ## Capture and Resume a Browser Session
 
 Read `docs/browser_resume_journey/browser_resume_journey.py`.

@@ -329,6 +329,16 @@ is the canonical example because it implements both protocols: `__exit__`
 closes the live browser objects at step exit, while `__store__` / `__restore__`
 save enough browser state for a later step to reopen the page explicitly.
 
+Some resources need to stay live across multiple steps in one case. Those
+handles should implement `__case_exit__(exc_type, exc, traceback)` instead of
+`__exit__`. Journey discovers returned `__case_exit__` handles using the same
+direct-result, tuple, list, and dict traversal rules, then closes them when the
+case exits successfully or unsuccessfully. On successful case exit,
+`__case_exit__` receives `(None, None, None)`; on failure or interruption it
+receives the active exception triple. `DockerComposeStack` uses this case
+lifecycle so a Compose app can be started in one step, used by later browser or
+API steps, and still be stopped at case exit.
+
 Official touchpoints are ordinary Python helpers that return step callables or serializable helper values. For example, the
 webhook touchpoint can acquire a Journey Cloud-hosted endpoint before the app under test sends to it:
 
@@ -362,7 +372,9 @@ message = step(
 ```
 
 The Docker touchpoint can start a local Compose app as a step value and pair a step anchor with rollback of
-Docker-managed volume contents. `DockerComposeStack` already implements the rehydration protocol:
+Docker-managed volume contents. `DockerComposeStack` implements the rehydration
+protocol and the case-exit lifecycle, so Journey stops the Compose project at
+case exit without removing volumes:
 
 ```python
 from journeysdk import branch, step

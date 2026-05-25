@@ -16,11 +16,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from types import TracebackType
 from typing import Any
 from uuid import uuid4
 
 from journeysdk.logger import JourneyLogLevel, PrettyLine, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
+from journeysdk.session import _register_case_exit_object
 
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
 _CURRENT_SNAPSHOT_FORMAT = 4
@@ -245,6 +247,22 @@ class DockerComposeStack:
             owner="DockerComposeStack.wait_for_log",
         )
 
+    def __case_exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Stop Compose containers owned by this case while preserving volumes."""
+
+        if getattr(self, "_case_exit_closed", False):
+            return
+        object.__setattr__(self, "_case_exit_closed", True)
+        _down_docker_stack(
+            self,
+            owner="DockerComposeStack.__case_exit__",
+        )
+
     def __store__(self, context: JourneyStoreContext) -> object:
         snapshot_name = _snapshot_name_for_context(context)
         _store_docker_snapshot(
@@ -366,6 +384,7 @@ def run_docker(
         wait_timeout=normalized_wait_timeout,
         log_matchers=normalized_log_matchers,
     )
+    _register_case_exit_object("run_docker", stack)
     log_since = _docker_logs_since_timestamp()
     try:
         _run_cli(
@@ -425,6 +444,77 @@ def run_docker(
         **duration,
     )
     return stack
+
+
+def _down_docker_stack(
+    stack: DockerComposeStack,
+    *,
+    owner: str,
+) -> None:
+    down_started_at = time.monotonic()
+    validated_stack = _require_stack(stack=stack, owner=owner)
+    pretty_detail = _pretty_kv(
+        [
+            ("project", validated_stack.project_name),
+            ("compose", validated_stack.resolved_compose_file),
+        ]
+    )
+    _LOGGER.info(
+        "compose_down_start",
+        "stopping Docker Compose stack",
+        pretty=_docker_row(
+            _phase_pretty_text(
+                "stopping Docker Compose stack",
+                detail=pretty_detail,
+            )
+        ),
+        compose_file=validated_stack.compose_file,
+        resolved_compose_file=validated_stack.resolved_compose_file,
+        project=validated_stack.project_name,
+    )
+    try:
+        _run_cli(
+            _compose_command(
+                compose_file=Path(validated_stack.resolved_compose_file),
+                project_name=validated_stack.project_name,
+                subcommand=["down", "--remove-orphans"],
+            ),
+            owner=owner,
+        )
+    except BaseException as exc:
+        _LOGGER.error(
+            "compose_down_failure",
+            "Docker Compose stack cleanup failed",
+            pretty=_docker_row(
+                _phase_pretty_text(
+                    "Docker Compose stack cleanup failed",
+                    duration=_duration_fields(down_started_at)["duration"],
+                    detail=pretty_detail,
+                )
+            ),
+            compose_file=validated_stack.compose_file,
+            resolved_compose_file=validated_stack.resolved_compose_file,
+            project=validated_stack.project_name,
+            error=str(exc),
+            **_duration_fields(down_started_at),
+        )
+        raise
+    duration = _duration_fields(down_started_at)
+    _LOGGER.info(
+        "compose_down_success",
+        "Docker Compose stack stopped",
+        pretty=_docker_row(
+            _phase_pretty_text(
+                "Docker Compose stack stopped",
+                duration=duration["duration"],
+                detail=pretty_detail,
+            )
+        ),
+        compose_file=validated_stack.compose_file,
+        resolved_compose_file=validated_stack.resolved_compose_file,
+        project=validated_stack.project_name,
+        **duration,
+    )
 
 
 def store_docker(

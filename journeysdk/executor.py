@@ -103,6 +103,16 @@ class _StepExitObject(Protocol):
         ...
 
 
+class _CaseExitObject(Protocol):
+    def __case_exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> object:
+        ...
+
+
 _STEP_LIFECYCLE_INITIALIZATION = "initialization"
 _STEP_LIFECYCLE_EXECUTION = "execution"
 _STEP_LIFECYCLE_STORAGE = "storage"
@@ -188,17 +198,31 @@ def _raise_if_interrupted_after_step() -> None:
 
 
 def _step_exit_objects_from_value(value: Any) -> list[_StepExitObject]:
-    objects: list[_StepExitObject] = []
+    return cast(
+        list[_StepExitObject],
+        _lifecycle_objects_from_value(value, method_name="__exit__"),
+    )
+
+
+def _case_exit_objects_from_value(value: Any) -> list[_CaseExitObject]:
+    return cast(
+        list[_CaseExitObject],
+        _lifecycle_objects_from_value(value, method_name="__case_exit__"),
+    )
+
+
+def _lifecycle_objects_from_value(value: Any, *, method_name: str) -> list[Any]:
+    objects: list[Any] = []
     seen_objects: set[int] = set()
     seen_containers: set[int] = set()
 
     def visit(item: Any) -> None:
-        exit_method = getattr(item, "__exit__", None)
+        exit_method = getattr(item, method_name, None)
         if callable(exit_method):
             identity = id(item)
             if identity not in seen_objects:
                 seen_objects.add(identity)
-                objects.append(cast(_StepExitObject, item))
+                objects.append(item)
             return
 
         if type(item) is tuple or type(item) is list:
@@ -1041,11 +1065,34 @@ def _cleanup_failure_message(failures: list[BaseException]) -> str:
     return f"{len(failures)} step-exit cleanup objects failed: {joined}"
 
 
-def _add_cleanup_failure_notes(exc: BaseException, failures: list[BaseException]) -> None:
+def _case_cleanup_failure_message(failures: list[BaseException]) -> str:
+    if len(failures) == 1:
+        failure = failures[0]
+        return (
+            "Case-exit cleanup failed: "
+            f"{type(failure).__name__}: {failure}"
+        )
+    joined = "; ".join(
+        f"{type(failure).__name__}: {failure}"
+        for failure in failures
+    )
+    return f"{len(failures)} case-exit cleanup objects failed: {joined}"
+
+
+def _add_cleanup_failure_notes(
+    exc: BaseException,
+    failures: list[BaseException],
+    *,
+    case_exit: bool = False,
+) -> None:
     if not failures:
         return
     add_note = getattr(exc, "add_note", None)
-    message = _cleanup_failure_message(failures)
+    message = (
+        _case_cleanup_failure_message(failures)
+        if case_exit
+        else _cleanup_failure_message(failures)
+    )
     if callable(add_note):
         add_note(message)
 
@@ -1634,6 +1681,8 @@ class _RunSession:
         self._browser_recording_controller = browser_recording_controller
         self._browser_recording_context_counts: dict[tuple[str, int], int] = {}
         self._active_step_lifecycle: _StepLifecycle | None = None
+        self._case_exit_objects: list[_CaseExitObject] = []
+        self._case_exit_object_ids: set[int] = set()
         self._step_key_by_id = _case_rehydration_maps(case_plan)
         self._step_id_by_key = {
             binding_key: node_id
@@ -2140,6 +2189,7 @@ class _RunSession:
 
     def _remember_step_result(self, node: StepNode, result: Any) -> None:
         self._runtime_step_result_ids.setdefault(id(result), set()).add(node.node_id)
+        self._register_case_exit_objects_from_value(result)
 
     def step_anchor_for_value(self, value: object) -> _RuntimeStepAnchor:
         node_ids = self._runtime_step_result_ids.get(id(value))
@@ -2561,6 +2611,18 @@ class _RunSession:
             )
         lifecycle._register_exit_object(value)
 
+    def _register_case_exit_object(self, value: _CaseExitObject) -> None:
+        lifecycle = self._active_step_lifecycle
+        if lifecycle is None or lifecycle.phase != _STEP_LIFECYCLE_EXECUTION:
+            raise InvalidBranchUsageError(
+                "Case-exit cleanup objects can only be registered while a step is running.",
+                hint=(
+                    "Call lifecycle-aware touchpoints from inside a function passed to "
+                    "step(...), not during planning, module import, or between steps."
+                ),
+            )
+        lifecycle._register_case_exit_object(value)
+
     def _allocate_browser_recording(self) -> _BrowserRecordingContext | None:
         controller = self._browser_recording_controller
         if controller is None or not controller.enabled:
@@ -2724,6 +2786,41 @@ class _RunSession:
         for value in reversed(exit_objects):
             try:
                 value.__exit__(exc_type, exc, traceback)
+            except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
+                failures.append(cleanup_exc)
+        return failures
+
+    def _register_case_exit_objects_from_value(self, value: Any) -> None:
+        self._register_case_exit_objects(tuple(_case_exit_objects_from_value(value)))
+
+    def _register_case_exit_objects(
+        self,
+        case_exit_objects: tuple[_CaseExitObject, ...],
+    ) -> None:
+        for case_exit_object in case_exit_objects:
+            identity = id(case_exit_object)
+            if identity in self._case_exit_object_ids:
+                continue
+            self._case_exit_object_ids.add(identity)
+            self._case_exit_objects.append(case_exit_object)
+
+    def _close_case_exit_objects(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc: BaseException | None = None,
+        traceback: TracebackType | None = None,
+        *,
+        case_exit_objects: tuple[_CaseExitObject, ...] | None = None,
+    ) -> list[BaseException]:
+        if case_exit_objects is None:
+            case_exit_objects = tuple(self._case_exit_objects)
+            self._case_exit_objects.clear()
+            self._case_exit_object_ids.clear()
+
+        failures: list[BaseException] = []
+        for value in reversed(case_exit_objects):
+            try:
+                value.__case_exit__(exc_type, exc, traceback)
             except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
                 failures.append(cleanup_exc)
         return failures
@@ -2935,6 +3032,7 @@ class _StepLifecycle:
     attempt: int = 0
     started_at: float = 0.0
     registered_exit_objects: list[_StepExitObject] = field(default_factory=list)
+    registered_case_exit_objects: list[_CaseExitObject] = field(default_factory=list)
     exit_objects: tuple[_StepExitObject, ...] = ()
     _success_committed: bool = False
 
@@ -3002,6 +3100,12 @@ class _StepLifecycle:
                 exc.__traceback__,
             )
             _add_cleanup_failure_notes(exc, cleanup_failures)
+            case_cleanup_failures = self._close_registered_case_exit_objects(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, case_cleanup_failures, case_exit=True)
             self.session._clear_step_lifecycle(self)
             self.session._observe_step_interrupted(
                 self.node,
@@ -3019,6 +3123,12 @@ class _StepLifecycle:
                 exc.__traceback__,
             )
             _add_cleanup_failure_notes(exc, cleanup_failures)
+            case_cleanup_failures = self._close_registered_case_exit_objects(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, case_cleanup_failures, case_exit=True)
             self.session._clear_step_lifecycle(self)
             self.session._handle_step_exception(
                 self.node,
@@ -3035,6 +3145,12 @@ class _StepLifecycle:
                 exc.__traceback__,
             )
             _add_cleanup_failure_notes(exc, cleanup_failures)
+            case_cleanup_failures = self._close_registered_case_exit_objects(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, case_cleanup_failures, case_exit=True)
             self.session._clear_step_lifecycle(self)
             raise
         raise AssertionError("unreachable")
@@ -3042,6 +3158,33 @@ class _StepLifecycle:
     def _register_exit_object(self, value: _StepExitObject) -> None:
         if all(id(value) != id(existing) for existing in self.registered_exit_objects):
             self.registered_exit_objects.append(value)
+
+    def _register_case_exit_object(self, value: _CaseExitObject) -> None:
+        if all(
+            id(value) != id(existing)
+            for existing in self.registered_case_exit_objects
+        ):
+            self.registered_case_exit_objects.append(value)
+
+    def _close_registered_case_exit_objects(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc: BaseException | None = None,
+        traceback: TracebackType | None = None,
+    ) -> list[BaseException]:
+        case_exit_objects = tuple(self.registered_case_exit_objects)
+        self.registered_case_exit_objects.clear()
+        return self.session._close_case_exit_objects(
+            exc_type,
+            exc,
+            traceback,
+            case_exit_objects=case_exit_objects,
+        )
+
+    def _promote_registered_case_exit_objects(self) -> None:
+        case_exit_objects = tuple(self.registered_case_exit_objects)
+        self.registered_case_exit_objects.clear()
+        self.session._register_case_exit_objects(case_exit_objects)
 
     def _exit_objects_for_output(self, output: Any) -> tuple[_StepExitObject, ...]:
         return _dedupe_step_exit_objects(
@@ -3062,6 +3205,12 @@ class _StepLifecycle:
                 exc.__traceback__,
             )
             _add_cleanup_failure_notes(exc, cleanup_failures)
+            case_cleanup_failures = self._close_registered_case_exit_objects(
+                type(exc),
+                exc,
+                exc.__traceback__,
+            )
+            _add_cleanup_failure_notes(exc, case_cleanup_failures, case_exit=True)
             raise
         self.exit_objects = exit_objects
         return binding
@@ -3110,6 +3259,16 @@ class _StepLifecycle:
         if cleanup_failures:
             self.session._discard_step_result(self.node)
             cleanup_error = RuntimeError(_cleanup_failure_message(cleanup_failures))
+            case_cleanup_failures = self._close_registered_case_exit_objects(
+                type(cleanup_error),
+                cleanup_error,
+                cleanup_error.__traceback__,
+            )
+            _add_cleanup_failure_notes(
+                cleanup_error,
+                case_cleanup_failures,
+                case_exit=True,
+            )
             self.session._handle_step_exception(
                 self.node,
                 node_index=self.node_index,
@@ -3120,6 +3279,7 @@ class _StepLifecycle:
 
     def _commit_success(self, output: Any, binding: StepBindingState) -> bool:
         self._success_committed = True
+        self._promote_registered_case_exit_objects()
         return self.session._commit_step_success(
             self.node,
             node_index=self.node_index,
@@ -3760,39 +3920,54 @@ def _execute_plan(
             case_started_at = time.perf_counter()
             stopped_label: str | None = None
 
-            while True:
-                run_session.begin_attempt()
-                try:
-                    with use_session(run_session):
-                        journey_fn()
-                except _RetryRequested as retry_request:
-                    if retry_request.sleep_for > 0:
-                        time.sleep(retry_request.sleep_for)
-                    continue
-                except _PauseRequested as pause_request:
-                    return _PausedExecution(
-                        pause_request.paused_step,
-                        pause_request.pending_exit_objects,
-                    )
-                except _StopCase:
-                    stopped_label = step
-                if (
-                    run_session.cursor < len(selected_case.case_plan.nodes)
-                    and run_session.stop_after_index is None
-                ):
-                    raise InvalidBranchUsageError(
-                        "The journey finished before it reached every step in the compiled plan.",
-                        hint="Check for conditional logic that exits early or skips step() calls during execution.",
-                    )
-                if (
-                    run_session.stop_after_index is not None
-                    and run_session.cursor <= run_session.stop_after_index
-                ):
-                    raise InvalidBranchUsageError(
-                        "The journey finished before it reached the targeted step label.",
-                        hint="Check that the step label exists on the path you selected.",
-                    )
-                break
+            try:
+                while True:
+                    run_session.begin_attempt()
+                    try:
+                        with use_session(run_session):
+                            journey_fn()
+                    except _RetryRequested as retry_request:
+                        if retry_request.sleep_for > 0:
+                            time.sleep(retry_request.sleep_for)
+                        continue
+                    except _PauseRequested:
+                        raise
+                    except _StopCase:
+                        stopped_label = step
+                    if (
+                        run_session.cursor < len(selected_case.case_plan.nodes)
+                        and run_session.stop_after_index is None
+                    ):
+                        raise InvalidBranchUsageError(
+                            "The journey finished before it reached every step in the compiled plan.",
+                            hint="Check for conditional logic that exits early or skips step() calls during execution.",
+                        )
+                    if (
+                        run_session.stop_after_index is not None
+                        and run_session.cursor <= run_session.stop_after_index
+                    ):
+                        raise InvalidBranchUsageError(
+                            "The journey finished before it reached the targeted step label.",
+                            hint="Check that the step label exists on the path you selected.",
+                        )
+                    break
+            except _PauseRequested as pause_request:
+                return _PausedExecution(
+                    pause_request.paused_step,
+                    pause_request.pending_exit_objects,
+                )
+            except BaseException as exc:
+                cleanup_failures = run_session._close_case_exit_objects(
+                    type(exc),
+                    exc,
+                    exc.__traceback__,
+                )
+                _add_cleanup_failure_notes(exc, cleanup_failures, case_exit=True)
+                raise
+
+            cleanup_failures = run_session._close_case_exit_objects()
+            if cleanup_failures:
+                raise RuntimeError(_case_cleanup_failure_message(cleanup_failures))
 
             report = CaseExecutionReport(
                 case_id=selected_case.case_plan.case_id,

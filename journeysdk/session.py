@@ -52,6 +52,26 @@ def _register_step_exit_object(owner: str, value: Any) -> None:
     register(value)
 
 
+def _register_case_exit_object(owner: str, value: Any) -> bool:
+    """Register a live touchpoint resource for case-exit cleanup, if in a run."""
+
+    session = get_session()
+    if session is None:
+        return False
+    _require_executing_step(owner)
+    register = getattr(session, "_register_case_exit_object", None)
+    if not callable(register):
+        raise InvalidBranchUsageError(
+            f"{owner}(...) could not register its case-exit cleanup.",
+            hint=(
+                "Call lifecycle-aware touchpoints from inside a function passed to "
+                "step(...), not during planning, module import, or between steps."
+            ),
+        )
+    register(value)
+    return True
+
+
 def _allocate_browser_recording(owner: str) -> Any | None:
     """Allocate one browser recording slot for the active step, when enabled."""
 

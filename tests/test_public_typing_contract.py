@@ -174,7 +174,13 @@ def _check_class_signature(path: Path, node: ast.ClassDef) -> None:
             target = item.target.id if isinstance(item.target, ast.Name) else node.name
             _check_annotation(item.annotation, path=path, owner=f"{node.name}.{target}")
         elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if item.name.startswith("_") and item.name not in {"__call__", "__exit__", "__restore__", "__store__"}:
+            if item.name.startswith("_") and item.name not in {
+                "__call__",
+                "__case_exit__",
+                "__exit__",
+                "__restore__",
+                "__store__",
+            }:
                 continue
             _check_function_signature(path, item)
 

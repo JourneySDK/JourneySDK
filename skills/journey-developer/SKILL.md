@@ -25,7 +25,7 @@ for positive retry or branch-start behavior.
 
 - `journeysdk.touchpoints.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
 - `journeysdk.touchpoints.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
-- `journeysdk.touchpoints.docker`: start local Docker Compose apps and pair step anchors with snapshots for supported Docker-managed volume state.
+- `journeysdk.touchpoints.docker`: start local Docker Compose apps, keep them live across steps with `__case_exit__`, and pair step anchors with snapshots for supported Docker-managed volume state.
 - `journeysdk.touchpoints.browser`: open browser pages and return resumable `JourneyBrowserPage` values that later steps can reopen.
 
 Prompt-capable official touchpoints use prompt memory and optional structured output. Omit `memory` to use a generated
@@ -78,6 +78,12 @@ only when `retry` is explicitly greater than `0`; `retry_from=` or `retry_delay=
 boundary. Use `branch(start_from=step_result)` for branch replay anchors and branch-anchor snapshots. Keep values that
 cross explicit replay boundaries pickle-serializable or implement the Journey rehydration protocol with top-level
 classes and explicit `__store__` / `__restore__` methods.
+
+For touchpoint lifetimes, use `__exit__` when a returned resource must close
+immediately after one step. Use `__case_exit__` when a returned resource must
+stay live for later steps in the same case, such as a Docker Compose stack.
+Journey discovers both protocols from direct step results and nested tuple,
+list, or dict values.
 
 ## Run Journeys
 

@@ -517,6 +517,37 @@ def test_run_docker_executes_compose_config_and_up(
     assert "Docker Compose stack started" in log_output
 
 
+def test_docker_stack_case_exit_stops_compose_without_removing_volumes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    stack.__case_exit__(None, None, None)
+    stack.__case_exit__(None, None, None)
+
+    down_commands = [
+        command
+        for owner, command in runtime.commands
+        if owner == "DockerComposeStack.__case_exit__" and "down" in command
+    ]
+    assert down_commands == [
+        [
+            "docker",
+            "compose",
+            "-f",
+            stack.resolved_compose_file,
+            "-p",
+            stack.project_name,
+            "down",
+            "--remove-orphans",
+        ]
+    ]
+    assert "--volumes" not in down_commands[0]
+
+
 def test_run_docker_waits_for_configured_raw_container_log(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -871,6 +902,60 @@ def test_run_docker_accepts_wait_failure_when_one_shot_service_exits_zero(
     )
 
     assert stack.project_name == "demo-project"
+
+
+def test_run_docker_cleans_up_partial_stack_after_startup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime(
+        live_inspect_rows=[
+            _inspect_row(
+                container_id="web-container-1",
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+                state="exited",
+                exit_code=1,
+                health=None,
+            )
+        ],
+    )
+
+    def run_cli(
+        args: object,
+        *,
+        owner: str,
+        failure_level: object | None = None,
+    ) -> str:
+        output = runtime(args, owner=owner, failure_level=failure_level)
+        if isinstance(args, list) and args[:2] == ["docker", "compose"] and "up" in args:
+            raise RuntimeError("container demo-web-1 exited (1)")
+        return output
+
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", run_cli)
+
+    def start_docker_stack() -> journey_docker.DockerComposeStack:
+        return journey_docker.run_docker(
+            compose_file=compose_file,
+            project_name="demo-project",
+            wait_timeout=15,
+        )
+
+    def journey() -> None:
+        journey_sdk.step(start_docker_stack)
+
+    with pytest.raises(journey_sdk.CallableExecutionError, match="exited"):
+        journey_sdk.execute(journey, no_state=True)
+
+    assert any(
+        owner == "DockerComposeStack.__case_exit__"
+        and command[-2:] == ["down", "--remove-orphans"]
+        and "--volumes" not in command
+        for owner, command in runtime.commands
+    )
 
 
 def test_run_docker_log_wait_uses_container_start_after_accepted_wait_failure(
@@ -2132,6 +2217,12 @@ def test_execute_step_started_branches_restore_docker_snapshot(
         for owner, command in runtime.commands
         if owner == "restore_docker" and "down" in command
     ) == 1
+    assert sum(
+        1
+        for owner, command in runtime.commands
+        if owner == "DockerComposeStack.__case_exit__"
+        and command[-2:] == ["down", "--remove-orphans"]
+    ) == 2
 
 
 def test_execute_no_state_stores_docker_snapshot_under_journey_dot_dir(

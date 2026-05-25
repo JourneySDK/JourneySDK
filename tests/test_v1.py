@@ -137,6 +137,56 @@ class _StepExitValue:
         return True
 
 
+class _CaseExitValue:
+    restore_events: list[str] = []
+
+    def __init__(
+        self,
+        events: list[str],
+        name: str,
+        *,
+        fail_message: str | None = None,
+    ) -> None:
+        self._events = events
+        self._name = name
+        self._fail_message = fail_message
+        self.closed = False
+
+    def __store__(self, context) -> object:
+        return {
+            "name": self._name,
+            "fail_message": self._fail_message,
+        }
+
+    @classmethod
+    def __restore__(cls, payload: object, context) -> "_CaseExitValue":
+        if not isinstance(payload, dict):
+            raise TypeError("payload must be a dict")
+        name = str(payload["name"])
+        cls.restore_events.append(f"{name}:restore_{context.boundary_kind}")
+        fail_message = payload.get("fail_message")
+        return cls(
+            cls.restore_events,
+            name,
+            fail_message=fail_message if isinstance(fail_message, str) else None,
+        )
+
+    def __case_exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        if self.closed:
+            return True
+        suffix = exc_type.__name__ if exc_type is not None else "None"
+        self._events.append(f"{self._name}:case_exit_{suffix}")
+        self.closed = True
+        if self._fail_message is not None:
+            raise RuntimeError(self._fail_message)
+        return True
+
+
 def _without_closed_store_events(events: list[str]) -> list[str]:
     return [event for event in events if not event.endswith(":store_closed")]
 
@@ -1377,6 +1427,142 @@ def test_execute_nested_returned_step_exit_objects_run_lifo_and_deduplicated():
     assert events == [
         "cleanup_second:None",
         "cleanup_first:None",
+    ]
+
+
+def test_execute_returned_case_exit_objects_run_after_case_success():
+    events: list[str] = []
+
+    def allocate():
+        resource = _CaseExitValue(events, "case_cleanup")
+        events.append("allocate")
+        return {
+            "resource": resource,
+            "nested": [resource],
+        }
+
+    def use_resource(payload):
+        events.append(f"use_{payload['resource'].closed}")
+        return True
+
+    def journey():
+        resource = journey_sdk.step(allocate)
+        journey_sdk.step(use_resource, resource)
+
+    journey_sdk.execute(journey, no_state=True)
+
+    assert events == [
+        "allocate",
+        "use_False",
+        "case_cleanup:case_exit_None",
+    ]
+
+
+def test_execute_returned_case_exit_objects_run_after_step_failure():
+    events: list[str] = []
+
+    def allocate():
+        events.append("allocate")
+        return _CaseExitValue(events, "case_cleanup")
+
+    def fail(_resource):
+        events.append("fail")
+        raise RuntimeError("boom")
+
+    def journey():
+        resource = journey_sdk.step(allocate)
+        journey_sdk.step(fail, resource)
+
+    with pytest.raises(CallableExecutionError):
+        journey_sdk.execute(journey, no_state=True)
+
+    assert events == [
+        "allocate",
+        "fail",
+        "case_cleanup:case_exit_CallableExecutionError",
+    ]
+
+
+def test_execute_returned_case_exit_objects_run_after_keyboard_interrupt():
+    events: list[str] = []
+
+    def allocate():
+        events.append("allocate")
+        return _CaseExitValue(events, "case_cleanup")
+
+    def interrupt(_resource):
+        events.append("interrupt")
+        raise KeyboardInterrupt()
+
+    def journey():
+        resource = journey_sdk.step(allocate)
+        journey_sdk.step(interrupt, resource)
+
+    with pytest.raises(KeyboardInterrupt):
+        journey_sdk.execute(journey, no_state=True)
+
+    assert events == [
+        "allocate",
+        "interrupt",
+        "case_cleanup:case_exit_KeyboardInterrupt",
+    ]
+
+
+def test_execute_case_exit_cleanup_failure_fails_successful_case():
+    events: list[str] = []
+
+    def allocate():
+        return _CaseExitValue(events, "case_cleanup", fail_message="close failed")
+
+    def journey():
+        journey_sdk.step(allocate)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        journey_sdk.execute(journey, no_state=True)
+
+    assert "Case-exit cleanup failed" in str(exc_info.value)
+    assert "close failed" in str(exc_info.value)
+    assert events == ["case_cleanup:case_exit_None"]
+
+
+def test_execute_restored_case_exit_objects_run_after_replay_case(tmp_path):
+    state_file = tmp_path / "case-exit-replay.state"
+    _CaseExitValue.restore_events = []
+
+    def start_stack():
+        _CaseExitValue.restore_events.append("start")
+        return _CaseExitValue(_CaseExitValue.restore_events, "stack")
+
+    def capture_anchor(_stack):
+        _CaseExitValue.restore_events.append("anchor")
+        return "anchor"
+
+    def first_branch(_stack):
+        _CaseExitValue.restore_events.append("first")
+        return True
+
+    def second_branch(_stack):
+        _CaseExitValue.restore_events.append("second")
+        return True
+
+    def journey():
+        stack = journey_sdk.step(start_stack)
+        anchor = journey_sdk.step(capture_anchor, stack)
+        if journey_sdk.branch(start_from=anchor):
+            journey_sdk.step(first_branch, stack)
+        elif journey_sdk.branch(start_from=anchor):
+            journey_sdk.step(second_branch, stack)
+
+    journey_sdk.execute(journey, state=state_file)
+
+    assert _CaseExitValue.restore_events == [
+        "start",
+        "anchor",
+        "first",
+        "stack:case_exit_None",
+        "stack:restore_branch-anchor",
+        "second",
+        "stack:case_exit_None",
     ]
 
 
