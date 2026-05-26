@@ -1,69 +1,52 @@
 ---
 name: journey-developer
-description: Develop, execute, debug, and maintain Journey SDK workflow-as-code QA/testing journeys for long, branching, async, cross-system user flows. Use when creating or updating Python journeys that use journeysdk primitives or official journeysdk.touchpoints integrations, running Journey CLI full or targeted step executions, iterating with --develop-step and default state, or keeping journey authoring guidance aligned with SDK, CLI, examples, and docs behavior.
+description: Use Journey SDK to create, run, debug, and maintain real user journey tests. Use when application code should be verified through a Journey flow, when a Journey SDK journey uses journeysdk primitives or journeysdk.touchpoints, or when iterating quickly with journey --develop-step, --step, default state, and JSONL output.
 ---
 
 # Journey Developer
 
-## Journey SDK Context
+## When To Use Journey
 
-Journey SDK is a workflow-as-code QA toolkit for testing long, branching, async, cross-system user journeys. Use this
-skill when a Journey SDK journey tests product or business flows that touch browsers, APIs, mobile or edge devices,
-background jobs, third-party services, webhooks, email, AI or voice systems, or delayed side effects. Use the README
-glossary vocabulary when explaining behavior: step boundary, state file, saved step binding, dirty step, replay
-boundary, replay anchor, branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydration, and
-rehydratable value.
+Use Journey SDK when a change should be verified against a real user journey, not just a unit test. A journey is useful
+when the behavior crosses browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services,
+third-party systems, or delayed side effects.
 
-Do not use this skill for generic Python scripts, generic unit tests, or unrelated workflow automation that is not authored as a Journey SDK journey.
+Journey is also useful for fast partial verification: run only the case that reaches one step, or pause after one
+target step and retry it repeatedly while editing code.
 
-## Official Touchpoints
+Do not use Journey SDK for generic Python scripts, ordinary unit tests, or workflow automation that is not authored as
+a Journey SDK journey.
 
-Official touchpoints live under `journeysdk.touchpoints`. They are ordinary Python helpers that return step callables or
-serializable helper values, so use them with `step(...)` and keep planning side-effect free. Acquire live or hosted
-resources while steps execute, and make returned values serializable or rehydratable when they cross replay boundaries
-for positive retry or branch-start behavior.
+## Agent Workflow
 
-- `journeysdk.touchpoints.webhook`: acquire a Journey Cloud-hosted endpoint, then wait for received webhook requests.
-- `journeysdk.touchpoints.email`: get a Journey Cloud-hosted inbox, send email, and wait for received email.
-- `journeysdk.touchpoints.docker`: start local Docker Compose apps, keep them live across steps with `__case_exit__`, and pair step anchors with snapshots for supported Docker-managed volume state.
-- `journeysdk.touchpoints.browser`: open browser pages and return resumable `JourneyBrowserPage` values that later steps can reopen.
-
-Prompt-capable official touchpoints use prompt memory and optional structured output. Omit `memory` to use a generated
-callsite memory file, pass a literal unique `memory="name"` to choose the memory file, or pass `memory=None` to disable
-memory for one prompt. Journey stores `.journey/name.memory.md` under the journey source directory. Use `--no-memory` for runs that should ignore and avoid
-updating those files. Prompt methods return a result object with `result.output`. Omit `output` when that field should
-contain plain text; pass `output={"field": "description"}` or JSON-schema field fragments when it should contain a
-provider-validated `dict[str, object]`. If the requested browser task cannot complete because the page shows a blocking
-app state, the prompt method raises instead of returning a successful prompt result.
-
-## Core Workflow
-
-Use this workflow when developing Journey SDK journeys:
-
-1. Inspect nearby journeys and docs before editing. Prefer the existing file's imports, labels, helper style, and touchpoint setup. Check `docs/` examples and `journeysdk/api.py` when behavior is unclear.
-2. Define explicit top-level step functions. Decorate one or more module-level entrypoints with `@journey` or `@journey.journey`, then call `step(...)` and `branch(...)` inside the entrypoint.
-3. Pass concrete dependencies and prior step results as explicit arguments. Do not pass `None` or empty placeholders into constructors just to satisfy signatures.
-4. Run the narrowest useful Journey CLI command, then broaden validation before finishing.
-
-## Install Assistant Guidance
-
-Installed Journey SDK can print or write assistant guidance for common coding assistants:
+1. Inspect nearby journeys, project docs, and application code before editing.
+2. Make the smallest code or journey change that can verify the requested user behavior.
+3. Run the narrowest useful Journey command from the project that owns the journey:
 
 ```bash
-journey --agent-instructions codex
-journey --agent-instructions claude --install-agent-instructions
-journey --agent-instructions cursor --install-agent-instructions
+journey --file path/to/journey.py --develop-step target_label
 ```
 
-Printing is the default. Install mode writes the default project file for the selected assistant and refuses to replace
-an existing file unless `--force-agent-instructions` is passed.
+4. Rerun the same `--develop-step` command after edits to retry the paused step with Journey's default persistent state.
+5. Broaden verification before finishing:
+
+```bash
+journey --file path/to/journey.py --step target_label
+journey --file path/to/journey.py
+```
+
+6. Use JSON Lines output when another tool or script needs to parse results:
+
+```bash
+journey --file path/to/journey.py --step target_label --output jsonl
+```
 
 ## Author Journeys
 
-Use plain Python functions for step bodies:
+Use plain Python step functions, then call them from a module-level `@journey` entrypoint:
 
 ```python
-from journeysdk import journey, step
+from journeysdk import branch, journey, step
 
 def create_account() -> dict[str, str]:
     return {"account_id": "acct_123"}
@@ -78,102 +61,38 @@ def account_journey() -> None:
     step(assert_account_ready, account)
 ```
 
-Choose step boundaries around meaningful durable procedures, not tiny "do" and "assert" fragments. A step should
-usually complete one end-to-end unit of the user journey and verify the outcome it owns. This matters most for browser
-and Docker touchpoints, because explicit replay boundaries can save browser state, rehydrate values, and create Docker
-snapshot artifacts. Use a separate assertion step only when that assertion is its own replayable procedure or a later
-step needs its result.
+- Prefer explicit top-level step functions over lambdas or nested closures.
+- Keep step labels stable because CLI targeting, docs, and state files depend on them.
+- Pass concrete dependencies and previous step results as explicit arguments.
+- Do not pass `None` or empty placeholders into constructors to satisfy signatures.
+- Keep planning side-effect free; acquire browsers, cloud resources, services, and handles inside step execution.
+- Choose step boundaries around meaningful durable procedures, not tiny "do" and "assert" fragments.
 
-Prefer stable function names because default step labels come from function names. When a label appears in docs, tests, state files, or CLI examples, keep it stable or update every reference in the same change.
+## Replay And Touchpoints
 
-Use `step(..., retry=..., retry_delay=..., retry_from=...)` for polling or replay, but remember that retry is active
-only when `retry` is explicitly greater than `0`; `retry_from=` or `retry_delay=` alone does not create a replay
-boundary. Use `branch(start_from=step_result)` for branch replay anchors and branch-anchor snapshots. Keep values that
-cross explicit replay boundaries pickle-serializable or implement the Journey rehydration protocol with top-level
-classes and explicit `__store__` / `__restore__` methods.
+Official touchpoints live under `journeysdk.touchpoints` and are used from step functions. Use them when a journey needs
+browser pages, Journey Cloud email or webhook resources, or Docker Compose local infrastructure.
 
-For touchpoint lifetimes, use `__exit__` when a returned resource must close
-immediately after one step. Use `__case_exit__` when a returned resource must
-stay live for later steps in the same case, such as a Docker Compose stack.
-Journey discovers both protocols from direct step results and nested tuple,
-list, or dict values.
+Use `branch(start_from=step_result)` or positive `step(..., retry=...)` to create explicit replay boundaries. Values
+that cross replay boundaries should be pickle-serializable or implement Journey's rehydration protocol.
 
-## Run Journeys
-
-Run from the project that owns the journey:
-
-```bash
-uv run journey
-uv run journey --file docs/first_journey/first_journey.py
-uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents
-```
-
-Use `--file` to scope discovery to one file, `--journey` to select one decorated entrypoint, and targeted
-`--step LABEL` to execute only the single case that reaches a step label. A targeted run reports `replay_anchor` for
-branch step anchors but does not skip directly to that anchor unless state or retry behavior causes replay.
-
-Journey-owned output goes through `journeysdk.logger` and writes to stdout. The default `pretty` format is for humans;
-use `--output structured` for `[journey]` logfmt records or `--output jsonl` for JSON Lines. Use
-`--log-level debug|info|warning|error|off` to tune visibility; default `info` is usually best for local and agent runs.
-
-Journey persists execution state by default, but rehydratable values are stored only for explicit replay boundaries:
-`branch(start_from=...)` and steps with positive `retry=...`. In CLI runs, first Ctrl-C lets the active step finish,
-exit returned handles, and stop at post-exit. Press Ctrl-C again to stop now; the dirty step later restarts from the
-nearest explicit replay boundary, or from the case beginning when none exists. Use `--no-state` for one-off runs that
-should not resume, and `--no-state-update` when a run should read existing state without writing updates:
-
-```bash
-uv run journey --file docs/resume_journey/resume_journey.py
-```
-
-Use `--no-memory` when a journey contains AI-driven prompts but the run should not read or update prompt-memory files:
-
-```bash
-uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py --no-memory
-```
-
-Use `--no-memory-update` when the run should read existing prompt memory but skip writing updates:
-
-```bash
-uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py --no-memory-update
-```
-
-Browser recording is enabled by default for `open_page(...)`. Journey stores one flat trace/video/manifest artifact set
-per browser context under `.journey/recordings/`, with sequence-prefixed names that include case, step, attempt,
-context, and run id. Use `--no-browser-recording` for runs that should avoid browser trace and video artifacts.
+Prompt-capable browser steps can use `page.prompt(...)`. Use literal, unique prompt-memory names for committed journeys
+when repeatability matters. Use `--no-memory` only when a run should ignore prompt memory.
 
 ## Develop One Step
 
-Use `--develop-step LABEL` for agent-friendly edit-run loops. Noninteractive
-develop-step runs execute the target case, pause after the target step boundary, store state, print the paused result,
-and exit:
+Use noninteractive `--develop-step LABEL` for agent-friendly edit-run loops. It executes the target case, pauses after
+the target step boundary, stores state, prints the paused result, and exits.
 
 ```bash
-uv run journey --file path/to/journey.py --develop-step target_label
+journey --file path/to/journey.py --develop-step target_label
 ```
 
-After editing code, retry the same paused step by rerunning the same command with the same `--develop-step` label:
+Rerun the same command to retry the paused step after editing code. If the paused step failed, retry that same step
+first; continuing to a later label is invalid until the failed step succeeds. Avoid `--interactive` for non-human agent
+runs.
 
-```bash
-uv run journey --file path/to/journey.py --develop-step target_label
-```
+## Verification Standard
 
-If the paused step failed, retry the same paused step first; continuing to a later label is invalid until the failed
-step succeeds. Develop-step retry or continue replays from the paused step's nearest explicit replay boundary; when no
-explicit boundary exists, it restarts from the case beginning. Retry/continue reloads and recompiles the journey file,
-so code edits are picked up without a long-lived process. Avoid `--interactive` for non-human agent runs; reserve it
-for a person who wants an in-process continue/retry prompt.
-
-## Maintain Journeys
-
-- Keep journey labels, examples, docs, and tests aligned with CLI behavior.
-- Prefer explicit step functions over anonymous lambdas or deeply nested closures.
-- Store external resource handles as serializable descriptors or rehydratable top-level classes, not as live sockets, browsers, sessions, or clients.
-- Keep official touchpoint usage side-effect free during planning; acquire live resources inside step execution.
-- Use literal, unique prompt-memory names for AI-driven `prompt(...)` calls, and keep generated `.journey/*.memory.md` files
-  reviewable if they are committed.
-- Use `journeysdk.logger.get_logger("component")` for SDK/touchpoint/tutorial diagnostics instead of printing directly.
-- When adding logger calls, keep machine-readable fields in `message` and keyword fields, and pass `pretty=` only for
-  human output. Do not add component- or event-specific pretty formatting to `journeysdk/logger.py`; put it beside the
-  module that emits the event.
-- Use noninteractive `--develop-step` with persistent state for coding agents, and run the full relevant journey or test suite before wrapping up.
+Before wrapping up, report the exact Journey command you ran, the targeted step or full journey that passed, and any
+broader tests that still need to run.

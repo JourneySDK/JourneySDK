@@ -69,8 +69,21 @@ def test_packaged_claude_skill_contains_journey_developer_metadata() -> None:
     )
 
     assert "name: journey-developer" in skill
+    assert "Use Journey SDK when a change should be verified against a real user journey" in skill
     assert "## Develop One Step" in skill
-    assert "journey --agent-instructions claude --install-agent-instructions" in skill
+    assert "journey --file path/to/journey.py --develop-step target_label" in skill
+
+
+def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
+    templates = resources.files("journeysdk.agent_templates")
+    for name in ("claude-skill.md", "codex.md", "cursor.mdc", "generic.md"):
+        text = templates.joinpath(name).read_text(encoding="utf-8")
+        assert (
+            "Use Journey SDK when a change should be verified against a real user journey"
+            in text
+        ), name
+        assert "fast partial verification" in text, name
+        assert "journey --file path/to/journey.py --develop-step target_label" in text, name
 
 
 def _imported_module_names(path: Path) -> set[str]:

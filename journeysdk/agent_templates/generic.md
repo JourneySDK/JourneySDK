@@ -2,6 +2,12 @@
 
 Use this guide when an AI coding assistant needs to create, edit, run, or debug Journey SDK journeys.
 
+## When To Use Journey
+
+- Use Journey SDK when a change should be verified against a real user journey, not just a unit test.
+- Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
+- Use it for fast partial verification: run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
+
 ## Core Loop
 
 1. Inspect existing journeys and docs before editing.

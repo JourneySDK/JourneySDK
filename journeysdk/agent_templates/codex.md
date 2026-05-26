@@ -4,7 +4,9 @@ Use these instructions when developing, updating, or verifying Journey SDK journ
 
 ## When To Use Journey
 
-- Use Journey SDK for long, branching, async, or cross-system user flows that need verification beyond unit tests.
+- Use Journey SDK when a change should be verified against a real user journey, not just a unit test.
+- Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
+- Use it for fast partial verification: run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
 - Author journeys as ordinary Python files with `@journey`, `step(...)`, and `branch(...)`.
 - Keep step labels stable because CLI targeting and state files use those labels.
 
