@@ -4,26 +4,25 @@ With AI, testing is the new coding.
 
 ## Overview
 
-Journey SDK is an AI-assisted workflow-as-code toolkit for testing long user journeys with branches, many steps,
-third-party services, and channels. Those journeys have always been painful to automate: teams duplicate similar test
-cases, rerun slow setup, babysit long waits, wire throwaway inboxes and callbacks, and hand-maintain browser selectors.
-Journey turns that into one Python journey that compiles paths, replays from durable steps, resumes long waits, uses
-Journey Cloud touchpoints, and integrates natively with AI coding assistants.
+Journey SDK gives developers and coding assistants a way to quickly verify that user journeys still work, not just
+units or partial integrations. One Python spec covers all branches and touchpoints like browser, email, payments, etc.
+State rehydration replays only part of a long user journey, making it fast to execute many branches and verify the
+single step you are working on over and over again. Use `.prompt` to write browser test steps in natural language.
 
 The core value is:
 
-- **One journey spec for all paths**: use `branch()` inside ordinary Python so one journey compiles into the executable
+- **One Python spec for all branches**: use `branch()` inside ordinary Python so one journey compiles into the executable
   cases users can take, without copying shared setup into separate tests.
-- **Replay from a step**: use `branch(start_from=...)` so later branch cases start from a known durable step boundary
-  instead of replaying expensive browser, account, cart, or service setup.
+- **State rehydration for fast replay**: use `branch(start_from=...)` so later branch cases start from a known durable
+  step boundary instead of replaying expensive browser, account, cart, or service setup.
 - **Touchpoints for every system in the journey**: drive or verify each system, service, and channel involved in the
   user flow. A journey might act through the browser touchpoint, then check email, webhooks, payment providers, CRM
   records, support/Ops queues, SMS, or back-office systems through other touchpoints.
 - **Interrupt long waits, resume later**: default persistent state lets a test stop while waiting on async work or a
   third-party service and continue later from an explicit replay boundary.
-- **AI-generated steps with `page.prompt(...)`**: describe browser behavior in natural language, use prompt memory as a
-  versioned fast path for repeat runs, and keep tests editable by the same AI coding assistants that write application
-  code.
+- **Natural-language browser steps with `.prompt`**: describe browser behavior in natural language with
+  `page.prompt(...)`, use prompt memory as a versioned fast path for repeat runs, and keep tests editable by the same AI
+  coding assistants that write application code.
 
 That makes Journey SDK useful for flows such as:
 
@@ -532,17 +531,17 @@ selected case changed, Journey starts that case over so the reused prefix is not
 
 ## Core principles
 
-- **One journey spec for all paths**: author the full user journey once and let `branch()` compile the executable
+- **One Python spec for all branches**: author the full user journey once and let `branch()` compile the executable
   cases.
-- **Replay from a step**: use `branch(start_from=...)` and positive retries to reuse saved setup from durable replay
-  boundaries.
+- **State rehydration for fast replay**: use `branch(start_from=...)` and positive retries to reuse saved setup from
+  durable replay boundaries.
 - **Interrupt long waits, resume later**: keep long journeys restartable by saving progress between steps by default.
 - **Touchpoints for external tests**: integrate hosted inboxes, webhooks, browser pages, Docker snapshots, and
   app-specific channel or service code without forcing them into a custom DSL.
-- **AI-generated steps with `page.prompt(...)`**: describe browser work in natural language and let prompt memory reuse
-  versioned compiled fast paths.
-- **Native with AI coding assistants**: keep tests in ordinary Python files so coding agents can generate, edit, run,
-  and debug them beside application code.
+- **Natural-language browser steps with `.prompt`**: describe browser work in natural language with
+  `page.prompt(...)` and let prompt memory reuse versioned compiled fast paths.
+- **Built for AI coding assistants**: keep tests in ordinary Python files so coding agents can generate, edit, run, and
+  debug them beside application code.
 
 ## Quick start
 
@@ -614,6 +613,6 @@ Smoke test the built package and CLI locally:
 ./scripts/smoke_test_package.sh
 ```
 
-See [`docs/README.md`](docs/README.md) for the runnable handbook. It starts with one journey spec for all paths, then
-walks through replay from a step, retries, interrupting long waits and resuming later, browser automation with
+See [`docs/README.md`](docs/README.md) for the runnable handbook. It starts with one Python spec for all branches, then
+walks through state rehydration, retries, interrupting long waits and resuming later, browser automation with
 `page.prompt(...)`, Journey Cloud touchpoints, and debugging failure modes with code, commands, and expected CLI output.
