@@ -61,17 +61,16 @@ def test_package_data_includes_agent_instruction_templates() -> None:
     assert package_data["journeysdk.agent_templates"] == ["*.md", "*.mdc"]
 
 
-def test_packaged_claude_skill_matches_source_distributed_skill() -> None:
-    packaged = (
+def test_packaged_claude_skill_contains_journey_developer_metadata() -> None:
+    skill = (
         resources.files("journeysdk.agent_templates")
         .joinpath("claude-skill.md")
         .read_text(encoding="utf-8")
     )
-    source = (
-        _public_root() / "skills" / "journey-developer" / "SKILL.md"
-    ).read_text(encoding="utf-8")
 
-    assert packaged == source
+    assert "name: journey-developer" in skill
+    assert "## Develop One Step" in skill
+    assert "journey --agent-instructions claude --install-agent-instructions" in skill
 
 
 def _imported_module_names(path: Path) -> set[str]:

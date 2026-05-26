@@ -120,5 +120,4 @@ journey --agent-instructions generic
 ```
 
 Add `--install-agent-instructions` to write the selected guidance to its default project path. Install mode refuses to
-replace an existing file unless `--force-agent-instructions` is passed. See [`../skills/README.md`](../skills/README.md)
-for the source-distributed Claude Code skill.
+replace an existing file unless `--force-agent-instructions` is passed.

@@ -51,8 +51,7 @@ journey --agent-instructions cursor --install-agent-instructions
 ```
 
 Printing is the default; install mode writes the selected assistant's default project file and refuses to replace an
-existing file unless `--force-agent-instructions` is passed. The source-distributed
-[`journey-developer` skill](skills/journey-developer/SKILL.md) contains the Claude Code version.
+existing file unless `--force-agent-instructions` is passed.
 
 ## Install
 
