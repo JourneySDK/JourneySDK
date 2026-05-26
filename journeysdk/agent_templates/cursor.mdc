@@ -1,0 +1,32 @@
+---
+description: Develop, run, and verify Journey SDK journeys with targeted CLI loops.
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Journey SDK Agent Instructions
+
+Use these instructions when working on Journey SDK journey files or application changes that should be verified through a Journey user flow.
+
+- Inspect nearby journey files and docs before editing.
+- Author journeys with explicit top-level Python step functions, `@journey`, `step(...)`, and `branch(...)`.
+- Keep step labels stable; CLI targeting and state files depend on them.
+- Run from the project that owns the journey.
+- Use the narrowest useful loop while editing:
+
+```bash
+journey --file path/to/journey.py --develop-step target_label
+```
+
+- Rerun the same `--develop-step` command after edits to retry the paused step with default persistent state.
+- Broaden verification before finishing:
+
+```bash
+journey --file path/to/journey.py --step target_label
+journey --file path/to/journey.py
+```
+
+- Use `--output jsonl` when parsing Journey results.
+- Avoid `--interactive` for agent runs.
+- Do not pass `None` or placeholder objects into constructors; resolve concrete dependencies first.
+- Keep planning side-effect free; acquire live resources inside step execution.

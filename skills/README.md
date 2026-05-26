@@ -1,11 +1,19 @@
-# Journey SDK Skills
+# Journey SDK Agent Instructions
 
-This directory contains source-distributed AI-agent skills for working on Journey SDK.
+This directory contains the source-distributed Claude Code skill for working on Journey SDK. Installed Journey SDK can
+also print or write assistant guidance for common coding assistants:
 
-## Install `journey-developer`
+```bash
+journey --agent-instructions codex
+journey --agent-instructions claude --install-agent-instructions
+journey --agent-instructions cursor --install-agent-instructions
+journey --agent-instructions generic
+```
 
-Codex: copy or symlink `skills/journey-developer` into your user or project Codex skills directory.
+Printing is the default. Install mode writes the selected assistant's default project file and refuses to replace an
+existing file unless `--force-agent-instructions` is passed.
 
-Claude Code: copy or symlink `skills/journey-developer` into your Claude Code skills directory.
+## Source Skill
 
-Generic agents: read `skills/journey-developer/SKILL.md` into the agent's project instructions.
+Claude Code: use `journey --agent-instructions claude --install-agent-instructions`, or copy/symlink
+`skills/journey-developer` into your Claude Code skills directory when working from a source checkout.

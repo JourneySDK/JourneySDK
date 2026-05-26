@@ -237,6 +237,23 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.no_memory_update is True
     assert execute_args.no_browser_recording is True
 
+    agent_args = parser.parse_args(["--agent-instructions", "codex"])
+    assert agent_args.agent_instructions == "codex"
+    assert agent_args.install_agent_instructions is False
+    assert agent_args.force_agent_instructions is False
+
+    install_args = parser.parse_args(
+        [
+            "--agent-instructions",
+            "claude",
+            "--install-agent-instructions",
+            "--force-agent-instructions",
+        ]
+    )
+    assert install_args.agent_instructions == "claude"
+    assert install_args.install_agent_instructions is True
+    assert install_args.force_agent_instructions is True
+
     alias_args = parser.parse_args(["--level", "warning"])
     assert alias_args.log_level == "warning"
 
@@ -269,6 +286,8 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
         parser.parse_args(["--step", "target", "--develop-step", "target"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--json"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--agent-instructions", "vim"])
     removed_flag = "--" + "state"
     with pytest.raises(SystemExit):
         parser.parse_args([removed_flag, "run.json"])
@@ -276,6 +295,101 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert parser.parse_args(["--output", "pretty"]).output == "pretty"
     assert parser.parse_args(["--output", "structured"]).output == "structured"
     assert parser.parse_args(["--output", "jsonl"]).output == "jsonl"
+
+
+def test_agent_instructions_prints_raw_template_without_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    def fail_discovery(*args: object, **kwargs: object) -> None:
+        raise AssertionError("agent instructions should not discover journeys")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("journeysdk.cli.discover_journeys", fail_discovery)
+
+    exit_code = main(["--agent-instructions", "codex"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("# Journey SDK Agent Instructions")
+    assert "journey --file path/to/journey.py --develop-step target_label" in captured.out
+
+
+def test_agent_instructions_install_writes_default_project_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--agent-instructions", "cursor", "--install-agent-instructions"])
+
+    captured = capsys.readouterr()
+    target = tmp_path / ".cursor" / "rules" / "journey-developer.mdc"
+    assert exit_code == 0
+    assert target.read_text(encoding="utf-8").startswith("---\ndescription:")
+    assert "Installed agent instructions:" in captured.out
+
+
+def test_agent_instructions_install_refuses_existing_file_without_force(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    target = tmp_path / "JOURNEY_AGENT.md"
+    target.write_text("keep me\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--agent-instructions", "generic", "--install-agent-instructions"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert target.read_text(encoding="utf-8") == "keep me\n"
+    assert "--force-agent-instructions" in captured.out
+
+
+def test_agent_instructions_install_force_replaces_existing_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    target = tmp_path / "JOURNEY_AGENT.md"
+    target.write_text("replace me\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(
+        [
+            "--agent-instructions",
+            "generic",
+            "--install-agent-instructions",
+            "--force-agent-instructions",
+        ]
+    )
+
+    assert exit_code == 0
+    text = target.read_text(encoding="utf-8")
+    assert text.startswith("# Journey SDK Assistant Guide")
+    assert "replace me" not in text
+
+
+def test_agent_instruction_install_flags_require_agent_instruction_target(
+    capsys: pytest.CaptureFixture[str],
+):
+    with pytest.raises(SystemExit) as install_exc:
+        main(["--install-agent-instructions"])
+
+    assert install_exc.value.code == 2
+    assert "--install-agent-instructions requires --agent-instructions" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as force_exc:
+        main(["--force-agent-instructions"])
+
+    assert force_exc.value.code == 2
+    assert (
+        "--force-agent-instructions requires --install-agent-instructions"
+        in capsys.readouterr().out
+    )
 
 
 def test_execute_develop_step_rejects_json_mode(

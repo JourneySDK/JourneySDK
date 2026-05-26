@@ -13,6 +13,11 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .agent_instructions import (
+    install_agent_instructions,
+    render_agent_instructions,
+    supported_agent_instruction_targets,
+)
 from .discovery import DiscoveredJourney, discover_journeys
 from .errors import (
     AmbiguousStepSelectionError,
@@ -1748,6 +1753,46 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     return 0 if not all_errors else 1
 
 
+def _cmd_agent_instructions(args: argparse.Namespace) -> int:
+    target = args.agent_instructions
+    if not args.install_agent_instructions:
+        sys.stdout.write(render_agent_instructions(target))
+        return 0
+
+    try:
+        destination = install_agent_instructions(
+            target,
+            root=Path.cwd(),
+            force=args.force_agent_instructions,
+        )
+    except FileExistsError as exc:
+        existing_path = Path(exc.filename or exc.args[0])
+        _CLI_LOGGER.error(
+            "agent_instruction_install_error",
+            f"Agent instruction file already exists: {existing_path}",
+            pretty=pretty_line(
+                "Agent instruction file already exists: "
+                f"{existing_path}. Pass --force-agent-instructions to replace it.",
+                style="error",
+            ),
+            target=target,
+            path=str(existing_path),
+        )
+        return 1
+
+    _CLI_LOGGER.info(
+        "agent_instruction_installed",
+        f"Installed agent instructions at {destination}",
+        pretty=pretty_line(
+            f"Installed agent instructions: {destination}",
+            style="success",
+        ),
+        target=target,
+        path=str(destination),
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey",
@@ -1815,6 +1860,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--fail-fast",
         action="store_true",
         help="Stop at the first discovery, compilation, or execution failure",
+    )
+    parser.add_argument(
+        "--agent-instructions",
+        choices=supported_agent_instruction_targets(),
+        help="Print assistant instructions for Codex, Claude Code, Cursor, or generic agents",
+    )
+    parser.add_argument(
+        "--install-agent-instructions",
+        action="store_true",
+        help="Write --agent-instructions output to that assistant's default project path",
+    )
+    parser.add_argument(
+        "--force-agent-instructions",
+        action="store_true",
+        help="Replace an existing assistant instruction file during install",
     )
 
     return parser
@@ -1888,6 +1948,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.log_level, output_format=args.output)
+    if args.install_agent_instructions and args.agent_instructions is None:
+        parser.error("--install-agent-instructions requires --agent-instructions")
+    if args.force_agent_instructions and not args.install_agent_instructions:
+        parser.error("--force-agent-instructions requires --install-agent-instructions")
+    if args.agent_instructions is not None:
+        return _cmd_agent_instructions(args)
     if args.interactive and getattr(args, "develop_step", None) is None:
         parser.error("--interactive requires --develop-step")
     return _cmd_execute(args)

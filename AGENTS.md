@@ -21,6 +21,7 @@ branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydr
 - `journeysdk/planner.py`: journey compilation (aka planning)
 - `journeysdk/executor.py`: execution of a compiled journey
 - `journeysdk/cli.py`: CLI implementation
+- `journeysdk/agent_instructions.py`: packaged assistant instruction loader
 - `journeysdk/logger.py`: shared diagnostic logging API and generic output formatting
 - `docs/`: runnable tutorial journeys plus the handbook pages that explain them
 
@@ -30,12 +31,17 @@ branch-anchor snapshot, step lifecycle, develop-step pause, pause action, rehydr
 - `uv run journey`
 - `uv run journey --file docs/first_journey/first_journey.py`
 - `uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents`
+- `uv run journey --agent-instructions codex`
 - `uv build`
 
 CLI commands discover functions annotated with `@journey` / `@journey.journey` in the current directory. Use `--file`
 to scope to one file, `--journey` to scope to one decorated function name, and `--step` to execute only the single
 case that reaches a target step label. Targeted `--step` runs report `replay_anchor` for branch step anchors, but they
 do not skip directly to that anchor unless state or retry behavior causes replay.
+
+Use `--agent-instructions codex|claude|cursor|generic` to print assistant guidance without discovering or executing
+journeys. Add `--install-agent-instructions` to write the selected default project file, and
+`--force-agent-instructions` only when replacing an existing generated file is intentional.
 
 Journey-owned output uses `journeysdk.logger.get_logger(...)` and writes to stdout. The default `pretty` output is for
 humans; `--output structured` emits `[journey] ...` logfmt records and `--output jsonl` emits JSON Lines. The CLI
@@ -89,7 +95,8 @@ controls visibility with `--log-level debug|info|warning|error|off`.
 Keep dependency direction one-way so high-level orchestration does not depend on lower-level feature helpers.
 
 - Foundational shared modules: `journeysdk/errors.py`, `journeysdk/models.py`, `journeysdk/types.py`,
-  `journeysdk/utils.py`, `journeysdk/session.py`, `journeysdk/rehydration.py`, and `journeysdk/logger.py`.
+  `journeysdk/utils.py`, `journeysdk/session.py`, `journeysdk/rehydration.py`, `journeysdk/logger.py`, and
+  `journeysdk/agent_instructions.py`.
 - Core orchestration modules: `journeysdk/api.py`, `journeysdk/validator.py`, `journeysdk/planner.py`,
   `journeysdk/executor.py`, `journeysdk/state.py`, `journeysdk/discovery.py`, and `journeysdk/cli.py`.
 - Feature/helper modules: `journeysdk/_prompt_memory.py`, `journeysdk/_prompt_engine.py`,

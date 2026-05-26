@@ -41,8 +41,18 @@ That makes Journey SDK useful for flows such as:
 
 ## AI Agent Support
 
-Use the [`journey-developer` skill](skills/journey-developer/SKILL.md) when an AI coding agent needs to create,
-execute, debug, or maintain Journey SDK journeys.
+Use the packaged assistant instructions when an AI coding agent needs to create, execute, debug, or maintain Journey
+SDK journeys:
+
+```bash
+journey --agent-instructions codex
+journey --agent-instructions claude --install-agent-instructions
+journey --agent-instructions cursor --install-agent-instructions
+```
+
+Printing is the default; install mode writes the selected assistant's default project file and refuses to replace an
+existing file unless `--force-agent-instructions` is passed. The source-distributed
+[`journey-developer` skill](skills/journey-developer/SKILL.md) contains the Claude Code version.
 
 ## Install
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from importlib import resources
 from pathlib import Path
 import tomllib
 
@@ -51,6 +52,26 @@ def test_base_package_includes_playwright_and_langchain_runtime_dependencies() -
     assert any(dependency.startswith("playwright") for dependency in dependencies)
     assert any(dependency.startswith("langchain") for dependency in dependencies)
     assert not any(dependency.startswith("litellm") for dependency in dependencies)
+
+
+def test_package_data_includes_agent_instruction_templates() -> None:
+    pyproject = tomllib.loads((_public_root() / "pyproject.toml").read_text(encoding="utf-8"))
+    package_data = pyproject["tool"]["setuptools"]["package-data"]
+
+    assert package_data["journeysdk.agent_templates"] == ["*.md", "*.mdc"]
+
+
+def test_packaged_claude_skill_matches_source_distributed_skill() -> None:
+    packaged = (
+        resources.files("journeysdk.agent_templates")
+        .joinpath("claude-skill.md")
+        .read_text(encoding="utf-8")
+    )
+    source = (
+        _public_root() / "skills" / "journey-developer" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert packaged == source
 
 
 def _imported_module_names(path: Path) -> set[str]:

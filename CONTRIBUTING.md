@@ -50,8 +50,10 @@ That script:
 
 - runs `uv build`
 - installs the built wheel into a clean virtual environment and verifies `import journeysdk`
-- installs the built wheel as a temporary `uv` tool and verifies `journey --help`
-- runs a one-off `uv tool run --from <wheel> journey --help`
+- installs the built wheel as a temporary `uv` tool and verifies `journey --help` plus
+  `journey --agent-instructions codex`
+- runs a one-off `uv tool run --from <wheel> journey --help` plus
+  `journey --agent-instructions codex`
 
 ## Public Typing
 

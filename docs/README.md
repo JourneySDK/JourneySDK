@@ -15,8 +15,8 @@ Run every command in this handbook from the repository root.
 
 - Start with [00 Installation and CLI](00-installation-and-cli.md) if you need to install the package, install the
   persistent `journey` command, or work from a local checkout.
-- AI coding agents can use the source-distributed
-  [`journey-developer` skill](../skills/journey-developer/SKILL.md) for Journey authoring and CLI iteration guidance.
+- AI coding agents can run `journey --agent-instructions codex|claude|cursor|generic` for Journey authoring and CLI
+  iteration guidance, or add `--install-agent-instructions` to write the selected project file.
 - Use `uv run journey --file ...` when you want to run one journey file.
 - The browser chapter auto-installs Chromium the first time a browser step runs.
 - Journey Cloud examples need execution-time environment variables:

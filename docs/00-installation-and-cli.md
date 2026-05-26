@@ -108,9 +108,17 @@ journey --help
 For the full contributor workflow, including package smoke tests and manual publishing, see
 [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
-## AI Agent Skill
+## AI Agent Instructions
 
-AI coding agents can use the source-distributed
-[`journey-developer` skill](../skills/journey-developer/SKILL.md) for Journey authoring, targeted `--step` runs,
-`--develop-step` loops, and persistent state guidance. See [`../skills/README.md`](../skills/README.md) for the
-minimal install notes.
+AI coding agents can ask the installed CLI for assistant-specific Journey guidance:
+
+```bash
+journey --agent-instructions codex
+journey --agent-instructions claude
+journey --agent-instructions cursor
+journey --agent-instructions generic
+```
+
+Add `--install-agent-instructions` to write the selected guidance to its default project path. Install mode refuses to
+replace an existing file unless `--force-agent-instructions` is passed. See [`../skills/README.md`](../skills/README.md)
+for the source-distributed Claude Code skill.

@@ -28,6 +28,7 @@ exclude = ["tests*", "output*", "journey_cloud*"]
 
 [tool.setuptools.package-data]
 journeysdk = ["py.typed"]
+"journeysdk.agent_templates" = ["*.md", "*.mdc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
