@@ -314,7 +314,10 @@ def test_agent_instructions_prints_raw_template_without_discovery(
     assert exit_code == 0
     assert captured.err == ""
     assert captured.out.startswith("# Journey SDK Agent Instructions")
-    assert "journey --file path/to/journey.py --develop-step target_label" in captured.out
+    assert (
+        "journey --file journeys/<feature>_journey.py --develop-step target_label"
+        in captured.out
+    )
 
 
 def test_agent_instructions_install_writes_default_project_path(

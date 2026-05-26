@@ -8,6 +8,20 @@ This chapter covers three related ideas:
 - `branch()` lets one function produce several linear cases
 - `--step` and `--develop-step` let you run only the case that reaches one target label
 
+## Choosing Step And Branch Boundaries
+
+Write journey specs as plain Python files. If the project has no existing convention, place new specs under
+`journeys/<feature>_journey.py`.
+
+Each `step(...)` should encapsulate a meaningful, retryable part of the user journey. Prefer names like
+`clear_basket_and_add_items`, `submit_order`, or `assert_confirmation_email` over tiny fragments such as `click_button`.
+Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and branch replay.
+
+Use `branch(...)` for alternate user paths after shared setup. Use `branch(start_from=step_result)` when later branch
+cases should restart from a saved step boundary instead of repeating every shared setup step. Choose `start_from` as the
+durable point you would be comfortable retrying or resuming from while iterating on later branches. Values crossing
+replay boundaries must be pickle-serializable or implement Journey's rehydration protocol.
+
 ## Branch Once, Reuse Shared Setup
 
 Read `docs/branching_journey/branching_journey.py`.

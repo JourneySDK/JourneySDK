@@ -15,25 +15,79 @@ Use this guide when an AI coding assistant needs to create, edit, run, or debug 
 3. Run the smallest useful Journey verification:
 
 ```bash
-journey --file path/to/journey.py --develop-step target_label
+journey --file journeys/<feature>_journey.py --develop-step target_label
 ```
 
 4. Rerun the same command after each edit to retry the paused step.
 5. Broaden to a targeted run or full file before finishing:
 
 ```bash
-journey --file path/to/journey.py --step target_label
-journey --file path/to/journey.py
+journey --file journeys/<feature>_journey.py --step target_label
+journey --file journeys/<feature>_journey.py
 ```
 
 6. Use `--output jsonl` for machine-readable results.
 
-## Authoring Guidance
+## Add Journey Specs
 
-- Use ordinary Python functions for steps.
-- Decorate entrypoints with `@journey`.
-- Use `step(...)` for durable procedures and `branch(...)` for user-path choices.
-- Use `branch(start_from=...)` and positive retries when replay boundaries matter.
-- Keep values crossing replay boundaries serializable or rehydratable.
+- Inspect existing journey files and project docs before adding a new spec.
+- Follow the project's existing journey location and naming convention when one exists.
+- If there is no convention, add new specs under `journeys/<feature>_journey.py`.
+
+```python
+from journeysdk import branch, journey, step
+
+
+def open_checkout() -> dict[str, str]:
+    return {"cart_id": "cart_123"}
+
+
+def clear_basket_and_add_items(context: dict[str, str]) -> dict[str, str]:
+    return {**context, "item_count": "2"}
+
+
+def complete_card_checkout(context: dict[str, str]) -> None:
+    assert context["item_count"] == "2"
+
+
+def complete_wallet_checkout(context: dict[str, str]) -> None:
+    assert context["item_count"] == "2"
+
+
+@journey
+def checkout_journey() -> None:
+    checkout = step(open_checkout)
+    basket = step(clear_basket_and_add_items, checkout)
+
+    if branch(start_from=basket):
+        step(complete_card_checkout, basket)
+    elif branch(start_from=basket):
+        step(complete_wallet_checkout, basket)
+```
+
+## Use Steps
+
+- Use ordinary top-level Python functions for steps, and decorate module-level entrypoints with `@journey`.
+- Each `step(...)` should encapsulate a meaningful, retryable part of the user journey, such as `clear_basket_and_add_items`, `submit_order`, or `assert_confirmation_email`.
+- Avoid tiny implementation fragments like `click_button` or `assert_text` unless that action is itself the durable user-journey boundary.
+- Step function names are stable CLI labels used by `--step`, `--develop-step`, state files, retries, and branch replay.
 - Avoid side effects while compiling/planning the journey.
+
+## Use Branches
+
+- Use `branch(...)` for alternate user paths after shared setup.
+- Use `branch(start_from=step_result)` when later branch cases should restart from a saved step boundary instead of repeating all shared setup.
+- Choose the `start_from` step as the durable point you would be comfortable retrying or resuming from while iterating on later branches.
+- Keep values crossing replay boundaries serializable or rehydratable.
+
+## Use Touchpoints
+
+- Touchpoints are systems a step talks to; steps remain the durable retry/replay boundary.
+- Use official helpers from `journeysdk.touchpoints` for browser, email, webhook, and Docker Compose touchpoints; write app-specific touchpoints as plain Python helper functions when the SDK has no generic helper.
+- Acquire live resources inside step execution, not at module import or between steps.
+- Return serializable or rehydratable handles when later steps need touchpoint state.
+- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)`, use `page.prompt(..., memory=...)` for bounded UI tasks, and keep recordings enabled unless sensitive data requires `--no-browser-recording`.
+- Email: use `step(get_email_inbox())`, `step(send_email(...))`, and `step(wait_for_email(...), inbox, retry=..., retry_delay=...)`; set `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL`.
+- Webhook: use `step(get_webhook_endpoint(path=...))`, pass `endpoint.url` to the app under test, then use `step(wait_for_webhook_request(path=...), endpoint, retry=..., retry_delay=...)`.
+- Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, and use later `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
 - Avoid `--interactive` in automated assistant loops.

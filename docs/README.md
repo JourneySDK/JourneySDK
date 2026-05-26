@@ -48,6 +48,13 @@ A touchpoint is different from a step. A step is the durable unit Journey can sa
 touchpoint is what that step talks to. Official SDK touchpoints are imported from `journeysdk.touchpoints`; anything
 specific to your app can be a plain Python helper in the same journey file or your own test support module.
 
+When an agent adds touchpoint-backed journeys, keep live resource acquisition inside step functions. Use official
+browser, email, webhook, and Docker Compose helpers when they fit: `open_page(...)`, `get_email_inbox()`,
+`send_email(...)`, `wait_for_email(...)`, `get_webhook_endpoint(...)`, `wait_for_webhook_request(...)`, `run_docker(...)`,
+and `DockerLogMatcher`. Return serializable or rehydratable handles when later steps need the touchpoint state, and
+choose `branch(start_from=...)` or retry boundaries so expensive setup can be reused during targeted `--develop-step`
+runs.
+
 ## Reading Order
 
 1. [00 Installation and CLI](00-installation-and-cli.md)

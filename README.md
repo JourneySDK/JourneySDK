@@ -513,6 +513,17 @@ without writing new updates. Default state is cleared after a clean completion; 
 5. Use `--step` or `--develop-step` when you only want the case that reaches one target step label.
 6. Use `page.prompt(..., memory=...)` when a browser step is easier to describe than hand-maintain with selectors.
 
+### Adding Journey Specs
+
+When a project has no existing convention, put new specs under `journeys/<feature>_journey.py`. A journey spec is plain
+Python: define top-level step functions, call them from a module-level `@journey` function, and use stable step function
+names because they become CLI labels for `--step`, `--develop-step`, state, retries, and branch replay.
+
+Each `step(...)` should encapsulate a meaningful, retryable part of the user journey, such as
+`clear_basket_and_add_items`, not a tiny implementation fragment. Use `branch(...)` for alternate user paths after
+shared setup, and use `branch(start_from=step_result)` when later branch cases should restart from a saved step boundary.
+Values crossing replay boundaries must be pickle-serializable or implement Journey's rehydration protocol.
+
 Journey-owned CLI output is emitted on stdout through the Journey logger. The default `pretty` format is meant for
 humans at a terminal, for example:
 
