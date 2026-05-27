@@ -89,8 +89,10 @@ def changedetection_core_journey() -> None:
 ## Use Touchpoints
 
 - Touchpoints are systems a step talks to; steps remain the durable retry/replay boundary.
+- Before using an official touchpoint, run `journey --touchpoint-docs <name>` and follow that reference. For Docker-backed apps, run `journey --touchpoint-docs docker`.
 - Use official helpers from `journeysdk.touchpoints` for browser, email, webhook, and Docker Compose touchpoints; write app-specific touchpoints as plain Python helper functions when the SDK has no generic helper.
 - Use touchpoints and app-specific helpers to keep specs readable; they should hide low-level setup while Journey steps keep meaningful user-flow boundaries.
+- Prefer documented touchpoint helpers over hand-written `urlopen`, `time.sleep`, Docker port plumbing, raw selectors, or custom polling.
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles when later steps need touchpoint state.
 - Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)`, use `page.prompt(..., memory=...)` for bounded UI tasks, and keep recordings enabled unless sensitive data requires `--no-browser-recording`.

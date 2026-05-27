@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from types import TracebackType
 from typing import Any
+from urllib.parse import urlunsplit
 from uuid import uuid4
 
 from journeysdk.logger import JourneyLogLevel, PrettyLine, get_logger, pretty_row
@@ -201,6 +204,84 @@ class DockerLogMatch:
 
 
 @dataclass(frozen=True)
+class DockerHttpCheck:
+    """HTTP readiness check for one Docker Compose service."""
+
+    service_name: str
+    port: int
+    path: str = "/"
+    scheme: str = "http"
+    expected_status: int = 200
+    timeout: float = 60.0
+    poll_interval: float = 0.25
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "service_name",
+            _normalize_service_name(
+                owner="DockerHttpCheck",
+                field="service_name",
+                value=self.service_name,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "port",
+            _normalize_positive_int(
+                owner="DockerHttpCheck",
+                field="port",
+                value=self.port,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "path",
+            _normalize_http_path(
+                owner="DockerHttpCheck",
+                field="path",
+                value=self.path,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "scheme",
+            _normalize_http_scheme(
+                owner="DockerHttpCheck",
+                field="scheme",
+                value=self.scheme,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "expected_status",
+            _normalize_http_status(
+                owner="DockerHttpCheck",
+                field="expected_status",
+                value=self.expected_status,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "timeout",
+            _normalize_nonnegative_number(
+                owner="DockerHttpCheck",
+                field="timeout",
+                value=self.timeout,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "poll_interval",
+            _normalize_positive_number(
+                owner="DockerHttpCheck",
+                field="poll_interval",
+                value=self.poll_interval,
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class DockerComposeStack:
     """Serializable descriptor for one started Docker Compose project."""
 
@@ -210,6 +291,7 @@ class DockerComposeStack:
     cache_root: str
     wait_timeout: int | None = None
     log_matchers: tuple[DockerLogMatcher, ...] = ()
+    http_checks: tuple[DockerHttpCheck, ...] = ()
 
     @property
     def statuses(self) -> dict[str, tuple[DockerContainerStatus, ...]]:
@@ -247,6 +329,59 @@ class DockerComposeStack:
             owner="DockerComposeStack.wait_for_log",
         )
 
+    def service_url(
+        self,
+        service_name: str,
+        port: int,
+        *,
+        path: str = "",
+        scheme: str = "http",
+    ) -> str:
+        """Return the host URL for one published Compose service port."""
+
+        normalized_service_name = _normalize_service_name(
+            owner="DockerComposeStack.service_url",
+            field="service_name",
+            value=service_name,
+        )
+        normalized_port = _normalize_positive_int(
+            owner="DockerComposeStack.service_url",
+            field="port",
+            value=port,
+        )
+        normalized_path = _normalize_http_path(
+            owner="DockerComposeStack.service_url",
+            field="path",
+            value=path,
+            allow_empty=True,
+        )
+        normalized_scheme = _normalize_http_scheme(
+            owner="DockerComposeStack.service_url",
+            field="scheme",
+            value=scheme,
+        )
+        endpoint = _run_cli(
+            _compose_command(
+                compose_file=Path(self.resolved_compose_file),
+                project_name=self.project_name,
+                subcommand=["port", normalized_service_name, str(normalized_port)],
+            ),
+            owner="DockerComposeStack.service_url",
+        )
+        host, host_port = _parse_compose_port_endpoint(
+            endpoint,
+            owner="DockerComposeStack.service_url",
+        )
+        return urlunsplit(
+            (
+                normalized_scheme,
+                f"{host}:{host_port}",
+                normalized_path,
+                "",
+                "",
+            )
+        )
+
     def __case_exit__(
         self,
         exc_type: type[BaseException] | None,
@@ -281,6 +416,10 @@ class DockerComposeStack:
                 _log_matcher_payload(matcher)
                 for matcher in self.log_matchers
             ],
+            "http_checks": [
+                _http_check_payload(check)
+                for check in self.http_checks
+            ],
         }
 
     @classmethod
@@ -297,6 +436,7 @@ class DockerComposeStack:
             cache_root=data["cache_root"],
             wait_timeout=data["wait_timeout"],
             log_matchers=data["log_matchers"],
+            http_checks=data["http_checks"],
         )
         _restore_docker_snapshot(
             stack=stack,
@@ -319,6 +459,7 @@ def run_docker(
     project_name: str | None = None,
     wait_timeout: int | None = None,
     wait_for_logs: Sequence[DockerLogMatcher] = (),
+    wait_for_http: Sequence[DockerHttpCheck] = (),
 ) -> DockerComposeStack:
     """Start one local Docker Compose app."""
 
@@ -341,6 +482,11 @@ def run_docker(
         owner="run_docker",
         field="wait_for_logs",
         value=wait_for_logs,
+    )
+    normalized_http_checks = _normalize_http_check_sequence(
+        owner="run_docker",
+        field="wait_for_http",
+        value=wait_for_http,
     )
 
     compose_started_at = time.monotonic()
@@ -383,6 +529,7 @@ def run_docker(
         cache_root=str(_CACHE_ROOT),
         wait_timeout=normalized_wait_timeout,
         log_matchers=normalized_log_matchers,
+        http_checks=normalized_http_checks,
     )
     _register_case_exit_object("run_docker", stack)
     log_since = _docker_logs_since_timestamp()
@@ -416,6 +563,11 @@ def run_docker(
         matchers=normalized_log_matchers,
         since=log_since,
         since_container_start=True,
+        owner="run_docker",
+    )
+    _wait_for_docker_http_checks(
+        stack=stack,
+        checks=normalized_http_checks,
         owner="run_docker",
     )
 
@@ -1199,6 +1351,12 @@ def _restore_docker_snapshot(
             owner="restore_docker",
             service_names=running_services,
         )
+        _wait_for_docker_http_checks(
+            stack=validated_stack,
+            checks=validated_stack.http_checks,
+            owner="restore_docker",
+            service_names=running_services,
+        )
     duration = _duration_fields(restore_started_at)
     _LOGGER.info(
         "snapshot_restore_success",
@@ -1491,6 +1649,155 @@ def _load_raw_container_logs(
     return _run_cli(command, owner=owner)
 
 
+def _wait_for_docker_http_checks(
+    *,
+    stack: DockerComposeStack,
+    checks: Sequence[DockerHttpCheck],
+    owner: str,
+    service_names: Sequence[str] | None = None,
+) -> None:
+    normalized_checks = _normalize_http_check_sequence(
+        owner=owner,
+        field="checks",
+        value=checks,
+    )
+    if not normalized_checks:
+        return
+
+    validated_stack = _require_stack(stack=stack, owner=owner)
+    service_filter = set(service_names) if service_names is not None else None
+    for check in normalized_checks:
+        if service_filter is not None and check.service_name not in service_filter:
+            _LOGGER.debug(
+                "http_wait_skipped",
+                "skipping Docker HTTP wait for service not started in this restore",
+                owner=owner,
+                project=validated_stack.project_name,
+                service=check.service_name,
+                started_services=sorted(service_filter),
+            )
+            continue
+        _wait_for_one_docker_http_check(
+            stack=validated_stack,
+            check=check,
+            owner=owner,
+        )
+
+
+def _wait_for_one_docker_http_check(
+    *,
+    stack: DockerComposeStack,
+    check: DockerHttpCheck,
+    owner: str,
+) -> None:
+    _LOGGER.debug(
+        "http_wait_start",
+        "waiting for Docker HTTP endpoint",
+        owner=owner,
+        project=stack.project_name,
+        service=check.service_name,
+        port=check.port,
+        path=check.path,
+        expected_status=check.expected_status,
+        timeout=check.timeout,
+    )
+    started_at = time.monotonic()
+    deadline = started_at + check.timeout
+    attempts = 0
+    last_detail = "<no attempts>"
+    while True:
+        attempts += 1
+        try:
+            url = stack.service_url(
+                check.service_name,
+                check.port,
+                path=check.path,
+                scheme=check.scheme,
+            )
+            status = _http_status(url, timeout=min(10.0, max(0.1, check.poll_interval)))
+            last_detail = f"status {status}"
+            if status == check.expected_status:
+                _LOGGER.debug(
+                    "http_wait_success",
+                    "Docker HTTP endpoint is ready",
+                    owner=owner,
+                    project=stack.project_name,
+                    service=check.service_name,
+                    port=check.port,
+                    url=url,
+                    attempts=attempts,
+                    **_duration_fields(started_at),
+                )
+                return
+        except BaseException as exc:
+            last_detail = f"{type(exc).__name__}: {exc}"
+
+        now = time.monotonic()
+        if now >= deadline:
+            _LOGGER.warning(
+                "http_wait_timeout",
+                "timed out waiting for Docker HTTP endpoint",
+                owner=owner,
+                project=stack.project_name,
+                service=check.service_name,
+                port=check.port,
+                path=check.path,
+                expected_status=check.expected_status,
+                attempts=attempts,
+                last_detail=last_detail,
+                **_duration_fields(started_at),
+            )
+            raise TimeoutError(
+                f"{owner}(...) timed out after {check.timeout:g}s waiting for "
+                f"{check.service_name}:{check.port}{check.path} to return "
+                f"HTTP {check.expected_status}; {last_detail}."
+            )
+        time.sleep(min(check.poll_interval, deadline - now))
+
+
+def _http_status(url: str, *, timeout: float) -> int:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            status = getattr(response, "status", None)
+            if isinstance(status, int):
+                return status
+            return int(getattr(response, "code"))
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+
+
+def _parse_compose_port_endpoint(endpoint: str, *, owner: str) -> tuple[str, str]:
+    first_line = next(
+        (line.strip() for line in endpoint.splitlines() if line.strip()),
+        "",
+    )
+    if not first_line:
+        raise RuntimeError(f"{owner}(...) could not resolve a published Docker port.")
+    if first_line.startswith("["):
+        closing = first_line.find("]")
+        if closing == -1 or closing + 1 >= len(first_line) or first_line[closing + 1] != ":":
+            raise RuntimeError(
+                f"{owner}(...) could not parse Docker port endpoint {first_line!r}."
+            )
+        host = first_line[1:closing]
+        port = first_line[closing + 2 :]
+    else:
+        if ":" not in first_line:
+            raise RuntimeError(
+                f"{owner}(...) could not parse Docker port endpoint {first_line!r}."
+            )
+        host, port = first_line.rsplit(":", 1)
+    if host in {"", "0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    if not port.isdigit():
+        raise RuntimeError(
+            f"{owner}(...) could not parse Docker port endpoint {first_line!r}."
+        )
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return host, port
+
+
 def _declared_service_names(
     compose_config: Mapping[str, Any],
     *,
@@ -1619,6 +1926,22 @@ def _normalize_optional_positive_int(
     return value
 
 
+def _normalize_positive_int(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> int:
+    normalized = _normalize_optional_positive_int(
+        owner=owner,
+        field=field,
+        value=value,
+    )
+    if normalized is None:
+        raise TypeError(f"{owner}(..., {field}=...) expects a positive integer.")
+    return normalized
+
+
 def _normalize_nonnegative_number(
     *,
     owner: str,
@@ -1670,6 +1993,63 @@ def _normalize_regex_pattern(
     return value
 
 
+def _normalize_service_name(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{owner}(..., {field}=...) expects a string.")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{owner}(..., {field}=...) expects a non-blank string.")
+    return normalized
+
+
+def _normalize_http_path(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+    allow_empty: bool = False,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{owner}(..., {field}=...) expects a string.")
+    if value == "" and allow_empty:
+        return ""
+    if not value.startswith("/"):
+        raise ValueError(f"{owner}(..., {field}=...) expects a path starting with '/'.")
+    return value
+
+
+def _normalize_http_scheme(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{owner}(..., {field}=...) expects a string.")
+    normalized = value.strip().lower()
+    if normalized not in {"http", "https"}:
+        raise ValueError(f"{owner}(..., {field}=...) expects 'http' or 'https'.")
+    return normalized
+
+
+def _normalize_http_status(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{owner}(..., {field}=...) expects an integer.")
+    if value < 100 or value > 599:
+        raise ValueError(f"{owner}(..., {field}=...) expects an HTTP status code.")
+    return value
+
+
 def _normalize_log_matcher_sequence(
     *,
     owner: str,
@@ -1689,6 +2069,27 @@ def _normalize_log_matcher_sequence(
             )
         matchers.append(matcher)
     return tuple(matchers)
+
+
+def _normalize_http_check_sequence(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> tuple[DockerHttpCheck, ...]:
+    if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"{owner}(..., {field}=...) expects a sequence of DockerHttpCheck values."
+        )
+    checks: list[DockerHttpCheck] = []
+    for index, check in enumerate(value):
+        if not isinstance(check, DockerHttpCheck):
+            raise TypeError(
+                f"{owner}(..., {field}=...) expects DockerHttpCheck values; "
+                f"item {index} was {type(check).__name__}."
+            )
+        checks.append(check)
+    return tuple(checks)
 
 
 def _normalize_docker_logs_since(value: datetime | str) -> str | None:
@@ -1730,6 +2131,18 @@ def _log_matcher_payload(matcher: DockerLogMatcher) -> dict[str, object]:
     }
 
 
+def _http_check_payload(check: DockerHttpCheck) -> dict[str, object]:
+    return {
+        "service_name": check.service_name,
+        "port": check.port,
+        "path": check.path,
+        "scheme": check.scheme,
+        "expected_status": check.expected_status,
+        "timeout": check.timeout,
+        "poll_interval": check.poll_interval,
+    }
+
+
 def _require_log_matchers_payload(
     value: object,
     *,
@@ -1756,6 +2169,37 @@ def _require_log_matchers_payload(
             )
         )
     return tuple(matchers)
+
+
+def _require_http_checks_payload(
+    value: object,
+    *,
+    owner: str,
+) -> tuple[DockerHttpCheck, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+        raise TypeError(
+            f"{owner}(...) received invalid payload field 'http_checks'."
+        )
+    checks: list[DockerHttpCheck] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise TypeError(
+                f"{owner}(...) received invalid http_checks payload item {index}."
+            )
+        checks.append(
+            DockerHttpCheck(
+                service_name=item.get("service_name"),
+                port=item.get("port"),
+                path=item.get("path", "/"),
+                scheme=item.get("scheme", "http"),
+                expected_status=item.get("expected_status", 200),
+                timeout=item.get("timeout", 60.0),
+                poll_interval=item.get("poll_interval", 0.25),
+            )
+        )
+    return tuple(checks)
 
 
 def _normalize_snapshot_name(*, owner: str, value: object) -> str:
@@ -1837,6 +2281,10 @@ def _require_stack_payload(
     result["wait_timeout"] = wait_timeout
     result["log_matchers"] = _require_log_matchers_payload(
         data.get("log_matchers", ()),
+        owner=owner,
+    )
+    result["http_checks"] = _require_http_checks_payload(
+        data.get("http_checks", ()),
         owner=owner,
     )
     return result
@@ -2741,6 +3189,7 @@ def _slugify(value: str) -> str:
 __all__ = [
     "DockerComposeStack",
     "DockerContainerStatus",
+    "DockerHttpCheck",
     "DockerLogMatch",
     "DockerLogMatcher",
     "restore_docker",

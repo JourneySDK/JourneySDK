@@ -52,6 +52,12 @@ journey --agent-instructions cursor --install-agent-instructions
 
 Printing is the default; install mode writes the selected assistant's default project file and refuses to replace an
 existing file unless `--force-agent-instructions` is passed.
+Agents can also read packaged touchpoint references before using an official helper:
+
+```bash
+journey --touchpoint-docs docker
+journey --touchpoint-docs all
+```
 
 ## Install
 

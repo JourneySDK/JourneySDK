@@ -121,3 +121,14 @@ journey --agent-instructions generic
 
 Add `--install-agent-instructions` to write the selected guidance to its default project path. Install mode refuses to
 replace an existing file unless `--force-agent-instructions` is passed.
+
+Agents can also print detailed packaged touchpoint references before using official helpers:
+
+```bash
+journey --touchpoint-docs docker
+journey --touchpoint-docs browser
+journey --touchpoint-docs email
+journey --touchpoint-docs webhook
+journey --touchpoint-docs http
+journey --touchpoint-docs all
+```

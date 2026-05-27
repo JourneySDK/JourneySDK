@@ -288,6 +288,8 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
         parser.parse_args(["--json"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--agent-instructions", "vim"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--touchpoint-docs", "ftp"])
     removed_flag = "--" + "state"
     with pytest.raises(SystemExit):
         parser.parse_args([removed_flag, "run.json"])
@@ -318,6 +320,44 @@ def test_agent_instructions_prints_raw_template_without_discovery(
         "journey --file journeys/<feature>_journey.py --develop-step target_label"
         in captured.out
     )
+
+
+def test_touchpoint_docs_prints_reference_without_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    def fail_discovery(*args: object, **kwargs: object) -> None:
+        raise AssertionError("touchpoint docs should not discover journeys")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("journeysdk.cli.discover_journeys", fail_discovery)
+
+    exit_code = main(["--touchpoint-docs", "docker"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("# Docker Touchpoint Reference")
+    assert "run_docker" in captured.out
+    assert "DockerHttpCheck" in captured.out
+
+
+def test_touchpoint_docs_all_prints_index_and_references(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--touchpoint-docs", "all"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.startswith("# Journey SDK Touchpoint Reference")
+    assert "# Docker Touchpoint Reference" in captured.out
+    assert "# Browser Touchpoint Reference" in captured.out
+    assert "# HTTP Touchpoint Reference" in captured.out
 
 
 def test_agent_instructions_install_writes_default_project_path(

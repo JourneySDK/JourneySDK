@@ -13,6 +13,13 @@ This chapter shows both sides of that idea:
 - one journey that snapshots a local Docker Compose app behind a step anchor
 - one journey that captures a browser session so a later run can reopen it
 
+Before using an official touchpoint in a downstream project, print its packaged reference docs. For Docker-backed apps,
+start here:
+
+```bash
+uv run journey --touchpoint-docs docker
+```
+
 ## One Journey Can Mix Browser, Webhook, and Local File Work
 
 Read these files together:

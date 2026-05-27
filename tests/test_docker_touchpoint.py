@@ -4,7 +4,9 @@ import json
 import os
 import pickle
 import subprocess
+import urllib.error
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
 import journeysdk as journey_sdk
@@ -36,6 +38,7 @@ def _build_stack(
     project_name: str = "demo",
     wait_timeout: int | None = None,
     log_matchers: tuple[journey_docker.DockerLogMatcher, ...] = (),
+    http_checks: tuple[journey_docker.DockerHttpCheck, ...] = (),
 ) -> journey_docker.DockerComposeStack:
     compose_file = _write_compose_file(tmp_path).resolve()
     cache_root = tmp_path / "cache"
@@ -52,6 +55,7 @@ def _build_stack(
         cache_root=str(cache_root),
         wait_timeout=wait_timeout,
         log_matchers=log_matchers,
+        http_checks=http_checks,
     )
 
 
@@ -124,6 +128,7 @@ class _FakeDockerRuntime:
         restored_inspect_rows: list[dict[str, object]] | None = None,
         logs_by_service: dict[str, str] | None = None,
         container_logs: dict[str, str] | None = None,
+        published_ports: dict[tuple[str, int], str] | None = None,
     ) -> None:
         self.compose_config = compose_config or {
             "services": {
@@ -178,6 +183,9 @@ class _FakeDockerRuntime:
             "web-container-1": "2026-04-14T10:00:00Z booted\n",
             "web-container-2": "2026-04-14T10:00:00Z restored\n",
         }
+        self.published_ports = published_ports or {
+            ("web", 8000): "0.0.0.0:5050\n",
+        }
         self.volume_names = {"demo_demo_data"}
         self.volume_labels: dict[str, dict[str, str]] = {}
         self.phase = "live"
@@ -215,6 +223,11 @@ class _FakeDockerRuntime:
         if args[:2] == ["docker", "compose"] and "logs" in args:
             service = args[-1]
             return self.logs_by_service[service]
+
+        if args[:2] == ["docker", "compose"] and "port" in args:
+            service = args[-2]
+            port = int(args[-1])
+            return self.published_ports[(service, port)]
 
         if args[:2] == ["docker", "logs"]:
             container_id = args[-1]
@@ -308,6 +321,42 @@ def _docker_jsonl_records(output: str) -> list[dict[str, object]]:
         if record.get("component") == "docker":
             records.append(record)
     return records
+
+
+class _FakeHttpResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+        self.headers: dict[str, str] = {}
+        self._body = BytesIO(b"")
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._body.read()
+
+
+def _fake_urlopen_statuses(statuses: list[int]):
+    calls: list[tuple[str, float | None]] = []
+
+    def fake_urlopen(url: str, *, timeout: float | None = None):
+        calls.append((url, timeout))
+        status = statuses.pop(0)
+        if status >= 400:
+            raise urllib.error.HTTPError(
+                url,
+                status,
+                "error",
+                hdrs={},
+                fp=BytesIO(b""),
+            )
+        return _FakeHttpResponse(status)
+
+    fake_urlopen.calls = calls  # type: ignore[attr-defined]
+    return fake_urlopen
 
 
 def _mount_parts(value: str) -> dict[str, str]:
@@ -701,6 +750,107 @@ def test_run_docker_log_wait_requires_matching_declared_service(
     )
 
 
+def test_docker_stack_service_url_resolves_compose_published_port(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime(
+        published_ports={("web", 8000): "0.0.0.0:54321\n"},
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    url = stack.service_url("web", 8000, path="/healthz")
+
+    assert url == "http://127.0.0.1:54321/healthz"
+    assert runtime.commands[-1] == (
+        "DockerComposeStack.service_url",
+        [
+            "docker",
+            "compose",
+            "-f",
+            stack.resolved_compose_file,
+            "-p",
+            stack.project_name,
+            "port",
+            "web",
+            "8000",
+        ],
+    )
+
+
+def test_run_docker_waits_for_configured_http_check(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    check = journey_docker.DockerHttpCheck(
+        service_name="web",
+        port=8000,
+        path="/healthz",
+        timeout=1,
+        poll_interval=0.01,
+    )
+    runtime = _FakeDockerRuntime(
+        published_ports={("web", 8000): "0.0.0.0:5050\n"},
+    )
+    fake_urlopen = _fake_urlopen_statuses([503, 200])
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+    monkeypatch.setattr(journey_docker.urllib.request, "urlopen", fake_urlopen)
+
+    stack = journey_docker.run_docker(
+        compose_file=compose_file,
+        project_name="demo-project",
+        wait_for_http=[check],
+    )
+
+    assert stack.http_checks == (check,)
+    assert fake_urlopen.calls == [  # type: ignore[attr-defined]
+        ("http://127.0.0.1:5050/healthz", 0.1),
+        ("http://127.0.0.1:5050/healthz", 0.1),
+    ]
+
+
+def test_run_docker_http_check_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime()
+    fake_urlopen = _fake_urlopen_statuses([503])
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+    monkeypatch.setattr(journey_docker.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(TimeoutError) as exc_info:
+        journey_docker.run_docker(
+            compose_file=compose_file,
+            project_name="demo-project",
+            wait_for_http=[
+                journey_docker.DockerHttpCheck(
+                    service_name="web",
+                    port=8000,
+                    path="/healthz",
+                    timeout=0,
+                    poll_interval=0.01,
+                )
+            ],
+        )
+
+    assert "timed out" in str(exc_info.value)
+
+
+def test_run_docker_validates_http_checks(tmp_path: Path):
+    compose_file = _write_compose_file(tmp_path)
+    with pytest.raises(TypeError):
+        journey_docker.run_docker(compose_file=compose_file, wait_for_http=[object()])
+    with pytest.raises(TypeError):
+        journey_docker.DockerHttpCheck(service_name="web", port="8000")
+    with pytest.raises(ValueError):
+        journey_docker.DockerHttpCheck(service_name="web", port=8000, path="healthz")
+
+
 @pytest.mark.parametrize(
     ("since", "expected_since"),
     [
@@ -768,7 +918,19 @@ def test_docker_stack_store_payload_preserves_wait_timeout(
         timeout=12,
         poll_interval=0.5,
     )
-    stack = _build_stack(tmp_path, wait_timeout=42, log_matchers=(matcher,))
+    http_check = journey_docker.DockerHttpCheck(
+        service_name="web",
+        port=8000,
+        path="/healthz",
+        timeout=9,
+        poll_interval=0.25,
+    )
+    stack = _build_stack(
+        tmp_path,
+        wait_timeout=42,
+        log_matchers=(matcher,),
+        http_checks=(http_check,),
+    )
     snapshots: list[dict[str, object]] = []
 
     def fake_store_docker_snapshot(**kwargs: object) -> None:
@@ -797,23 +959,37 @@ def test_docker_stack_store_payload_preserves_wait_timeout(
             "poll_interval": 0.5,
         }
     ]
+    assert payload["http_checks"] == [
+        {
+            "service_name": "web",
+            "port": 8000,
+            "path": "/healthz",
+            "scheme": "http",
+            "expected_status": 200,
+            "timeout": 9.0,
+            "poll_interval": 0.25,
+        }
+    ]
     assert snapshots[0]["stack"] is stack
 
     legacy_payload = dict(payload)
     del legacy_payload["wait_timeout"]
     del legacy_payload["log_matchers"]
+    del legacy_payload["http_checks"]
     restored_payload = journey_docker._require_stack_payload(
         legacy_payload,
         owner="DockerComposeStack.__restore__",
     )
     assert restored_payload["wait_timeout"] is None
     assert restored_payload["log_matchers"] == ()
+    assert restored_payload["http_checks"] == ()
 
     restored_payload_with_matcher = journey_docker._require_stack_payload(
         payload,
         owner="DockerComposeStack.__restore__",
     )
     assert restored_payload_with_matcher["log_matchers"] == (matcher,)
+    assert restored_payload_with_matcher["http_checks"] == (http_check,)
 
     restored_snapshots: list[dict[str, object]] = []
 
@@ -835,6 +1011,7 @@ def test_docker_stack_store_payload_preserves_wait_timeout(
         ),
     )
     assert restored_stack.log_matchers == (matcher,)
+    assert restored_stack.http_checks == (http_check,)
     assert restored_snapshots[0]["stack"] == restored_stack
 
 

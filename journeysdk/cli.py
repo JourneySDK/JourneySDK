@@ -49,6 +49,10 @@ from .state import (
     load_execution_state,
     prepare_execution_state_storage,
 )
+from .touchpoint_references import (
+    render_touchpoint_docs,
+    supported_touchpoint_doc_targets,
+)
 from .types import JourneyEntrypoint
 
 _CLI_LOGGER = get_logger("cli")
@@ -1793,6 +1797,11 @@ def _cmd_agent_instructions(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_touchpoint_docs(args: argparse.Namespace) -> int:
+    sys.stdout.write(render_touchpoint_docs(args.touchpoint_docs))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey",
@@ -1876,6 +1885,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Replace an existing assistant instruction file during install",
     )
+    parser.add_argument(
+        "--touchpoint-docs",
+        choices=supported_touchpoint_doc_targets(),
+        help="Print packaged touchpoint reference docs and exit",
+    )
 
     return parser
 
@@ -1954,6 +1968,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--force-agent-instructions requires --install-agent-instructions")
     if args.agent_instructions is not None:
         return _cmd_agent_instructions(args)
+    if args.touchpoint_docs is not None:
+        return _cmd_touchpoint_docs(args)
     if args.interactive and getattr(args, "develop_step", None) is None:
         parser.error("--interactive requires --develop-step")
     return _cmd_execute(args)

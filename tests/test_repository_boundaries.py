@@ -9,6 +9,7 @@ from journeysdk.agent_instructions import (
     render_agent_instructions,
     supported_agent_instruction_targets,
 )
+from journeysdk.touchpoint_references import render_touchpoint_docs
 
 
 def _public_root() -> Path:
@@ -64,6 +65,7 @@ def test_package_data_includes_agent_instruction_templates() -> None:
     package_data = pyproject["tool"]["setuptools"]["package-data"]
 
     assert package_data["journeysdk.agent_templates"] == ["instructions.md"]
+    assert package_data["journeysdk.touchpoint_docs"] == ["*.md"]
 
 
 def test_agent_instruction_templates_use_single_canonical_body() -> None:
@@ -105,6 +107,8 @@ def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
         ), name
         assert "treating it like an end-to-end test for that flow" in text, name
         assert "When implementing new features, extend existing journey specs or add new ones" in text, name
+        assert "journey --touchpoint-docs docker" in text, name
+        assert "journey --touchpoint-docs <name>" in text, name
         assert "fast partial verification" in text, name
         assert "journeys/<feature>_journey.py" in text, name
         assert "add new specs under `journeys/<feature>_journey.py`" in text, name
@@ -142,6 +146,10 @@ def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
         assert "browser, email, webhook, and Docker Compose touchpoints" in text, name
         assert "app-specific touchpoints as plain Python helper functions" in text, name
         assert "Use touchpoints and app-specific helpers to keep specs readable" in text, name
+        assert "documented touchpoint helpers" in text, name
+        assert "urlopen" in text, name
+        assert "time.sleep" in text, name
+        assert "Docker port plumbing" in text, name
         assert "Acquire live resources inside step execution" in text, name
         assert "serializable or rehydratable handles" in text, name
         assert "open_page" in text, name
@@ -157,6 +165,29 @@ def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
         assert "wait_for_webhook_request" in text, name
         assert "run_docker" in text, name
         assert "DockerLogMatcher" in text, name
+
+
+def test_packaged_touchpoint_docs_cover_public_docker_api() -> None:
+    docker_docs = render_touchpoint_docs("docker")
+    all_docs = render_touchpoint_docs("all")
+
+    assert all_docs.startswith("# Journey SDK Touchpoint Reference")
+    assert "# Docker Touchpoint Reference" in all_docs
+    for token in (
+        "run_docker",
+        "DockerComposeStack",
+        "DockerContainerStatus",
+        "DockerLogMatcher",
+        "DockerLogMatch",
+        "DockerHttpCheck",
+        "statuses",
+        "logs",
+        "wait_for_log",
+        "service_url",
+        "lifecycle",
+        "rehydration",
+    ):
+        assert token in docker_docs
 
 
 def test_public_docs_explain_journey_spec_step_and_branch_guidance() -> None:
@@ -210,6 +241,8 @@ def test_public_docs_explain_touchpoint_efficiency_guidance() -> None:
     assert "run_docker(...)" in docs_readme
     assert "DockerLogMatcher" in docs_readme
     assert "targeted `--develop-step`" in docs_readme
+    assert "journey --touchpoint-docs docker" in docs_readme
+    assert "journey --touchpoint-docs all" in docs_readme
     assert "Use touchpoints and app-specific helpers to keep specs readable" in docs_readme
     assert "infrastructure plumbing stay behind helpers" in docs_readme
     assert "Fine-grained technical work belongs inside those helpers and touchpoints" in docs_readme

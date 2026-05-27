@@ -55,6 +55,19 @@ and `DockerLogMatcher`. Return serializable or rehydratable handles when later s
 choose `branch(start_from=...)` or retry boundaries so expensive setup can be reused during targeted `--develop-step`
 runs.
 
+Agents should read the detailed packaged reference before using an official touchpoint:
+
+```bash
+journey --touchpoint-docs docker
+journey --touchpoint-docs browser
+journey --touchpoint-docs email
+journey --touchpoint-docs webhook
+journey --touchpoint-docs http
+```
+
+Use `journey --touchpoint-docs all` to print the full touchpoint reference index. These docs are packaged with the
+installed SDK, so they work in downstream projects and `uvx --from journey-sdk journey ...` runs.
+
 Use touchpoints and app-specific helpers to keep specs readable. A Journey file should show the user flow, while
 subprocesses, local servers, port selection, datastore cleanup, and other infrastructure plumbing stay behind helpers,
 fixtures, Docker Compose, or touchpoints.
