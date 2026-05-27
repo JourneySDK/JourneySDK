@@ -531,6 +531,12 @@ Each `step(...)` should encapsulate a meaningful, retryable part of the user jou
 shared setup, and use `branch(start_from=step_result)` when later branch cases should restart from a saved step boundary.
 Values crossing replay boundaries must be pickle-serializable or implement Journey's rehydration protocol.
 
+Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
+Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
+Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or `change_page_and_wait_for_detection`.
+Put retry on the async user-flow boundary, not on many tiny follow-up checks.
+Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup, and avoid decorative branches when there is only one meaningful path.
+
 Journey-owned CLI output is emitted on stdout through the Journey logger. The default `pretty` format is meant for
 humans at a terminal, for example:
 

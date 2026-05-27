@@ -119,8 +119,18 @@ def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
         assert "Technical helpers are acceptable only when they make the Journey spec simpler to read" in text, name
         assert "shortest deterministic route that proves the real user journey" in text, name
         assert "Each `step(...)` should encapsulate a meaningful, retryable part of the user journey" in text, name
+        assert "Use `step(...)` only for meaningful durable boundaries" in text, name
+        assert "target labels, retry boundaries, branch replay anchors" in text, name
+        assert "Do not wrap every click, form fill, setup call, poll, or assertion as its own step" in text, name
+        assert "Group actions that are always repeated together into one user-flow step" in text, name
+        assert "create_watch_for_demo_page" in text, name
+        assert "change_page_and_wait_for_detection" in text, name
+        assert "Put retry on the async user-flow boundary" in text, name
         assert "clear_basket_and_add_items" in text, name
         assert "branch(start_from=step_result)" in text, name
+        assert "Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup" in text, name
+        assert "branch from a detected-change anchor to verify diff UI and notification behavior independently" in text, name
+        assert "Avoid decorative branches when there is only one meaningful path" in text, name
         assert "Step function names are stable CLI labels" in text, name
         assert "journey --file journeys/<feature>_journey.py --develop-step target_label" in text, name
         assert "journey --file journeys/<feature>_journey.py --step target_label" in text, name
@@ -166,9 +176,19 @@ def test_public_docs_explain_journey_spec_step_and_branch_guidance() -> None:
     assert "helpers, fixtures, Docker Compose, or touchpoints" in combined
     assert "shortest deterministic route that proves the real user journey" in combined
     assert "Each `step(...)` should encapsulate a meaningful, retryable part of the user journey" in combined
+    assert "Use `step(...)` only for meaningful durable boundaries" in combined
+    assert "target labels, retry boundaries, branch replay anchors" in combined
+    assert "Do not wrap every click, form fill, setup call, poll, or assertion as its own step" in combined
+    assert "Group actions that are always repeated together into one user-flow step" in combined
+    assert "create_watch_for_demo_page" in combined
+    assert "change_page_and_wait_for_detection" in combined
+    assert "Put retry on the async user-flow boundary" in combined
     assert "clear_basket_and_add_items" in combined
     assert "Stable step function names become CLI labels" in combined
     assert "Use `branch(...)` for alternate user paths after shared setup" in combined
+    assert "Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup" in combined
+    assert "branch from a detected-change anchor to verify diff UI and notification behavior independently" in combined
+    assert "Avoid decorative branches when there is only one meaningful path" in combined
     assert "branch(start_from=step_result)" in combined
     assert (
         "Values crossing replay boundaries must be pickle-serializable or implement "
@@ -192,6 +212,9 @@ def test_public_docs_explain_touchpoint_efficiency_guidance() -> None:
     assert "targeted `--develop-step`" in docs_readme
     assert "Use touchpoints and app-specific helpers to keep specs readable" in docs_readme
     assert "infrastructure plumbing stay behind helpers" in docs_readme
+    assert "Fine-grained technical work belongs inside those helpers and touchpoints" in docs_readme
+    assert "Journey steps should remain durable" in docs_readme
+    assert "target labels, retry boundaries, branch replay anchors" in docs_readme
 
 
 def _imported_module_names(path: Path) -> set[str]:

@@ -23,10 +23,18 @@ Each `step(...)` should encapsulate a meaningful, retryable part of the user jou
 `clear_basket_and_add_items`, `submit_order`, or `assert_confirmation_email` over tiny fragments such as `click_button`.
 Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and branch replay.
 
+Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
+Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
+Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or `change_page_and_wait_for_detection`.
+Put retry on the async user-flow boundary, not on many tiny follow-up checks.
+
 Use `branch(...)` for alternate user paths after shared setup. Use `branch(start_from=step_result)` when later branch
 cases should restart from a saved step boundary instead of repeating every shared setup step. Choose `start_from` as the
 durable point you would be comfortable retrying or resuming from while iterating on later branches. Values crossing
 replay boundaries must be pickle-serializable or implement Journey's rehydration protocol.
+Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup.
+For flows like changedetection.io, model shared setup once, then branch from a detected-change anchor to verify diff UI and notification behavior independently.
+Avoid decorative branches when there is only one meaningful path.
 
 ## Branch Once, Reuse Shared Setup
 

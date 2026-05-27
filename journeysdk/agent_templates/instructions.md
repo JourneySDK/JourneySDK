@@ -28,42 +28,49 @@ affected journey or step.
 
 ```python
 from journeysdk import branch, journey, step
-from journeysdk.touchpoints.browser import open_page
-from project.journey_helpers import checkout_demo
+from project.journey_helpers import changedetection_demo
 
 
-def open_checkout() -> dict[str, str]:
-    page = open_page(checkout_demo.url())
-    return checkout_demo.open_checkout(page)
+def start_app_and_prepare_demo_state():
+    return changedetection_demo.start_app_with_docker()
 
 
-def clear_basket_and_add_items(context: dict[str, str]) -> dict[str, str]:
-    return checkout_demo.clear_basket_and_add_items(context)
+def create_watch_for_demo_page(app):
+    return changedetection_demo.create_watch_for_demo_page(app)
 
 
-def complete_card_checkout(context: dict[str, str]) -> None:
-    checkout_demo.complete_card_checkout(context)
+def change_page_and_wait_for_detection(watch):
+    return changedetection_demo.change_page_and_wait_for_detection(watch)
 
 
-def complete_wallet_checkout(context: dict[str, str]) -> None:
-    checkout_demo.complete_wallet_checkout(context)
+def assert_diff_visible_to_user(detected_change):
+    changedetection_demo.assert_diff_visible_to_user(detected_change)
+
+
+def assert_notification_sent(detected_change):
+    changedetection_demo.assert_notification_sent(detected_change)
 
 
 @journey
-def checkout_journey() -> None:
-    checkout = step(open_checkout)
-    basket = step(clear_basket_and_add_items, checkout)
+def changedetection_core_journey() -> None:
+    app = step(start_app_and_prepare_demo_state)
+    watch = step(create_watch_for_demo_page, app)
+    detected = step(change_page_and_wait_for_detection, watch, retry=30, retry_delay=2)
 
-    if branch(start_from=basket):
-        step(complete_card_checkout, basket)
-    elif branch(start_from=basket):
-        step(complete_wallet_checkout, basket)
+    if branch(start_from=detected):
+        step(assert_diff_visible_to_user, detected)
+    elif branch(start_from=detected):
+        step(assert_notification_sent, detected)
 ```
 
 ## Use Steps
 
 - Each `step(...)` should encapsulate a meaningful, retryable part of the user journey, such as `clear_basket_and_add_items`, `submit_order`, or `assert_confirmation_email`.
+- Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
 - Avoid tiny implementation fragments like `click_button` or `assert_text` unless that action is itself the durable user-journey boundary.
+- Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
+- Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or `change_page_and_wait_for_detection`.
+- Put retry on the async user-flow boundary, not on many tiny follow-up checks.
 - Prefer explicit top-level step functions over lambdas or nested closures.
 - Step function names are stable CLI labels used by `--step`, `--develop-step`, state files, retries, and branch replay. Rename them only when updating those references intentionally.
 - Pass concrete dependencies and previous step results as explicit arguments.
@@ -73,6 +80,9 @@ def checkout_journey() -> None:
 
 - Use `branch(...)` to model alternative user paths after shared setup, such as card checkout versus wallet checkout.
 - Use `branch(start_from=step_result)` when later branch cases should restart from a saved step boundary instead of repeating all shared setup.
+- Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup.
+- For flows like changedetection.io, model shared setup once, then branch from a detected-change anchor to verify diff UI and notification behavior independently.
+- Avoid decorative branches when there is only one meaningful path.
 - Choose the `start_from` step as the durable point you would be comfortable retrying or resuming from while iterating on later branches.
 - Keep values that cross replay boundaries pickle-serializable or implement Journey's rehydration protocol.
 

@@ -58,6 +58,9 @@ runs.
 Use touchpoints and app-specific helpers to keep specs readable. A Journey file should show the user flow, while
 subprocesses, local servers, port selection, datastore cleanup, and other infrastructure plumbing stay behind helpers,
 fixtures, Docker Compose, or touchpoints.
+Fine-grained technical work belongs inside those helpers and touchpoints; Journey steps should remain durable
+user-flow chunks that are useful as target labels, retry boundaries, branch replay anchors, or values passed to later
+steps.
 
 ## Reading Order
 
