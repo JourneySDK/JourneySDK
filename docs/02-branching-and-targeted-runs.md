@@ -80,7 +80,8 @@ if branch(start_from=session):
 ```
 
 Journey stores and restores replayable step values only when execution truly rewinds to an explicit replay boundary,
-such as a step-started later branch. The protocol is documented in the README's Journey Rehydration Protocol section.
+such as a step-started later branch. Touchpoint-specific rehydration behavior is documented in the packaged references
+printed by `journey --touchpoint-docs <name>`.
 
 Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
 targeted run uses the compiled labels to choose one case.

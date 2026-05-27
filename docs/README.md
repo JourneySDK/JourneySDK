@@ -1,100 +1,47 @@
 # Journey Docs
 
-Journey is easiest to learn when the code, the command, and the output stay next to each other. Keep the README
-glossary nearby: the handbook uses its vocabulary for step boundaries, replay boundaries, branch-anchor snapshots, and
-rehydration.
+This directory is the runnable handbook for Journey SDK. Run commands from the repository root unless a page says
+otherwise.
 
-This directory does two jobs:
+## Canonical Guides
 
-- it contains the runnable tutorial journeys under `docs/<journey_name>/...`
-- it contains the handbook pages in this directory that explain why each pattern exists and what a healthy run looks like
+1. [Installation And CLI](00-installation-and-cli.md): package install, persistent CLI setup, CLI flags, browser setup,
+   Ctrl-C behavior, and assistant/touchpoint documentation commands.
+2. [Getting Started](01-getting-started.md): the first Journey spec, running one file, selecting one journey, and JSON
+   Lines output.
+3. [Branching And Targeted Runs](02-branching-and-targeted-runs.md): adding journey specs, choosing durable step and
+   branch boundaries, `branch(start_from=...)`, `--step`, and `--develop-step`.
+4. [Retries And Resume](03-retries-and-resume.md): retry loops, replay boundaries, default state, and resumable runs.
+5. [Browser And Local Touchpoints](04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
+   browser prompt tutorials.
+6. [Journey Cloud Touchpoints](05-journey-cloud-integrations.md): hosted webhook and email examples.
+7. [Debugging And Failure Modes](06-debugging-and-failure-modes.md): failure reports, recordings, fail-fast runs, and
+   troubleshooting.
 
-Run every command in this handbook from the repository root.
+## Packaged References
 
-## Before You Start
-
-- Start with [00 Installation and CLI](00-installation-and-cli.md) if you need to install the package, install the
-  persistent `journey` command, or work from a local checkout.
-- AI coding agents can run `journey --agent-instructions codex|claude|cursor|generic` for Journey authoring and CLI
-  iteration guidance, or add `--install-agent-instructions` to write the selected project file.
-- Use `uv run journey --file ...` when you want to run one journey file.
-- The browser chapter auto-installs Chromium the first time a browser step runs.
-- Journey Cloud examples need execution-time environment variables:
-
-```bash
-export JOURNEY_CLOUD_API_KEY=<your-api-key>
-export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
-```
-
-- The Docker Compose step-anchor snapshot example expects local `docker` and `docker compose` access when you execute it.
-- With default state, CLI Ctrl-C is graceful the first time: Journey lets the active step reach post-exit, then resumes
-  later from the nearest explicit replay boundary. Press Ctrl-C again to stop now; the dirty step restarts later from
-  that same boundary, or from the case beginning when no boundary exists. Without state, Ctrl-C stops immediately and
-  cannot resume.
-
-## Touchpoints in One Minute
-
-A journey often leaves the browser. It may create a checkout in the web app, receive a payment callback, send a receipt
-email, open a support ticket, update a CRM record, or wait for an Ops workflow. In Journey, each of those systems,
-services, or channels is a **touchpoint**.
-
-Touchpoints are how a test talks to the world around the service under test:
-
-- use a browser touchpoint to act like the user
-- use email, webhook, SMS, payment, CRM, or support touchpoints to verify side effects
-- use local infrastructure touchpoints, such as Docker Compose, to set up or restore systems needed by the journey
-
-A touchpoint is different from a step. A step is the durable unit Journey can save, retry, resume, or replay. A
-touchpoint is what that step talks to. Official SDK touchpoints are imported from `journeysdk.touchpoints`; anything
-specific to your app can be a plain Python helper in the same journey file or your own test support module.
-
-When an agent adds touchpoint-backed journeys, keep live resource acquisition inside step functions. Use official
-browser, email, webhook, and Docker Compose helpers when they fit: `open_page(...)`, `get_email_inbox()`,
-`send_email(...)`, `wait_for_email(...)`, `get_webhook_endpoint(...)`, `wait_for_webhook_request(...)`, `run_docker(...)`,
-and `DockerLogMatcher`. Return serializable or rehydratable handles when later steps need the touchpoint state, and
-choose `branch(start_from=...)` or retry boundaries so expensive setup can be reused during targeted `--develop-step`
-runs.
-
-Agents should read the detailed packaged reference before using an official touchpoint:
+Detailed touchpoint API references are packaged with the SDK and available from any installed `journey` CLI:
 
 ```bash
-journey --touchpoint-docs docker
 journey --touchpoint-docs browser
+journey --touchpoint-docs docker
 journey --touchpoint-docs email
 journey --touchpoint-docs webhook
 journey --touchpoint-docs http
+journey --touchpoint-docs all
 ```
 
-Use `journey --touchpoint-docs all` to print the full touchpoint reference index. These docs are packaged with the
-installed SDK, so they work in downstream projects and `uvx --from journey-sdk journey ...` runs.
+AI coding assistant guidance is packaged separately:
 
-Use touchpoints and app-specific helpers to keep specs readable. A Journey file should show the user flow, while
-subprocesses, local servers, port selection, datastore cleanup, and other infrastructure plumbing stay behind helpers,
-fixtures, Docker Compose, or touchpoints.
-Fine-grained technical work belongs inside those helpers and touchpoints; Journey steps should remain durable
-user-flow chunks that are useful as target labels, retry boundaries, branch replay anchors, or values passed to later
-steps.
+```bash
+journey --agent-instructions codex
+journey --agent-instructions claude
+journey --agent-instructions cursor
+journey --agent-instructions generic
+```
 
-## Reading Order
-
-1. [00 Installation and CLI](00-installation-and-cli.md)
-2. [01 Getting Started](01-getting-started.md)
-3. [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md)
-4. [03 Retries and Resume](03-retries-and-resume.md)
-5. [04 Browser and Local Touchpoints](04-browser-and-local-integrations.md)
-6. [05 Journey Cloud Touchpoints](05-journey-cloud-integrations.md)
-7. [06 Debugging and Failure Modes](06-debugging-and-failure-modes.md)
-
-## Choose by Task
-
-- If you need install commands for `pip`, `uv`, `uvx`, or the persistent CLI, start with
-  [00 Installation and CLI](00-installation-and-cli.md).
-- If you want to write your first Journey function, start with [01 Getting Started](01-getting-started.md).
-- If you want one authored flow to become multiple executable paths, go to [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
-- If you need polling, replay, or resumable state, go to [03 Retries and Resume](03-retries-and-resume.md).
-- If your journey needs browser work, local files, or Docker Compose snapshots, go to [04 Browser and Local Touchpoints](04-browser-and-local-integrations.md).
-- If your journey talks to Journey Cloud-hosted webhooks or email, go to [05 Journey Cloud Touchpoints](05-journey-cloud-integrations.md).
-- If you are debugging a failure or deciding whether to use `--fail-fast`, go to [06 Debugging and Failure Modes](06-debugging-and-failure-modes.md).
+The canonical source files are `journeysdk/touchpoint_docs/*.md` and
+`journeysdk/agent_templates/instructions.md`.
 
 ## Runnable Source Map
 
@@ -111,30 +58,3 @@ steps.
 - `docs/cloud_webhook_journey/cloud_webhook_journey.py`
 - `docs/cloud_email_journey/cloud_email_journey.py`
 - `docs/fail_fast_journeys/fail_fast_journeys.py`
-
-## One-Minute Tour
-
-If you only want the shape of a Journey run, start here:
-
-```bash
-uv run journey --file docs/first_journey/first_journey.py
-```
-
-Expected pretty stdout includes:
-
-```console
-Plan
-  docs/first_journey/first_journey.py:first_journey ...
-      create_customer_profile  ok attempt=1 duration=... ...
-  Summary: 1 journey executed, 1 case executed, 0 failed
-```
-
-That output shows the core Journey model:
-
-- one top-level function becomes one or more executable cases
-- each case is still plain Python steps in order
-- the CLI emits compiled cases, summaries, and step boundaries as pretty stdout logs by default
-- `--output structured` switches to logfmt-style fields and `--output jsonl` switches to JSON Lines
-- stateful runs can replay from step boundaries instead of rerunning everything from scratch
-
-Continue with [01 Getting Started](01-getting-started.md) if Journey is new to you.

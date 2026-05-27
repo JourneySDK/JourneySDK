@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+from docs._reset_state import reset_default_state
 from journeysdk import journey, step
 from journeysdk.touchpoints.email import get_email_inbox, send_email, wait_for_email
+
+EVENTS: list[str] = []
+
+
+def reset_demo_state() -> None:
+    EVENTS.clear()
+    reset_default_state(__file__)
 
 
 def assert_welcome_email(
@@ -22,6 +30,7 @@ def assert_welcome_email(
     if message.get("text_body") != "Hello from Journey Cloud":
         raise AssertionError(f"Unexpected email body: {message.get('text_body')!r}")
 
+    EVENTS.append("assert_welcome_email")
     return True
 
 
