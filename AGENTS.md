@@ -143,7 +143,7 @@ event emitter instead. See `CONTRIBUTING.md` for the full Logger API rules.
   CLI behavior, repository boundaries, or relevant file existence.
 - Verify every change by running `uv run pytest` and confirming the full test suite passes before wrapping up.
 - Whenever Journey CLI behavior, docs, examples, or journey authoring guidance changes, update the packaged assistant
-  templates under `journeysdk/agent_templates/` in the same change.
+  template under `journeysdk/agent_templates/instructions.md` in the same change.
 - Keep the shared cloud auth and reservation pattern documented anywhere an official cloud touchpoint is introduced.
 - Keep docstrings in `journeysdk/api.py` up to date (it is the SDK API).
 - Prefer adding or updating tests before changing planner, executor, or validator semantics.

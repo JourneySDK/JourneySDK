@@ -372,7 +372,7 @@ def test_agent_instructions_install_force_replaces_existing_file(
 
     assert exit_code == 0
     text = target.read_text(encoding="utf-8")
-    assert text.startswith("# Journey SDK Assistant Guide")
+    assert text.startswith("# Journey SDK Agent Instructions")
     assert "replace me" not in text
 
 

@@ -6,12 +6,30 @@ from importlib import resources
 from pathlib import Path
 
 _TEMPLATE_PACKAGE = "journeysdk.agent_templates"
+_BODY_TEMPLATE = "instructions.md"
 
-_TEMPLATE_FILES = {
-    "codex": "codex.md",
-    "claude": "claude-skill.md",
-    "cursor": "cursor.mdc",
-    "generic": "generic.md",
+_SUPPORTED_TARGETS = ("codex", "claude", "cursor", "generic")
+
+_CLAUDE_ENVELOPE = """---
+name: journey-developer
+description: Use Journey SDK as the end-to-end test layer for real user journeys. Use whenever code changes should be verified through a user flow, when implementing features that should extend or add journey specs, when a Journey SDK journey uses journeysdk primitives or journeysdk.touchpoints, or when iterating quickly with journey --develop-step, --step, default state, and JSONL output.
+---
+
+"""
+
+_CURSOR_ENVELOPE = """---
+description: Use Journey SDK as the end-to-end test layer for real user journeys; extend specs for new user-facing features and verify with targeted CLI loops.
+globs: "**/*.py"
+alwaysApply: false
+---
+
+"""
+
+_ENVELOPES = {
+    "codex": "",
+    "claude": _CLAUDE_ENVELOPE,
+    "cursor": _CURSOR_ENVELOPE,
+    "generic": "",
 }
 
 _DEFAULT_TARGETS = {
@@ -25,7 +43,7 @@ _DEFAULT_TARGETS = {
 def supported_agent_instruction_targets() -> tuple[str, ...]:
     """Return supported assistant target names in CLI display order."""
 
-    return tuple(_TEMPLATE_FILES)
+    return _SUPPORTED_TARGETS
 
 
 def default_agent_instruction_path(target: str) -> Path:
@@ -37,12 +55,13 @@ def default_agent_instruction_path(target: str) -> Path:
 def render_agent_instructions(target: str) -> str:
     """Load the packaged assistant guidance for an assistant target."""
 
-    template = _TEMPLATE_FILES[_normalize_target(target)]
-    return (
+    normalized_target = _normalize_target(target)
+    body = (
         resources.files(_TEMPLATE_PACKAGE)
-        .joinpath(template)
+        .joinpath(_BODY_TEMPLATE)
         .read_text(encoding="utf-8")
     )
+    return f"{_ENVELOPES[normalized_target]}{body}"
 
 
 def install_agent_instructions(
@@ -63,7 +82,7 @@ def install_agent_instructions(
 
 
 def _normalize_target(target: str) -> str:
-    if target not in _TEMPLATE_FILES:
+    if target not in _SUPPORTED_TARGETS:
         supported = ", ".join(supported_agent_instruction_targets())
         raise ValueError(
             f"Unsupported assistant target {target!r}. Choose one of: {supported}."

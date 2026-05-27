@@ -5,6 +5,11 @@ from importlib import resources
 from pathlib import Path
 import tomllib
 
+from journeysdk.agent_instructions import (
+    render_agent_instructions,
+    supported_agent_instruction_targets,
+)
+
 
 def _public_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -58,30 +63,48 @@ def test_package_data_includes_agent_instruction_templates() -> None:
     pyproject = tomllib.loads((_public_root() / "pyproject.toml").read_text(encoding="utf-8"))
     package_data = pyproject["tool"]["setuptools"]["package-data"]
 
-    assert package_data["journeysdk.agent_templates"] == ["*.md", "*.mdc"]
+    assert package_data["journeysdk.agent_templates"] == ["instructions.md"]
 
 
-def test_packaged_claude_skill_contains_journey_developer_metadata() -> None:
-    skill = (
+def test_agent_instruction_templates_use_single_canonical_body() -> None:
+    template_root = _public_root() / "journeysdk" / "agent_templates"
+
+    assert (template_root / "instructions.md").is_file()
+    for removed_template in ("codex.md", "claude-skill.md", "cursor.mdc", "generic.md"):
+        assert not (template_root / removed_template).exists()
+
+
+def test_agent_instruction_rendering_wraps_shared_body() -> None:
+    body = (
         resources.files("journeysdk.agent_templates")
-        .joinpath("claude-skill.md")
+        .joinpath("instructions.md")
         .read_text(encoding="utf-8")
     )
 
-    assert "name: journey-developer" in skill
-    assert "Use Journey SDK when a change should be verified against a real user journey" in skill
-    assert "## Develop One Step" in skill
-    assert "journey --file journeys/<feature>_journey.py --develop-step target_label" in skill
+    assert render_agent_instructions("generic") == body
+    assert render_agent_instructions("codex") == body
+
+    claude = render_agent_instructions("claude")
+    assert claude.startswith("---\nname: journey-developer\n")
+    assert "description: Use Journey SDK as the end-to-end test layer for real user journeys." in claude
+    assert claude.endswith(body)
+
+    cursor = render_agent_instructions("cursor")
+    assert cursor.startswith("---\ndescription: Use Journey SDK as the end-to-end test layer for real user journeys;")
+    assert 'globs: "**/*.py"' in cursor
+    assert "alwaysApply: false" in cursor
+    assert cursor.endswith(body)
 
 
 def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
-    templates = resources.files("journeysdk.agent_templates")
-    for name in ("claude-skill.md", "codex.md", "cursor.mdc", "generic.md"):
-        text = templates.joinpath(name).read_text(encoding="utf-8")
+    for name in supported_agent_instruction_targets():
+        text = render_agent_instructions(name)
         assert (
-            "Use Journey SDK when a change should be verified against a real user journey"
+            "Always use Journey SDK when a change should be verified against a real user journey"
             in text
         ), name
+        assert "treating it like an end-to-end test for that flow" in text, name
+        assert "When implementing new features, extend existing journey specs or add new ones" in text, name
         assert "fast partial verification" in text, name
         assert "journeys/<feature>_journey.py" in text, name
         assert "add new specs under `journeys/<feature>_journey.py`" in text, name
