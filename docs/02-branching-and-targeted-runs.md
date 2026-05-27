@@ -13,6 +13,12 @@ This chapter covers three related ideas:
 Write journey specs as plain Python files. If the project has no existing convention, place new specs under
 `journeys/<feature>_journey.py`.
 
+Journeys should read like a user flow. Keep the `@journey` function short enough to scan as the user's story, with
+technical setup hidden behind fixtures, Docker Compose, touchpoints, or small app-specific helpers. Avoid turning
+journey files into infrastructure harnesses: subprocess management, embedded HTTP servers, raw polling loops, PID
+files, ports, datastore cleanup, and similar plumbing should stay outside the journey spec. Use the shortest
+deterministic route that proves the real user journey.
+
 Each `step(...)` should encapsulate a meaningful, retryable part of the user journey. Prefer names like
 `clear_basket_and_add_items`, `submit_order`, or `assert_confirmation_email` over tiny fragments such as `click_button`.
 Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and branch replay.

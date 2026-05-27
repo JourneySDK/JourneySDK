@@ -519,6 +519,13 @@ When a project has no existing convention, put new specs under `journeys/<featur
 Python: define top-level step functions, call them from a module-level `@journey` function, and use stable step function
 names because they become CLI labels for `--step`, `--develop-step`, state, retries, and branch replay.
 
+Journeys should read like a user flow. The `@journey` function should stay short and tell the story in a few clear
+steps. Avoid turning journey files into infrastructure harnesses: subprocess management, embedded HTTP servers, raw
+polling loops, PID files, ports, datastore cleanup, and similar plumbing belongs in helpers, fixtures, Docker Compose,
+or touchpoints. Put infrastructure plumbing in helpers, fixtures, Docker Compose, or touchpoints.
+Use the shortest deterministic route that proves the real user journey.
+Technical helpers are useful when they make the Journey spec simpler to read.
+
 Each `step(...)` should encapsulate a meaningful, retryable part of the user journey, such as
 `clear_basket_and_add_items`, not a tiny implementation fragment. Use `branch(...)` for alternate user paths after
 shared setup, and use `branch(start_from=step_result)` when later branch cases should restart from a saved step boundary.

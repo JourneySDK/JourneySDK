@@ -55,6 +55,10 @@ and `DockerLogMatcher`. Return serializable or rehydratable handles when later s
 choose `branch(start_from=...)` or retry boundaries so expensive setup can be reused during targeted `--develop-step`
 runs.
 
+Use touchpoints and app-specific helpers to keep specs readable. A Journey file should show the user flow, while
+subprocesses, local servers, port selection, datastore cleanup, and other infrastructure plumbing stay behind helpers,
+fixtures, Docker Compose, or touchpoints.
+
 ## Reading Order
 
 1. [00 Installation and CLI](00-installation-and-cli.md)

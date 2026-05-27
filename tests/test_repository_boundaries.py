@@ -108,6 +108,16 @@ def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
         assert "fast partial verification" in text, name
         assert "journeys/<feature>_journey.py" in text, name
         assert "add new specs under `journeys/<feature>_journey.py`" in text, name
+        assert "## Keep Journeys User-Centered" in text, name
+        assert "Journeys should read like a user flow" in text, name
+        assert "The `@journey` function should stay short" in text, name
+        assert "user-journey step names" in text, name
+        assert "Avoid turning journey files into infrastructure harnesses" in text, name
+        assert "subprocess management, embedded HTTP servers, raw polling loops" in text, name
+        assert "PID files, ports, datastore cleanup" in text, name
+        assert "helpers, fixtures, Docker Compose, or touchpoints" in text, name
+        assert "Technical helpers are acceptable only when they make the Journey spec simpler to read" in text, name
+        assert "shortest deterministic route that proves the real user journey" in text, name
         assert "Each `step(...)` should encapsulate a meaningful, retryable part of the user journey" in text, name
         assert "clear_basket_and_add_items" in text, name
         assert "branch(start_from=step_result)" in text, name
@@ -121,6 +131,7 @@ def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
         assert "`journeysdk.touchpoints`" in text, name
         assert "browser, email, webhook, and Docker Compose touchpoints" in text, name
         assert "app-specific touchpoints as plain Python helper functions" in text, name
+        assert "Use touchpoints and app-specific helpers to keep specs readable" in text, name
         assert "Acquire live resources inside step execution" in text, name
         assert "serializable or rehydratable handles" in text, name
         assert "open_page" in text, name
@@ -147,6 +158,13 @@ def test_public_docs_explain_journey_spec_step_and_branch_guidance() -> None:
 
     assert "Adding Journey Specs" in combined
     assert "journeys/<feature>_journey.py" in combined
+    assert "Journeys should read like a user flow" in combined
+    assert "`@journey` function should stay short" in combined
+    assert "Avoid turning journey files into infrastructure harnesses" in combined
+    assert "subprocess management, embedded HTTP servers, raw polling loops" in combined
+    assert "PID files, ports, datastore cleanup" in combined
+    assert "helpers, fixtures, Docker Compose, or touchpoints" in combined
+    assert "shortest deterministic route that proves the real user journey" in combined
     assert "Each `step(...)` should encapsulate a meaningful, retryable part of the user journey" in combined
     assert "clear_basket_and_add_items" in combined
     assert "Stable step function names become CLI labels" in combined
@@ -172,6 +190,8 @@ def test_public_docs_explain_touchpoint_efficiency_guidance() -> None:
     assert "run_docker(...)" in docs_readme
     assert "DockerLogMatcher" in docs_readme
     assert "targeted `--develop-step`" in docs_readme
+    assert "Use touchpoints and app-specific helpers to keep specs readable" in docs_readme
+    assert "infrastructure plumbing stay behind helpers" in docs_readme
 
 
 def _imported_module_names(path: Path) -> set[str]:

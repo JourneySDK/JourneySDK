@@ -18,24 +18,35 @@ affected journey or step.
 - If there is no convention, add new specs under `journeys/<feature>_journey.py`.
 - Keep journey specs close to the behavior they verify, but do not add public/private cross-repo dependencies.
 
+## Keep Journeys User-Centered
+
+- Journeys should read like a user flow. The `@journey` function should stay short and describe the story in a few clear steps.
+- Use user-journey step names, such as `create_watch`, `change_watched_page`, or `assert_change_notification`, instead of technical implementation actions.
+- Avoid turning journey files into infrastructure harnesses. Put subprocess management, embedded HTTP servers, raw polling loops, PID files, ports, datastore cleanup, and similar plumbing in helpers, fixtures, Docker Compose, or touchpoints.
+- Technical helpers are acceptable only when they make the Journey spec simpler to read.
+- Use the shortest deterministic route that proves the real user journey. Do not model every setup detail in the journey when a fixture, helper, or touchpoint can provide a readable boundary.
+
 ```python
 from journeysdk import branch, journey, step
+from journeysdk.touchpoints.browser import open_page
+from project.journey_helpers import checkout_demo
 
 
 def open_checkout() -> dict[str, str]:
-    return {"cart_id": "cart_123"}
+    page = open_page(checkout_demo.url())
+    return checkout_demo.open_checkout(page)
 
 
 def clear_basket_and_add_items(context: dict[str, str]) -> dict[str, str]:
-    return {**context, "item_count": "2"}
+    return checkout_demo.clear_basket_and_add_items(context)
 
 
 def complete_card_checkout(context: dict[str, str]) -> None:
-    assert context["item_count"] == "2"
+    checkout_demo.complete_card_checkout(context)
 
 
 def complete_wallet_checkout(context: dict[str, str]) -> None:
-    assert context["item_count"] == "2"
+    checkout_demo.complete_wallet_checkout(context)
 
 
 @journey
@@ -69,6 +80,7 @@ def checkout_journey() -> None:
 
 - Touchpoints are systems a step talks to; steps remain the durable retry/replay boundary.
 - Use official helpers from `journeysdk.touchpoints` for browser, email, webhook, and Docker Compose touchpoints; write app-specific touchpoints as plain Python helper functions when the SDK has no generic helper.
+- Use touchpoints and app-specific helpers to keep specs readable; they should hide low-level setup while Journey steps keep meaningful user-flow boundaries.
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles when later steps need touchpoint state.
 - Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)`, use `page.prompt(..., memory=...)` for bounded UI tasks, and keep recordings enabled unless sensitive data requires `--no-browser-recording`.
