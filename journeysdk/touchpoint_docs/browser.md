@@ -39,6 +39,31 @@ the helper smaller and easier to maintain. Keep prompts specific and include the
 By default, `open_page(...)` records a Playwright trace and video under `.journey/recordings/` for debugging. Disable
 recordings with `journey --no-browser-recording` only when sensitive data should not be written.
 
+Use `journey recordings` from the project root to browse completed browser-recorded cases. Pick a case, then choose
+whether to open a merged Playwright trace, open a merged WebM recording, print the generated artifact paths, go back to
+the case list, or quit.
+
+```bash
+journey recordings
+```
+
+```console
+Recordings
+1. case_1  journey=signup_journey run=8bc31a94e2f1 branches={} steps=3 traces=3 videos=3 started=2026-05-28T12:00:01Z dir=.journey/recordings
+2. case_2  journey=signup_journey run=8bc31a94e2f1 branches={plan=paid} steps=4 traces=4 videos=4 started=2026-05-28T12:01:12Z dir=.journey/recordings
+Select a case number, or q to quit:
+```
+
+After selecting a case:
+
+```console
+case_1: [t] open trace, [v] open video, [p] print paths, [b] back, [q] quit:
+```
+
+Choose `t` to merge the case's step traces into one `.trace.zip` and open it with Playwright Trace Viewer. Choose `v`
+to merge the case's step videos into one `.webm` and open it with the OS video viewer. Choose `p` when you only need
+the generated artifact paths for sharing or later inspection.
+
 ## Replay
 
 `JourneyBrowserPage` stores URL, cookies, and local storage. Reopen it with `open_page(saved_page)` inside a later step.

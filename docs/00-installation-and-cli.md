@@ -84,6 +84,9 @@ downloads Chromium in the active environment. That first launch needs network ac
 Browser steps record Playwright traces and videos by default under `.journey/recordings/`. Use
 `--no-browser-recording` when a run should not write browser debugging artifacts.
 
+After a run, use `journey recordings` from the project root to list recorded cases interactively. The command can merge
+one case into a Playwright-compatible trace archive, open it in Trace Viewer, or merge and open the case WebM recording.
+
 ## Local Development Installs
 
 Install the current checkout with `pip`:

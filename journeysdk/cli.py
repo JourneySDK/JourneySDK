@@ -43,6 +43,15 @@ from .models import (
     StepNode,
 )
 from .planner import compile_journey
+from .recordings import (
+    CaseRecording,
+    RecordingError,
+    discover_recording_cases,
+    ensure_case_trace,
+    ensure_case_video,
+    open_trace_viewer,
+    open_video_recording,
+)
 from .state import (
     default_execution_state_path,
     delete_artifact_root,
@@ -1802,10 +1811,213 @@ def _cmd_touchpoint_docs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_recordings_choice(prompt: str) -> str:
+    _CLI_LOGGER.info("recordings_prompt", prompt, pretty=prompt)
+    return input("").strip().lower()
+
+
+def _recording_case_line(index: int, case: CaseRecording, *, root: Path) -> str:
+    started = case.started_at or "<unknown time>"
+    try:
+        recordings_dir = str(case.recordings_dir.relative_to(root))
+    except ValueError:
+        recordings_dir = str(case.recordings_dir)
+    return (
+        f"{index}. {case.case_id}  journey={case.journey_id} "
+        f"run={case.run_id} branches={case.branch_summary()} "
+        f"steps={case.step_count} traces={case.trace_count} videos={case.video_count} "
+        f"started={started} dir={recordings_dir}"
+    )
+
+
+def _emit_recording_cases(cases: tuple[CaseRecording, ...], *, root: Path) -> None:
+    lines: list[str | object] = [pretty_line("Recordings", style="heading")]
+    lines.extend(
+        _recording_case_line(index, case, root=root)
+        for index, case in enumerate(cases, start=1)
+    )
+    _CLI_LOGGER.info(
+        "recording_cases",
+        "browser recording cases discovered",
+        pretty=lines,
+        cases=len(cases),
+    )
+
+
+def _select_recording_case(
+    cases: tuple[CaseRecording, ...],
+    *,
+    root: Path,
+) -> CaseRecording | None:
+    while True:
+        _emit_recording_cases(cases, root=root)
+        choice = _read_recordings_choice("Select a case number, or q to quit:")
+        if choice == "q":
+            return None
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(cases):
+                return cases[index - 1]
+        _CLI_LOGGER.warning(
+            "recording_invalid_case_selection",
+            "invalid recording case selection",
+            pretty=pretty_line("Choose one of the listed case numbers, or q to quit.", style="warning"),
+            selection=choice,
+        )
+
+
+def _open_case_trace(case: CaseRecording) -> None:
+    artifact = ensure_case_trace(case)
+    action = "created" if artifact.created else "reused"
+    _CLI_LOGGER.info(
+        "recording_trace_open",
+        "opening merged trace",
+        pretty=pretty_line(f"Opening merged trace ({action}): {artifact.path}", style="context"),
+        path=str(artifact.path),
+        created=artifact.created,
+    )
+    open_trace_viewer(artifact.path)
+
+
+def _open_case_video(case: CaseRecording) -> None:
+    artifact = ensure_case_video(case)
+    action = "created" if artifact.created else "reused"
+    _CLI_LOGGER.info(
+        "recording_video_open",
+        "opening merged video",
+        pretty=pretty_line(f"Opening merged video ({action}): {artifact.path}", style="context"),
+        path=str(artifact.path),
+        created=artifact.created,
+    )
+    open_video_recording(artifact.path)
+
+
+def _emit_case_artifact_paths(case: CaseRecording) -> None:
+    lines: list[str | object] = [
+        pretty_line(f"{case.case_id} artifacts", style="heading"),
+    ]
+    for label, ensure in (
+        ("trace", ensure_case_trace),
+        ("video", ensure_case_video),
+    ):
+        try:
+            artifact = ensure(case)
+        except RecordingError as exc:
+            lines.append(f"{label}: unavailable ({exc})")
+            continue
+        action = "created" if artifact.created else "reused"
+        lines.append(f"{label}: {artifact.path} ({action})")
+    _CLI_LOGGER.info(
+        "recording_artifact_paths",
+        "recording artifact paths",
+        pretty=lines,
+        case=case.case_id,
+    )
+
+
+def _recording_action_loop(case: CaseRecording) -> str:
+    while True:
+        choice = _read_recordings_choice(
+            f"{case.case_id}: [t] open trace, [v] open video, [p] print paths, [b] back, [q] quit:"
+        )
+        if choice == "t":
+            try:
+                _open_case_trace(case)
+            except RecordingError as exc:
+                _CLI_LOGGER.warning(
+                    "recording_trace_open_failure",
+                    "could not open merged trace",
+                    pretty=pretty_line(str(exc), style="warning"),
+                    error=str(exc),
+                )
+        elif choice == "v":
+            try:
+                _open_case_video(case)
+            except RecordingError as exc:
+                _CLI_LOGGER.warning(
+                    "recording_video_open_failure",
+                    "could not open merged video",
+                    pretty=pretty_line(str(exc), style="warning"),
+                    error=str(exc),
+                )
+        elif choice == "p":
+            _emit_case_artifact_paths(case)
+        elif choice == "b":
+            return "back"
+        elif choice == "q":
+            return "quit"
+        else:
+            _CLI_LOGGER.warning(
+                "recording_invalid_action",
+                "invalid recording action",
+                pretty=pretty_line("Choose t, v, p, b, or q.", style="warning"),
+                selection=choice,
+            )
+
+
+def _cmd_recordings(args: argparse.Namespace) -> int:
+    root = Path(args.dir).expanduser().resolve()
+    result = discover_recording_cases(root)
+    for warning in result.warnings:
+        _CLI_LOGGER.warning(
+            "recording_manifest_skipped",
+            "skipped browser recording manifest",
+            pretty=pretty_line(warning, style="warning"),
+            warning=warning,
+        )
+    if not result.cases:
+        _CLI_LOGGER.warning(
+            "recording_cases_missing",
+            "no browser recording cases found",
+            pretty=pretty_line(
+                f"No browser recording cases found under {root}.",
+                style="warning",
+            ),
+            root=str(root),
+        )
+        return 1
+
+    while True:
+        case = _select_recording_case(result.cases, root=root)
+        if case is None:
+            return 0
+        outcome = _recording_action_loop(case)
+        if outcome == "quit":
+            return 0
+
+
+def build_recordings_parser() -> argparse.ArgumentParser:
+    parser = _JourneyArgumentParser(
+        prog="journey recordings",
+        description="browse and open browser recordings from completed Journey runs",
+    )
+    parser.add_argument(
+        "--dir",
+        default=".",
+        help="Directory to scan for .journey/recordings artifacts (default: current directory)",
+    )
+    parser.add_argument(
+        "--output",
+        choices=("pretty", "structured", "jsonl"),
+        default="pretty",
+        help="Set Journey output format (default: pretty)",
+    )
+    parser.add_argument(
+        "--log-level",
+        "--level",
+        dest="log_level",
+        choices=("debug", "info", "warning", "error", "off"),
+        default="info",
+        help="Set Journey diagnostic logging level (default: info)",
+    )
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey",
         description="execute decorated journey workflows",
+        epilog="Use 'journey recordings' to browse browser traces and videos from completed runs.",
     )
     parser.add_argument("--file", help="Execute journeys defined in one Python file")
     parser.add_argument(
@@ -1959,6 +2171,11 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         _reexec_with_active_environment(raw_argv)
     _preconfigure_logging(raw_argv)
+    if raw_argv and raw_argv[0] == "recordings":
+        parser = build_recordings_parser()
+        args = parser.parse_args(raw_argv[1:])
+        configure_logging(args.log_level, output_format=args.output)
+        return _cmd_recordings(args)
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.log_level, output_format=args.output)

@@ -1,0 +1,238 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+from types import SimpleNamespace
+import zipfile
+
+import pytest
+
+from journeysdk import recordings
+
+
+def _write_trace_zip(path: Path, *, title: str, resource_body: bytes = b"resource") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "trace.trace",
+            json.dumps(
+                {
+                    "version": 8,
+                    "type": "context-options",
+                    "origin": "library",
+                    "browserName": "chromium",
+                    "playwrightVersion": "1.60.0",
+                    "options": {"viewport": {"width": 1280, "height": 720}},
+                    "platform": "test",
+                    "wallTime": 1,
+                    "monotonicTime": 1,
+                    "sdkLanguage": "python",
+                    "contextId": f"context-{title}",
+                    "title": title,
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "screencast-frame",
+                    "pageId": f"page-{title}",
+                    "sha1": "shared.jpeg",
+                    "width": 1280,
+                    "height": 720,
+                    "timestamp": 2,
+                }
+            )
+            + "\n",
+        )
+        archive.writestr(
+            "trace.network",
+            json.dumps(
+                {
+                    "type": "resource-snapshot",
+                    "snapshot": {
+                        "request": {"method": "GET", "url": "http://example.test"},
+                        "response": {
+                            "status": 200,
+                            "content": {
+                                "mimeType": "image/jpeg",
+                                "_sha1": "shared.jpeg",
+                            },
+                        },
+                    },
+                }
+            )
+            + "\n",
+        )
+        archive.writestr("trace.stacks", json.dumps({"files": [], "stacks": []}))
+        archive.writestr("resources/shared.jpeg", resource_body)
+
+
+def _write_manifest(
+    recordings_dir: Path,
+    *,
+    sequence: int,
+    case_id: str = "case_1",
+    run_id: str = "run123",
+    journey_id: str = "demo_journey",
+    step_name: str | None = None,
+    branch_env: dict[str, str] | None = None,
+) -> Path:
+    step = step_name or f"step_{sequence}"
+    trace_path = recordings_dir / f"{sequence:04d}-{case_id}-{step}.trace.zip"
+    video_path = recordings_dir / f"{sequence:04d}-{case_id}-{step}.webm"
+    _write_trace_zip(trace_path, title=step, resource_body=f"{step} image".encode())
+    video_path.write_bytes(f"{step} video".encode())
+    manifest_path = recordings_dir / f"{sequence:04d}-{case_id}-{step}.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "journey.browser_recording",
+                "version": 1,
+                "status": "success",
+                "started_at": f"2026-05-28T12:00:0{sequence}Z",
+                "stopped_at": f"2026-05-28T12:00:1{sequence}Z",
+                "run_id": run_id,
+                "sequence": sequence,
+                "recording_key": f"{sequence:04d}-{case_id}-{step}-run-{run_id}",
+                "journey_id": journey_id,
+                "function_ref": f"module:{journey_id}",
+                "case_id": case_id,
+                "branch_env": branch_env or {},
+                "step_id": f"node_{sequence}",
+                "step_label": step,
+                "step_name": step,
+                "node_index": sequence,
+                "attempt": 1,
+                "context_index": 1,
+                "browser": "chromium",
+                "headless": True,
+                "initial_url": "http://example.test/start",
+                "final_url": "http://example.test/end",
+                "trace_path": str(trace_path),
+                "video_path": str(video_path),
+                "trace_saved": True,
+                "video_saved": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def test_discover_recording_cases_groups_manifests_and_skips_bad_json(tmp_path: Path):
+    recordings_dir = tmp_path / "journeys" / ".journey" / "recordings"
+    recordings_dir.mkdir(parents=True)
+    _write_manifest(recordings_dir, sequence=1, branch_env={"bg_1": "branch_1"})
+    _write_manifest(recordings_dir, sequence=2, branch_env={"bg_1": "branch_1"})
+    (recordings_dir / "bad.manifest.json").write_text("{", encoding="utf-8")
+
+    result = recordings.discover_recording_cases(tmp_path)
+
+    assert len(result.cases) == 1
+    [case] = result.cases
+    assert case.case_id == "case_1"
+    assert case.journey_id == "demo_journey"
+    assert case.branch_env == {"bg_1": "branch_1"}
+    assert case.step_count == 2
+    assert case.trace_count == 2
+    assert case.video_count == 2
+    assert len(result.warnings) == 1
+    assert "Skipping unreadable browser recording manifest" in result.warnings[0]
+
+
+def test_discover_recording_cases_sorts_cases_alphabetically(tmp_path: Path):
+    recordings_dir = tmp_path / ".journey" / "recordings"
+    _write_manifest(recordings_dir, sequence=1, case_id="case_b")
+    _write_manifest(recordings_dir, sequence=2, case_id="case_a")
+
+    result = recordings.discover_recording_cases(recordings_dir)
+
+    assert [case.case_id for case in result.cases] == ["case_a", "case_b"]
+
+
+def test_ensure_case_trace_merges_playwright_streams_and_reuses_current_artifact(
+    tmp_path: Path,
+):
+    recordings_dir = tmp_path / ".journey" / "recordings"
+    _write_manifest(recordings_dir, sequence=1, step_name="first")
+    _write_manifest(recordings_dir, sequence=2, step_name="second")
+    [case] = recordings.discover_recording_cases(recordings_dir).cases
+
+    created = recordings.ensure_case_trace(case)
+    reused = recordings.ensure_case_trace(case)
+
+    assert created.created is True
+    assert reused.created is False
+    assert created.path == reused.path
+    assert created.path.name == "demo_journey-case_1-run-run123.trace.zip"
+    with zipfile.ZipFile(created.path) as archive:
+        names = set(archive.namelist())
+        assert "0001-first-attempt-1-context-1.trace" in names
+        assert "0001-first-attempt-1-context-1.network" in names
+        assert "0002-second-attempt-1-context-1.trace" in names
+        assert "0002-second-attempt-1-context-1.network" in names
+        assert "resources/shared.jpeg" in names
+        assert "resources/0002-second-attempt-1-context-1-shared.jpeg" in names
+        second_trace = archive.read("0002-second-attempt-1-context-1.trace").decode()
+        assert "0002-second-attempt-1-context-1-shared.jpeg" in second_trace
+
+    manifest = json.loads(created.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["format"] == "journey.case_recording"
+    assert manifest["kind"] == "trace"
+    assert len(manifest["sources"]) == 2
+
+
+def test_ensure_case_trace_regenerates_stale_artifact(tmp_path: Path):
+    recordings_dir = tmp_path / ".journey" / "recordings"
+    _write_manifest(recordings_dir, sequence=1, step_name="first")
+    [case] = recordings.discover_recording_cases(recordings_dir).cases
+    first = recordings.ensure_case_trace(case)
+    first.path.write_text("stale", encoding="utf-8")
+
+    trace_input = case.trace_inputs()[0].trace_path
+    assert trace_input is not None
+    with zipfile.ZipFile(trace_input, "a") as archive:
+        archive.writestr("resources/new.dat", b"new")
+    refreshed_case = recordings.discover_recording_cases(recordings_dir).cases[0]
+    second = recordings.ensure_case_trace(refreshed_case)
+
+    assert second.created is True
+    assert second.path.read_bytes() != b"stale"
+
+
+def test_ensure_case_video_uses_ffmpeg_copy_then_reencode_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recordings_dir = tmp_path / ".journey" / "recordings"
+    _write_manifest(recordings_dir, sequence=1, step_name="first")
+    _write_manifest(recordings_dir, sequence=2, step_name="second")
+    [case] = recordings.discover_recording_cases(recordings_dir).cases
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "imageio_ffmpeg",
+        SimpleNamespace(get_ffmpeg_exe=lambda: "/fake/ffmpeg"),
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *, capture_output: bool, text: bool):
+        del capture_output, text
+        calls.append(cmd)
+        if "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy":
+            return subprocess.CompletedProcess(cmd, 1, stderr="copy failed")
+        assert cmd[-1].endswith(".webm")
+        Path(cmd[-1]).write_bytes(b"merged video")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(recordings.subprocess, "run", fake_run)
+
+    artifact = recordings.ensure_case_video(case)
+    reused = recordings.ensure_case_video(case)
+
+    assert artifact.created is True
+    assert reused.created is False
+    assert artifact.path.read_bytes() == b"merged video"
+    assert calls[0][calls[0].index("-c") + 1] == "copy"
+    assert calls[1][calls[1].index("-c:v") + 1] == "libvpx-vp9"
