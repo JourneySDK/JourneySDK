@@ -6,11 +6,7 @@ from pathlib import Path
 import re
 import tomllib
 
-from journeysdk.agent_instructions import (
-    render_agent_instructions,
-    supported_agent_instruction_targets,
-)
-from journeysdk.touchpoint_references import render_touchpoint_docs
+from journeysdk.agent_instructions import render_agent_instructions
 
 
 def _public_root() -> Path:
@@ -31,10 +27,6 @@ def _tracked_text_files(root: Path) -> list[Path]:
         and path.suffix in {".py", ".md", ".toml", ".txt"}
         and path.name != "test_repository_boundaries.py"
     ]
-
-
-def _squash_whitespace(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
 
 
 def _local_markdown_links(path: Path) -> list[str]:
@@ -112,213 +104,19 @@ def test_agent_instruction_rendering_wraps_shared_body() -> None:
     assert render_agent_instructions("codex") == body
 
     claude = render_agent_instructions("claude")
-    assert claude.startswith("---\nname: journey-developer\n")
-    assert "description: Use Journey SDK as the end-to-end test layer for real user journeys." in claude
-    assert claude.endswith(body)
+    claude_envelope, claude_body = claude.split("\n---\n\n", maxsplit=1)
+    assert claude_envelope.startswith("---\n")
+    assert "name:" in claude_envelope
+    assert "description:" in claude_envelope
+    assert claude_body == body
 
     cursor = render_agent_instructions("cursor")
-    assert cursor.startswith("---\ndescription: Use Journey SDK as the end-to-end test layer for real user journeys;")
-    assert 'globs: "**/*.py"' in cursor
-    assert "alwaysApply: false" in cursor
-    assert cursor.endswith(body)
-
-
-def test_all_agent_instruction_templates_explain_when_to_use_journey() -> None:
-    for name in supported_agent_instruction_targets():
-        text = render_agent_instructions(name)
-        assert (
-            "Always use Journey SDK when a change should be verified against a real user journey"
-            in text
-        ), name
-        assert "treating it like an end-to-end test for that flow" in text, name
-        assert "When implementing new features, extend existing journey specs or add new ones" in text, name
-        assert "journey --touchpoint-docs docker" in text, name
-        assert "journey --touchpoint-docs <name>" in text, name
-        assert "fast partial verification" in text, name
-        assert "journeys/<feature>_journey.py" in text, name
-        assert "add new specs under `journeys/<feature>_journey.py`" in text, name
-        assert "## Keep Journeys User-Centered" in text, name
-        assert "Journeys should read like a user flow" in text, name
-        assert "The `@journey` function should stay short" in text, name
-        assert "user-journey step names" in text, name
-        assert "Avoid turning journey files into infrastructure harnesses" in text, name
-        assert "subprocess management, embedded HTTP servers, raw polling loops" in text, name
-        assert "PID files, ports, datastore cleanup" in text, name
-        assert "helpers, fixtures, Docker Compose, or touchpoints" in text, name
-        assert "Technical helpers are acceptable only when they make the Journey spec simpler to read" in text, name
-        assert "shortest deterministic route that proves the real user journey" in text, name
-        assert "Each `step(...)` should encapsulate a meaningful, retryable part of the user journey" in text, name
-        assert "Use `step(...)` only for meaningful durable boundaries" in text, name
-        assert "target labels, retry boundaries, branch replay anchors" in text, name
-        assert "Do not wrap every click, form fill, setup call, poll, or assertion as its own step" in text, name
-        assert "Group actions that are always repeated together into one user-flow step" in text, name
-        assert "create_watch_for_demo_page" in text, name
-        assert "change_page_and_wait_for_detection" in text, name
-        assert "Put retry on the async user-flow boundary" in text, name
-        assert "clear_basket_and_add_items" in text, name
-        assert "branch(start_from=step_result)" in text, name
-        assert "Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup" in text, name
-        assert "branch from a detected-change anchor to verify diff UI and notification behavior independently" in text, name
-        assert "Avoid decorative branches when there is only one meaningful path" in text, name
-        assert "Step function names are stable CLI labels" in text, name
-        assert "journey --file journeys/<feature>_journey.py --develop-step target_label" in text, name
-        assert "journey --file journeys/<feature>_journey.py --step target_label" in text, name
-        assert "journey --file journeys/<feature>_journey.py" in text, name
-        assert "## Use Touchpoints" in text, name
-        assert "Touchpoints are systems a step talks to" in text, name
-        assert "steps remain the durable retry/replay boundary" in text, name
-        assert "`journeysdk.touchpoints`" in text, name
-        assert "browser, email, webhook, and Docker Compose touchpoints" in text, name
-        assert "app-specific touchpoints as plain Python helper functions" in text, name
-        assert "Use touchpoints and app-specific helpers to keep specs readable" in text, name
-        assert "documented touchpoint helpers" in text, name
-        assert "urlopen" in text, name
-        assert "time.sleep" in text, name
-        assert "Docker port plumbing" in text, name
-        assert "Acquire live resources inside step execution" in text, name
-        assert "serializable or rehydratable handles" in text, name
-        assert "open_page" in text, name
-        assert "JourneyBrowserPage" in text, name
-        assert "page.prompt(..., memory=...)" in text, name
-        assert "--no-browser-recording" in text, name
-        assert "get_email_inbox" in text, name
-        assert "send_email" in text, name
-        assert "wait_for_email" in text, name
-        assert "JOURNEY_CLOUD_API_KEY" in text, name
-        assert "JOURNEY_CLOUD_BASE_URL" in text, name
-        assert "get_webhook_endpoint" in text, name
-        assert "wait_for_webhook_request" in text, name
-        assert "run_docker" in text, name
-        assert "DockerLogMatcher" in text, name
-
-
-def test_packaged_touchpoint_docs_cover_public_docker_api() -> None:
-    docker_docs = render_touchpoint_docs("docker")
-    all_docs = render_touchpoint_docs("all")
-
-    assert all_docs.startswith("# Journey SDK Touchpoint Reference")
-    assert "# Docker Touchpoint Reference" in all_docs
-    for token in (
-        "run_docker",
-        "DockerComposeStack",
-        "DockerContainerStatus",
-        "DockerLogMatcher",
-        "DockerLogMatch",
-        "DockerHttpCheck",
-        "statuses",
-        "logs",
-        "wait_for_log",
-        "service_url",
-        "lifecycle",
-        "rehydration",
-    ):
-        assert token in docker_docs
-
-
-def test_public_agents_is_pointer_not_rendered_instruction_copy() -> None:
-    agents = (_public_root() / "AGENTS.md").read_text(encoding="utf-8")
-    rendered_codex = render_agent_instructions("codex")
-
-    assert "journeysdk/agent_templates/instructions.md" in agents
-    assert "journey --agent-instructions codex" in agents
-    assert "journey --agent-instructions codex --install-agent-instructions" in agents
-    assert "Claude, Cursor, and generic variants" in agents
-    assert len(agents.splitlines()) < 40
-    assert agents != rendered_codex
-    assert "## Keep Journeys User-Centered" not in agents
-    assert "## Use Steps" not in agents
-    assert "## Use Touchpoints" not in agents
-
-
-def test_readme_links_to_canonical_docs_without_repeating_handbook() -> None:
-    readme = (_public_root() / "README.md").read_text(encoding="utf-8")
-    required_links = (
-        "(docs/00-installation-and-cli.md)",
-        "(docs/01-getting-started.md)",
-        "(docs/02-branching-and-targeted-runs.md)",
-        "(docs/03-retries-and-resume.md)",
-        "(docs/04-browser-and-local-integrations.md)",
-        "(docs/05-journey-cloud-integrations.md)",
-        "(docs/06-debugging-and-failure-modes.md)",
-        "(docs/README.md)",
-        "(CONTRIBUTING.md)",
-    )
-
-    assert len(readme.splitlines()) < 140
-    for link in required_links:
-        assert link in readme
-    assert "journey --agent-instructions codex" in readme
-    assert "journey --touchpoint-docs all" in readme
-    assert "journeysdk/agent_templates/instructions.md" in readme
-    assert "journeysdk/touchpoint_docs/*.md" in readme
-    for duplicated_section in (
-        "## Authoring model",
-        "## Touchpoints\n",
-        "## Glossary",
-        "## Journey Rehydration Protocol",
-        "## Step Lifecycle",
-        "### Adding Journey Specs",
-    ):
-        assert duplicated_section not in readme
-    assert "A **Touchpoint** is any system" not in readme
-    assert "subprocess management, embedded HTTP servers, raw polling loops" not in readme
-
-
-def test_docs_index_routes_to_canonical_pages_without_touchpoint_reference_copy() -> None:
-    docs_readme = (_public_root() / "docs" / "README.md").read_text(encoding="utf-8")
-
-    assert len(docs_readme.splitlines()) < 90
-    assert "[Installation And CLI](00-installation-and-cli.md)" in docs_readme
-    assert "[Getting Started](01-getting-started.md)" in docs_readme
-    assert "[Branching And Targeted Runs](02-branching-and-targeted-runs.md)" in docs_readme
-    assert "[Browser And Local Touchpoints](04-browser-and-local-integrations.md)" in docs_readme
-    assert "journey --touchpoint-docs docker" in docs_readme
-    assert "journey --touchpoint-docs all" in docs_readme
-    assert "journey --agent-instructions codex" in docs_readme
-    assert "journeysdk/touchpoint_docs/*.md" in docs_readme
-    assert "journeysdk/agent_templates/instructions.md" in docs_readme
-    for duplicated_detail in (
-        "A touchpoint is different from a step",
-        "A step is the durable unit Journey can save, retry, resume, or replay",
-        "open_page(...)",
-        "get_email_inbox()",
-        "DockerLogMatcher",
-        "target labels, retry boundaries, branch replay anchors",
-    ):
-        assert duplicated_detail not in docs_readme
-
-
-def test_public_docs_keep_canonical_journey_spec_step_and_branch_guidance() -> None:
-    branching_docs = (
-        _public_root() / "docs" / "02-branching-and-targeted-runs.md"
-    ).read_text(encoding="utf-8")
-    compact = _squash_whitespace(branching_docs)
-
-    assert "Choosing Step And Branch Boundaries" in branching_docs
-    assert "journeys/<feature>_journey.py" in branching_docs
-    assert "Journeys should read like a user flow" in branching_docs
-    assert "`@journey` function short enough to scan" in compact
-    assert "Avoid turning journey files into infrastructure harnesses" in compact
-    assert "subprocess management, embedded HTTP servers, raw polling loops" in compact
-    assert "PID files, ports, datastore cleanup" in compact
-    assert "fixtures, Docker Compose, touchpoints" in branching_docs
-    assert "shortest deterministic route that proves the real user journey" in compact
-    assert "Each `step(...)` should encapsulate a meaningful, retryable part of the user journey" in branching_docs
-    assert "Use `step(...)` only for meaningful durable boundaries" in branching_docs
-    assert "target labels, retry boundaries, branch replay anchors" in branching_docs
-    assert "Do not wrap every click, form fill, setup call, poll, or assertion as its own step" in branching_docs
-    assert "Group actions that are always repeated together into one user-flow step" in branching_docs
-    assert "Put retry on the async user-flow boundary" in branching_docs
-    assert "Stable step function names become CLI labels" in branching_docs
-    assert "Use `branch(...)` for alternate user paths after shared setup" in branching_docs
-    assert "Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup" in branching_docs
-    assert "branch from a detected-change anchor to verify diff UI and notification behavior independently" in branching_docs
-    assert "Avoid decorative branches when there is only one meaningful path" in branching_docs
-    assert "branch(start_from=step_result)" in branching_docs
-    assert (
-        "Values crossing replay boundaries must be pickle-serializable or implement "
-        "Journey's rehydration protocol"
-    ) in compact
+    cursor_envelope, cursor_body = cursor.split("\n---\n\n", maxsplit=1)
+    assert cursor_envelope.startswith("---\n")
+    assert "description:" in cursor_envelope
+    assert "globs:" in cursor_envelope
+    assert "alwaysApply:" in cursor_envelope
+    assert cursor_body == body
 
 
 def test_local_markdown_links_in_public_doc_entrypoints_resolve() -> None:

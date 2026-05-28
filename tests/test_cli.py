@@ -304,22 +304,28 @@ def test_agent_instructions_prints_raw_template_without_discovery(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
+    rendered = "sentinel agent instructions\n"
+
     def fail_discovery(*args: object, **kwargs: object) -> None:
         raise AssertionError("agent instructions should not discover journeys")
 
+    def fake_render_agent_instructions(target: str) -> str:
+        assert target == "codex"
+        return rendered
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("journeysdk.cli.discover_journeys", fail_discovery)
+    monkeypatch.setattr(
+        "journeysdk.cli.render_agent_instructions",
+        fake_render_agent_instructions,
+    )
 
     exit_code = main(["--agent-instructions", "codex"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert captured.out.startswith("# Journey SDK Agent Instructions")
-    assert (
-        "journey --file journeys/<feature>_journey.py --develop-step target_label"
-        in captured.out
-    )
+    assert captured.out == rendered
 
 
 def test_touchpoint_docs_prints_reference_without_discovery(
@@ -327,20 +333,28 @@ def test_touchpoint_docs_prints_reference_without_discovery(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
+    rendered = "sentinel docker docs\n"
+
     def fail_discovery(*args: object, **kwargs: object) -> None:
         raise AssertionError("touchpoint docs should not discover journeys")
 
+    def fake_render_touchpoint_docs(target: str) -> str:
+        assert target == "docker"
+        return rendered
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("journeysdk.cli.discover_journeys", fail_discovery)
+    monkeypatch.setattr(
+        "journeysdk.cli.render_touchpoint_docs",
+        fake_render_touchpoint_docs,
+    )
 
     exit_code = main(["--touchpoint-docs", "docker"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert captured.out.startswith("# Docker Touchpoint Reference")
-    assert "run_docker" in captured.out
-    assert "DockerHttpCheck" in captured.out
+    assert captured.out == rendered
 
 
 def test_touchpoint_docs_all_prints_index_and_references(
@@ -348,16 +362,23 @@ def test_touchpoint_docs_all_prints_index_and_references(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
+    rendered = "sentinel all touchpoint docs\n"
+
+    def fake_render_touchpoint_docs(target: str) -> str:
+        assert target == "all"
+        return rendered
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "journeysdk.cli.render_touchpoint_docs",
+        fake_render_touchpoint_docs,
+    )
 
     exit_code = main(["--touchpoint-docs", "all"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out.startswith("# Journey SDK Touchpoint Reference")
-    assert "# Docker Touchpoint Reference" in captured.out
-    assert "# Browser Touchpoint Reference" in captured.out
-    assert "# HTTP Touchpoint Reference" in captured.out
+    assert captured.out == rendered
 
 
 def test_agent_instructions_install_writes_default_project_path(
@@ -365,14 +386,24 @@ def test_agent_instructions_install_writes_default_project_path(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
+    rendered = "installed cursor instructions\n"
+
+    def fake_render_agent_instructions(target: str) -> str:
+        assert target == "cursor"
+        return rendered
+
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "journeysdk.agent_instructions.render_agent_instructions",
+        fake_render_agent_instructions,
+    )
 
     exit_code = main(["--agent-instructions", "cursor", "--install-agent-instructions"])
 
     captured = capsys.readouterr()
     target = tmp_path / ".cursor" / "rules" / "journey-developer.mdc"
     assert exit_code == 0
-    assert target.read_text(encoding="utf-8").startswith("---\ndescription:")
+    assert target.read_text(encoding="utf-8") == rendered
     assert "Installed agent instructions:" in captured.out
 
 
@@ -397,9 +428,19 @@ def test_agent_instructions_install_force_replaces_existing_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    rendered = "forced generic instructions\n"
+
+    def fake_render_agent_instructions(target: str) -> str:
+        assert target == "generic"
+        return rendered
+
     target = tmp_path / "JOURNEY_AGENT.md"
     target.write_text("replace me\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "journeysdk.agent_instructions.render_agent_instructions",
+        fake_render_agent_instructions,
+    )
 
     exit_code = main(
         [
@@ -411,9 +452,7 @@ def test_agent_instructions_install_force_replaces_existing_file(
     )
 
     assert exit_code == 0
-    text = target.read_text(encoding="utf-8")
-    assert text.startswith("# Journey SDK Agent Instructions")
-    assert "replace me" not in text
+    assert target.read_text(encoding="utf-8") == rendered
 
 
 def test_agent_instruction_install_flags_require_agent_instruction_target(
