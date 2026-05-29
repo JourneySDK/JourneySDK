@@ -32,12 +32,12 @@ def shared_after_anchor(context: dict[str, str]) -> dict[str, str]:
     return {"shared": context["token"]}
 
 
-def assert_branch_a(shared: dict[str, str]) -> bool:
+def complete_branch_a_from_anchor(shared: dict[str, str]) -> bool:
     EVENTS.append(f"branch_a_{shared['shared']}")
     return True
 
 
-def assert_branch_b(shared: dict[str, str]) -> bool:
+def complete_branch_b_from_anchor(shared: dict[str, str]) -> bool:
     EVENTS.append(f"branch_b_{shared['shared']}")
     return True
 
@@ -50,6 +50,6 @@ def rehydration_journey() -> None:
     shared = step(shared_after_anchor, context)
 
     if branch(start_from=context):
-        step(assert_branch_a, shared)
+        step(complete_branch_a_from_anchor, shared)
     elif branch(start_from=context):
-        step(assert_branch_b, shared)
+        step(complete_branch_b_from_anchor, shared)

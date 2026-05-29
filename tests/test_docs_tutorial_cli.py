@@ -118,7 +118,7 @@ def test_branching_readme_target_command_reports_replay_anchor(
             "--file",
             "docs/branching_journey/branching_journey.py",
             "--step",
-            "assert_manual_review_path",
+            "queue_manual_review_signup",
         ]
     )
     capture = capsys.readouterr()
@@ -126,7 +126,7 @@ def test_branching_readme_target_command_reports_replay_anchor(
     logs = capture.out
 
     assert exit_code == 0
-    assert "stopped_at=assert_manual_review_path replay_anchor=classify_signup_request" in logs
+    assert "stopped_at=queue_manual_review_signup replay_anchor=classify_signup_request" in logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -142,7 +142,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
             "--file",
             "docs/branching_journey/branching_journey.py",
             "--develop-step",
-            "assert_manual_review_path",
+            "queue_manual_review_signup",
         ]
     )
     capture = capsys.readouterr()
@@ -150,7 +150,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
     logs = capture.out
 
     assert exit_code == 0
-    assert "Development mode stopped after step assert_manual_review_path attempt=1 ok." in logs
+    assert "Development mode stopped after step queue_manual_review_signup attempt=1 ok." in logs
     assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
 
 

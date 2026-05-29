@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from journeysdk import branch, journey, step
 from journeysdk.touchpoints.browser import open_page
-from journeysdk.touchpoints.webhook import get_webhook_endpoint, wait_for_webhook_request
+from journeysdk.touchpoints.webhook import CloudWebhookEndpoint, get_webhook_endpoint, wait_for_webhook_request
 
 _DEMO_PAGE_URL = Path(__file__).with_name("demo_site.html").resolve().as_uri()
 _STORED_FILE_NAME = "stored-message.txt"
@@ -16,7 +16,7 @@ _STORED_FILE_CONTENT = "Stored by the journey demo page.\n"
 _STORED_FILE = Path(tempfile.gettempdir()) / "journey-demo-downloads" / _STORED_FILE_NAME
 
 
-def assert_demo_homepage() -> bool:
+def demo_homepage_ready() -> bool:
     page = open_page(_DEMO_PAGE_URL)
     title = page.title()
     buttons = page.get_by_role("button")
@@ -31,7 +31,7 @@ def assert_demo_homepage() -> bool:
     return True
 
 
-def click_trigger_endpoint_a(endpoint_url: str) -> bool:
+def _click_trigger_endpoint_a(endpoint_url: str) -> None:
     page_url = f"{_DEMO_PAGE_URL}?webhookUrl={quote(endpoint_url, safe='')}"
     page = open_page(page_url)
     page.get_by_role("button", name="Trigger endpoint A").click()
@@ -41,10 +41,9 @@ def click_trigger_endpoint_a(endpoint_url: str) -> bool:
     status_text = page.locator("#status").text_content()
     if status_text != "Endpoint A sent":
         raise AssertionError(f"Expected status 'Endpoint A sent', got '{status_text}'.")
-    return True
 
 
-def click_store_local_file() -> bool:
+def _download_stored_file() -> None:
     _STORED_FILE.parent.mkdir(parents=True, exist_ok=True)
     if _STORED_FILE.exists():
         _STORED_FILE.unlink()
@@ -60,10 +59,9 @@ def click_store_local_file() -> bool:
     status_text = page.locator("#status").text_content()
     if status_text != "Local file saved":
         raise AssertionError(f"Expected status 'Local file saved', got '{status_text}'.")
-    return True
 
 
-def local_file_is_written() -> dict[str, str]:
+def _local_file_contents() -> dict[str, str]:
     if not _STORED_FILE.exists():
         raise FileNotFoundError(f"Local demo file '{_STORED_FILE}' was not downloaded.")
     return {
@@ -72,7 +70,7 @@ def local_file_is_written() -> dict[str, str]:
     }
 
 
-def assert_endpoint_a_webhook(request_payload: dict[str, object]) -> bool:
+def _assert_endpoint_a_webhook(request_payload: dict[str, object]) -> None:
     if request_payload.get("method") != "GET":
         raise AssertionError(f"Expected GET webhook, got {request_payload.get('method')!r}.")
     if request_payload.get("path") != "/endpoint-a":
@@ -82,30 +80,34 @@ def assert_endpoint_a_webhook(request_payload: dict[str, object]) -> bool:
         "source": ["journey_demo"],
     }:
         raise AssertionError(f"Unexpected webhook query: {request_payload.get('query')!r}")
-    return True
 
 
-def assert_local_file_contents(file_info: dict[str, str]) -> bool:
+def _assert_local_file_contents(file_info: dict[str, str]) -> None:
     if file_info.get("content") != _STORED_FILE_CONTENT:
         raise AssertionError(
             f"Expected local file content {_STORED_FILE_CONTENT!r}, got {file_info.get('content')!r}"
         )
+
+
+def trigger_endpoint_a_and_verify_webhook() -> bool:
+    endpoint: CloudWebhookEndpoint = get_webhook_endpoint(path="/endpoint-a")()
+    _click_trigger_endpoint_a(endpoint.url)
+    request_payload = wait_for_webhook_request(path="/endpoint-a")(endpoint)
+    _assert_endpoint_a_webhook(request_payload)
+    return True
+
+
+def store_local_file_and_verify_contents() -> bool:
+    _download_stored_file()
+    _assert_local_file_contents(_local_file_contents())
     return True
 
 
 @journey
 def simple_journey() -> None:
-    after_setup = step(assert_demo_homepage)
+    homepage = step(demo_homepage_ready)
 
-    if branch(start_from=after_setup):
-        endpoint = step(get_webhook_endpoint(path="/endpoint-a"))
-        step(click_trigger_endpoint_a, endpoint.url)
-        request_payload = step(
-            wait_for_webhook_request(path="/endpoint-a"),
-            endpoint,
-        )
-        step(assert_endpoint_a_webhook, request_payload)
-    elif branch(start_from=after_setup):
-        step(click_store_local_file)
-        file_info = step(local_file_is_written)
-        step(assert_local_file_contents, file_info)
+    if branch(start_from=homepage):
+        step(trigger_endpoint_a_and_verify_webhook)
+    elif branch(start_from=homepage):
+        step(store_local_file_and_verify_contents)

@@ -31,15 +31,15 @@ def classify_signup_request(request: dict[str, str]) -> dict[str, str]:
     return classified
 
 
-def assert_fast_track_path(classified: dict[str, str]) -> bool:
-    EVENTS.append(f"assert_fast_track_path:{classified['request_id']}")
+def approve_fast_track_signup(classified: dict[str, str]) -> bool:
+    EVENTS.append(f"approve_fast_track_signup:{classified['request_id']}")
     if classified.get("decision_basis") != "branch_demo":
         raise AssertionError(f"Unexpected decision basis: {classified.get('decision_basis')!r}")
     return True
 
 
-def assert_manual_review_path(classified: dict[str, str]) -> bool:
-    EVENTS.append(f"assert_manual_review_path:{classified['request_id']}")
+def queue_manual_review_signup(classified: dict[str, str]) -> bool:
+    EVENTS.append(f"queue_manual_review_signup:{classified['request_id']}")
     if classified.get("decision_basis") != "branch_demo":
         raise AssertionError(f"Unexpected decision basis: {classified.get('decision_basis')!r}")
     return True
@@ -51,6 +51,6 @@ def branching_journey() -> None:
     classified = step(classify_signup_request, signup_request)
 
     if branch():
-        step(assert_fast_track_path, classified)
+        step(approve_fast_track_signup, classified)
     elif branch(start_from=classified):
-        step(assert_manual_review_path, classified)
+        step(queue_manual_review_signup, classified)

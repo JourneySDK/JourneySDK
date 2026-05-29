@@ -22,32 +22,27 @@ Read these files together:
 - `docs/simple_journey/demo_site.html`
 
 The example opens a local HTML page, branches into a hosted webhook path and a local file path, then uses targeted
-execution to run only the branch under development:
+execution to run only the branch under development. Each branch is one user-flow step: the click, wait, and assertion
+that prove that outcome stay together.
 
 ```python
 from journeysdk import branch, journey, step
-from journeysdk.touchpoints.webhook import get_webhook_endpoint, wait_for_webhook_request
 
 
 @journey
 def simple_journey() -> None:
-    after_setup = step(assert_demo_homepage)
+    homepage = step(demo_homepage_ready)
 
-    if branch(start_from=after_setup):
-        endpoint = step(get_webhook_endpoint(path="/endpoint-a"))
-        step(click_trigger_endpoint_a, endpoint.url)
-        request_payload = step(wait_for_webhook_request(path="/endpoint-a"), endpoint)
-        step(assert_endpoint_a_webhook, request_payload)
-    elif branch(start_from=after_setup):
-        step(click_store_local_file)
-        file_info = step(local_file_is_written)
-        step(assert_local_file_contents, file_info)
+    if branch(start_from=homepage):
+        step(trigger_endpoint_a_and_verify_webhook)
+    elif branch(start_from=homepage):
+        step(store_local_file_and_verify_contents)
 ```
 
 Run only the file branch:
 
 ```bash
-uv run journey --file docs/simple_journey/simple_journey.py --step assert_local_file_contents
+uv run journey --file docs/simple_journey/simple_journey.py --step store_local_file_and_verify_contents
 ```
 
 Use `journey --touchpoint-docs browser` and `journey --touchpoint-docs webhook` for full `open_page(...)`,
@@ -62,7 +57,7 @@ Read these files together:
 - `docs/docker_compose_journey/app/Dockerfile`
 - `docs/docker_compose_journey/app/server.py`
 
-This example starts a tiny HTTP app plus Postgres, captures a branch-anchor snapshot after `capture_baseline_state`,
+This example starts a tiny HTTP app plus Postgres, captures a branch-anchor snapshot after `counter_baseline_ready`,
 then proves two branches can reuse that baseline:
 
 - branch A increments a database-backed counter from `0` to `1`
@@ -77,15 +72,12 @@ from journeysdk import branch, journey, step
 @journey
 def docker_compose_journey() -> None:
     stack = step(start_docker_stack)
-    step(assert_stack_ready, stack)
-    baseline = step(capture_baseline_state, stack)
+    baseline = step(counter_baseline_ready, stack)
 
     if branch(start_from=baseline):
-        incremented = step(increment_counter, stack)
-        step(assert_increment_branch, baseline, incremented)
+        step(increment_counter_and_assert_branch, stack, baseline)
     elif branch(start_from=baseline):
-        restored = step(read_counter_state, stack)
-        step(assert_restored_counter_branch, baseline, restored)
+        step(read_restored_counter_and_assert_branch, stack, baseline)
 ```
 
 Run both Docker branches:
@@ -97,7 +89,7 @@ uv run journey --file docs/docker_compose_journey/docker_compose_journey.py
 Target the restore branch while iterating:
 
 ```bash
-uv run journey --file docs/docker_compose_journey/docker_compose_journey.py --step assert_restored_counter_branch
+uv run journey --file docs/docker_compose_journey/docker_compose_journey.py --step read_restored_counter_and_assert_branch
 ```
 
 Use `journey --touchpoint-docs docker` for `run_docker`, `DockerLogMatcher`, `DockerHttpCheck`,
@@ -175,6 +167,8 @@ structured output details.
 
 - Tutorial journey files show user-flow structure; touchpoint references hold the complete API details.
 - `branch(start_from=...)` lets later cases reuse durable setup from a saved step boundary.
+- Browser, webhook, file, and Docker details belong inside coarse user-flow steps, not as one Journey step per click,
+  poll, or assertion.
 - `--step` and `--develop-step` are the fastest way to iterate on one branch or late user-flow step.
 - Touchpoints remain ordinary Python helpers used from step functions.
 

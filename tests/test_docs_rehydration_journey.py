@@ -21,8 +21,8 @@ def test_rehydration_docs_compile_and_reuse_step_anchor_state():
     plan = journey.compile_journey(rehydration_docs.rehydration_journey)
 
     assert _case_labels(plan) == [
-        ["prepare_context", "shared_after_anchor", "assert_branch_a"],
-        ["prepare_context", "shared_after_anchor", "assert_branch_b"],
+        ["prepare_context", "shared_after_anchor", "complete_branch_a_from_anchor"],
+        ["prepare_context", "shared_after_anchor", "complete_branch_b_from_anchor"],
     ]
 
     rehydration_docs.reset_demo_state()
@@ -44,11 +44,11 @@ def test_rehydration_docs_support_targeted_execution_with_replay_anchor():
 
     report = journey.execute(
         rehydration_docs.rehydration_journey,
-        step="assert_branch_b",
+        step="complete_branch_b_from_anchor",
     )
 
     assert len(report.case_reports) == 1
-    assert report.case_reports[0].stopped_at_label == "assert_branch_b"
+    assert report.case_reports[0].stopped_at_label == "complete_branch_b_from_anchor"
     assert report.case_reports[0].replay_anchor == "prepare_context"
     seed = rehydration_docs.EVENTS[0].split("_")[1]
     assert rehydration_docs.EVENTS == [

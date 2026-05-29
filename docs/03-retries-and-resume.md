@@ -312,6 +312,8 @@ Execution
 - Step anchors define replay boundaries only when used by `branch(start_from=...)` or a step with positive `retry`.
   Retry from a step reruns the anchor step; branch `start_from` resumes from the anchor step's completed post-exit
   state.
+- Keep those boundaries coarse. A step that only clicks one button or checks one line of text usually adds storage,
+  restore, and recording overhead without making retries or later branches faster.
 - Any value that Journey may need to skip or restore later must be pickle-serializable or rehydratable.
 - Persistent state keeps only the saved bindings needed by explicit replay boundaries. Ordinary completed steps are
   rerun from the nearest boundary instead of restored.

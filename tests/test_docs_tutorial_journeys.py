@@ -46,8 +46,7 @@ def test_first_journey_compiles_and_executes_in_order():
     assert _case_labels(plan) == [
         [
             "create_customer_profile",
-            "send_welcome_message",
-            "assert_welcome_message_sent",
+            "send_welcome_message_and_verify_delivery",
         ]
     ]
 
@@ -56,8 +55,7 @@ def test_first_journey_compiles_and_executes_in_order():
     assert [case.case_id for case in report.case_reports] == ["case_1"]
     assert first_docs.EVENTS == [
         "create_customer_profile:cust-001",
-        "send_welcome_message:cust-001",
-        "assert_welcome_message_sent:cust-001",
+        "send_welcome_message_and_verify_delivery:cust-001",
     ]
 
 
@@ -96,27 +94,27 @@ def test_branching_journey_compiles_and_targets_the_manual_path():
         [
             "load_signup_request",
             "classify_signup_request",
-            "assert_fast_track_path",
+            "approve_fast_track_signup",
         ],
         [
             "load_signup_request",
             "classify_signup_request",
-            "assert_manual_review_path",
+            "queue_manual_review_signup",
         ],
     ]
 
     report = journey.execute(
         branching_docs.branching_journey,
-        step="assert_manual_review_path",
+        step="queue_manual_review_signup",
     )
 
     assert len(report.case_reports) == 1
-    assert report.case_reports[0].stopped_at_label == "assert_manual_review_path"
+    assert report.case_reports[0].stopped_at_label == "queue_manual_review_signup"
     assert report.case_reports[0].replay_anchor == "classify_signup_request"
     assert branching_docs.EVENTS == [
         "load_signup_request:signup-001",
         "classify_signup_request:signup-001",
-        "assert_manual_review_path:signup-001",
+        "queue_manual_review_signup:signup-001",
     ]
 
 

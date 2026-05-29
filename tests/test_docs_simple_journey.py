@@ -43,17 +43,17 @@ def test_local_file_helpers_read_and_validate_downloaded_file(
 
     monkeypatch.setattr(simple_journey, "_STORED_FILE", stored_file)
 
-    file_info = simple_journey.local_file_is_written()
+    file_info = simple_journey._local_file_contents()
 
     assert file_info == {
         "path": str(stored_file),
         "content": "Stored by the journey demo page.\n",
     }
-    assert simple_journey.assert_local_file_contents(file_info) is True
+    assert simple_journey._assert_local_file_contents(file_info) is None
 
 
 def test_webhook_assertion_expects_get_query_payload():
-    assert simple_journey.assert_endpoint_a_webhook(
+    assert simple_journey._assert_endpoint_a_webhook(
         {
             "method": "GET",
             "path": "/endpoint-a",
@@ -62,7 +62,7 @@ def test_webhook_assertion_expects_get_query_payload():
                 "source": ["journey_demo"],
             },
         }
-    ) is True
+    ) is None
 
 
 def test_simple_journey_compiles_without_importing_playwright_and_keeps_structure(
@@ -82,17 +82,12 @@ def test_simple_journey_compiles_without_importing_playwright_and_keeps_structur
 
     expected_labels = [
         [
-            "assert_demo_homepage",
-            "get_webhook_endpoint_a",
-            "click_trigger_endpoint_a",
-            "receive_webhook_endpoint_a",
-            "assert_endpoint_a_webhook",
+            "demo_homepage_ready",
+            "trigger_endpoint_a_and_verify_webhook",
         ],
         [
-            "assert_demo_homepage",
-            "click_store_local_file",
-            "local_file_is_written",
-            "assert_local_file_contents",
+            "demo_homepage_ready",
+            "store_local_file_and_verify_contents",
         ],
     ]
     assert _case_labels(first_plan) == expected_labels
@@ -101,26 +96,18 @@ def test_simple_journey_compiles_without_importing_playwright_and_keeps_structur
     homepage_node = next(
         node
         for node in first_plan.case_plans[0].nodes
-        if isinstance(node, StepNode) and node.label == "assert_demo_homepage"
+        if isinstance(node, StepNode) and node.label == "demo_homepage_ready"
     )
-    click_webhook_node = next(
+    webhook_node = next(
         node
         for node in second_plan.case_plans[0].nodes
-        if isinstance(node, StepNode) and node.label == "click_trigger_endpoint_a"
+        if isinstance(node, StepNode) and node.label == "trigger_endpoint_a_and_verify_webhook"
     )
-    click_file_node = next(
+    file_node = next(
         node
         for node in first_plan.case_plans[1].nodes
-        if isinstance(node, StepNode) and node.label == "click_store_local_file"
+        if isinstance(node, StepNode) and node.label == "store_local_file_and_verify_contents"
     )
     assert homepage_node.args == ()
-    assert len(click_webhook_node.args) == 1
-    assert click_file_node.args == ()
-
-    receive_node = next(
-        node
-        for node in first_plan.case_plans[0].nodes
-        if isinstance(node, StepNode) and node.label == "receive_webhook_endpoint_a"
-    )
-    assert len(receive_node.args) == 1
-    assert receive_node.retry is None
+    assert webhook_node.args == ()
+    assert file_node.args == ()

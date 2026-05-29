@@ -89,17 +89,13 @@ def test_docker_compose_example_compiles_without_touching_docker(
         [
             [
                 "start_docker_stack",
-                "assert_stack_ready",
-                "capture_baseline_state",
-                "increment_counter",
-                "assert_increment_branch",
+                "counter_baseline_ready",
+                "increment_counter_and_assert_branch",
             ],
             [
                 "start_docker_stack",
-                "assert_stack_ready",
-                "capture_baseline_state",
-                "read_counter_state",
-                "assert_restored_counter_branch",
+                "counter_baseline_ready",
+                "read_restored_counter_and_assert_branch",
             ],
         ]
     )
@@ -107,23 +103,19 @@ def test_docker_compose_example_compiles_without_touching_docker(
         [
             [
                 "start_docker_stack",
-                "assert_stack_ready",
-                "capture_baseline_state",
-                "increment_counter",
-                "assert_increment_branch",
+                "counter_baseline_ready",
+                "increment_counter_and_assert_branch",
             ],
             [
                 "start_docker_stack",
-                "assert_stack_ready",
-                "capture_baseline_state",
-                "read_counter_state",
-                "assert_restored_counter_branch",
+                "counter_baseline_ready",
+                "read_restored_counter_and_assert_branch",
             ],
         ]
     )
 
 
-def test_capture_baseline_state_reads_counter_payload_without_docker(
+def test_counter_baseline_ready_reads_health_and_counter_payload_without_docker(
     monkeypatch: pytest.MonkeyPatch,
 ):
     requests: list[urllib.request.Request] = []
@@ -131,12 +123,14 @@ def test_capture_baseline_state_reads_counter_payload_without_docker(
     def fake_urlopen(request: urllib.request.Request, timeout: float = 0) -> _FakeHTTPResponse:
         requests.append(request)
         assert timeout == 5
+        if request.full_url.endswith("/health"):
+            return _FakeHTTPResponse({"status": "ok", "database": "ready"})
         return _FakeHTTPResponse({"count": 0, "database": "ready"})
 
     monkeypatch.setenv("JOURNEY_DOCKER_DOCS_PORT", "19090")
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-    baseline = docker_compose_module.capture_baseline_state(_demo_stack())
+    baseline = docker_compose_module.counter_baseline_ready(_demo_stack())
 
     assert baseline == {
         "count": 0,
@@ -144,8 +138,11 @@ def test_capture_baseline_state_reads_counter_payload_without_docker(
         "app_state": "running",
         "db_health": "healthy",
     }
-    assert requests[0].full_url == "http://127.0.0.1:19090/counter"
-    assert requests[0].get_method() == "GET"
+    assert [request.full_url for request in requests] == [
+        "http://127.0.0.1:19090/health",
+        "http://127.0.0.1:19090/counter",
+    ]
+    assert [request.get_method() for request in requests] == ["GET", "GET"]
 
 
 def test_increment_counter_parses_increment_payload_without_docker(
@@ -160,24 +157,40 @@ def test_increment_counter_parses_increment_payload_without_docker(
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
-    incremented = docker_compose_module.increment_counter(_demo_stack())
-
-    assert incremented == {"before": 0, "after": 1}
+    assert (
+        docker_compose_module.increment_counter_and_assert_branch(
+            _demo_stack(),
+            {"count": 0},
+        )
+        is True
+    )
     assert requests[0].full_url == "http://127.0.0.1:18080/counter/increment"
     assert requests[0].get_method() == "POST"
 
 
-def test_assert_restored_counter_branch_checks_restored_baseline_count():
+def test_read_restored_counter_and_assert_branch_checks_restored_baseline_count(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def fake_restored_urlopen(request: urllib.request.Request, timeout: float = 0) -> _FakeHTTPResponse:
+        return _FakeHTTPResponse({"count": 0, "database": "ready"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_restored_urlopen)
+
     assert (
-        docker_compose_module.assert_restored_counter_branch(
+        docker_compose_module.read_restored_counter_and_assert_branch(
+            _demo_stack(),
             {"count": 0},
-            {"count": 0, "database": "ready"},
         )
         is True
     )
 
+    def fake_changed_urlopen(request: urllib.request.Request, timeout: float = 0) -> _FakeHTTPResponse:
+        return _FakeHTTPResponse({"count": 1, "database": "ready"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_changed_urlopen)
+
     with pytest.raises(AssertionError, match="Expected restored counter 0, got 1."):
-        docker_compose_module.assert_restored_counter_branch(
+        docker_compose_module.read_restored_counter_and_assert_branch(
+            _demo_stack(),
             {"count": 0},
-            {"count": 1, "database": "ready"},
         )

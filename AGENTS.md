@@ -18,3 +18,7 @@ journey --agent-instructions codex --install-agent-instructions
 ```
 
 The CLI also renders Claude, Cursor, and generic variants from the same canonical body.
+
+When authoring or reviewing journeys, treat each `step(...)` as a durable replay, retry, target, or state-passing
+boundary. Do not split one real user outcome into separate click/form-fill/poll/assertion steps; put those details in a
+helper and expose one coarse user-flow step.

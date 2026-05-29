@@ -19,13 +19,15 @@ journey files into infrastructure harnesses: subprocess management, embedded HTT
 files, ports, datastore cleanup, and similar plumbing should stay outside the journey spec. Use the shortest
 deterministic route that proves the real user journey.
 
-Each `step(...)` should encapsulate a meaningful, retryable part of the user journey. Prefer names like
-`clear_basket_and_add_items`, `submit_order`, or `assert_confirmation_email` over tiny fragments such as `click_button`.
+Each `step(...)` should encapsulate a meaningful, retryable part of the user journey. A step is a checkpoint that may
+be targeted, retried, stored, or used as a branch replay anchor, so it should earn that checkpoint. Prefer names like
+`clear_basket_and_add_items`, `submit_order`, or `receive_confirmation_email` over tiny fragments such as `click_button`.
 Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and branch replay.
 
 Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
 Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
-Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or `change_page_and_wait_for_detection`.
+Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or
+`change_page_and_wait_for_detection`; put the assertions for that outcome inside the same step.
 Put retry on the async user-flow boundary, not on many tiny follow-up checks.
 
 Use `branch(...)` for alternate user paths after shared setup. Use `branch(start_from=step_result)` when later branch
@@ -50,9 +52,9 @@ def branching_journey() -> None:
     classified = step(classify_signup_request, signup_request)
 
     if branch():
-        step(assert_fast_track_path, classified)
+        step(approve_fast_track_signup, classified)
     elif branch(start_from=classified):
-        step(assert_manual_review_path, classified)
+        step(queue_manual_review_signup, classified)
 ```
 
 Why this shape matters:
@@ -89,14 +91,14 @@ targeted run uses the compiled labels to choose one case.
 ### Run Only the Branch That Reaches One Step
 
 ```bash
-uv run journey --file docs/branching_journey/branching_journey.py --step assert_manual_review_path
+uv run journey --file docs/branching_journey/branching_journey.py --step queue_manual_review_signup
 ```
 
 ```console
 Plan
   docs/branching_journey/branching_journey.py:branching_journey ...
-    case_1  labels: load_signup_request, classify_signup_request, assert_fast_track_path; branches: {bg_1=branch_1}
-    case_2  labels: load_signup_request, classify_signup_request, assert_manual_review_path; branches: {bg_1=branch_2}
+    case_1  labels: load_signup_request, classify_signup_request, approve_fast_track_signup; branches: {bg_1=branch_1}
+    case_2  labels: load_signup_request, classify_signup_request, queue_manual_review_signup; branches: {bg_1=branch_2}
   Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
@@ -106,9 +108,9 @@ Execution
       classify_signup_request  start attempt=1
       classify_signup_request  ok attempt=1 duration=...
       branch bg_1  branch_2
-      assert_manual_review_path  start attempt=1
-      assert_manual_review_path  ok attempt=1 duration=...
-    case_2 done steps=3 duration=... stopped_at=assert_manual_review_path replay_anchor=classify_signup_request
+      queue_manual_review_signup  start attempt=1
+      queue_manual_review_signup  ok attempt=1 duration=...
+    case_2 done steps=3 duration=... stopped_at=queue_manual_review_signup replay_anchor=classify_signup_request
   Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -119,18 +121,18 @@ from the selected case's beginning.
 ### Stop After the Target Step While You Iterate
 
 ```bash
-uv run journey --file docs/branching_journey/branching_journey.py --develop-step assert_manual_review_path
+uv run journey --file docs/branching_journey/branching_journey.py --develop-step queue_manual_review_signup
 ```
 
 ```console
 Plan
   docs/branching_journey/branching_journey.py:branching_journey ...
-    case_1  labels: load_signup_request, classify_signup_request, assert_fast_track_path; branches: {bg_1=branch_1}
-    case_2  labels: load_signup_request, classify_signup_request, assert_manual_review_path; branches: {bg_1=branch_2}
+    case_1  labels: load_signup_request, classify_signup_request, approve_fast_track_signup; branches: {bg_1=branch_1}
+    case_2  labels: load_signup_request, classify_signup_request, queue_manual_review_signup; branches: {bg_1=branch_2}
   Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Development mode stopped after step assert_manual_review_path attempt=1 ok.
+Development mode stopped after step queue_manual_review_signup attempt=1 ok.
   Summary: 0 journeys executed, 0 cases executed, 0 failed
 ```
 
@@ -157,9 +159,9 @@ def rehydration_journey() -> None:
     shared = step(shared_after_anchor, context)
 
     if branch(start_from=context):
-        step(assert_branch_a, shared)
+        step(complete_branch_a_from_anchor, shared)
     elif branch(start_from=context):
-        step(assert_branch_b, shared)
+        step(complete_branch_b_from_anchor, shared)
 ```
 
 This example is intentionally small. It exists to show one idea clearly: in a full multi-case run, later branches can
@@ -171,14 +173,14 @@ only when a later branch actually starts from the anchor's post-exit boundary.
 ### Target the Second Branch
 
 ```bash
-uv run journey --file docs/rehydration_journey/rehydration_journey.py --step assert_branch_b
+uv run journey --file docs/rehydration_journey/rehydration_journey.py --step complete_branch_b_from_anchor
 ```
 
 ```console
 Plan
   docs/rehydration_journey/rehydration_journey.py:rehydration_journey ...
-    case_1  labels: prepare_context, shared_after_anchor, assert_branch_a; branches: {bg_1=branch_1}
-    case_2  labels: prepare_context, shared_after_anchor, assert_branch_b; branches: {bg_1=branch_2}
+    case_1  labels: prepare_context, shared_after_anchor, complete_branch_a_from_anchor; branches: {bg_1=branch_1}
+    case_2  labels: prepare_context, shared_after_anchor, complete_branch_b_from_anchor; branches: {bg_1=branch_2}
   Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
@@ -186,8 +188,8 @@ Execution
       prepare_context  ok attempt=1 duration=...
       shared_after_anchor  ok attempt=1 duration=...
       branch bg_1  branch_2
-      assert_branch_b  ok attempt=1 duration=...
-    case_2 done steps=3 duration=... stopped_at=assert_branch_b replay_anchor=prepare_context
+      complete_branch_b_from_anchor  ok attempt=1 duration=...
+    case_2 done steps=3 duration=... stopped_at=complete_branch_b_from_anchor replay_anchor=prepare_context
   Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -200,6 +202,8 @@ retry behavior causes replay.
 - Authoring stays sequential, even when execution becomes multi-case.
 - Branch `start_from` points to an earlier step result, and later branch cases can resume from that step's post-exit
   boundary.
+- Coarse steps make those boundaries useful. Tiny click/assertion steps add state and recording overhead without giving
+  later branches a better resume point.
 - External replay behavior lives on values themselves through `__store__` / `__restore__`, but those hooks run only
   when an explicit replay boundary needs that value.
 - `--step` picks one case. `--develop-step` picks one case and stops after the target so you can iterate faster.

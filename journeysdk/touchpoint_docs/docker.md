@@ -20,7 +20,9 @@ reference before writing Docker-backed journeys.
 ## Authoring Pattern
 
 Wrap `run_docker(...)` in one named journey step when starting the app is a meaningful durable boundary. Keep Compose
-file details, service names, readiness checks, and host port lookup in helpers, not in the `@journey` function.
+file details, service names, readiness checks, and host port lookup in helpers, not in the `@journey` function. After
+the stack starts, choose coarse app-state anchors such as "workspace ready" or "baseline data created"; do not create a
+Journey step for each Docker health check, HTTP call, poll, or assertion.
 
 ```python
 from journeysdk.touchpoints.docker import DockerHttpCheck, run_docker
@@ -53,7 +55,8 @@ run_docker(
 
 `DockerComposeStack` implements Journey rehydration. When a later `branch(start_from=...)` or `retry_from=...` boundary
 needs to replay Docker state, Journey stores and restores Docker-managed volume contents. Keep durable app state in
-Docker-managed volumes when branch replay matters.
+Docker-managed volumes when branch replay matters, and put `branch(start_from=...)` only on checkpoints worth restoring
+from.
 
 Journey stops the Compose project at case exit with `docker compose down --remove-orphans` and preserves volumes by
 default. Snapshot payloads live under `.journey` with other Journey state.

@@ -13,6 +13,7 @@ one journey when you need script-friendly JSONL output.
 - Pass step results explicitly into later steps.
 - Treat every step as an execution boundary. Only explicit replay boundaries store rehydratable state:
   `branch(start_from=...)` and steps with a positive `retry=...`.
+- A step earns its checkpoint. Do not make a step for every click, form fill, poll, helper call, or assertion.
 - Size steps around durable procedures, not individual clicks, API calls, and assertions. A step should usually perform
   one end-to-end piece of the user journey and verify the outcome it owns, especially when Docker or browser
   touchpoints make replay boundaries expensive.
@@ -40,15 +41,13 @@ from journeysdk import journey, step
 @journey
 def first_journey() -> None:
     profile = step(create_customer_profile)
-    message = step(send_welcome_message, profile)
-    step(assert_welcome_message_sent, message)
+    step(send_welcome_message_and_verify_delivery, profile)
 ```
 
 That is the whole authored flow. The helper functions in the same file do the real work:
 
 - `create_customer_profile()` returns a customer payload
-- `send_welcome_message(profile)` uses that payload
-- `assert_welcome_message_sent(message)` validates the result
+- `send_welcome_message_and_verify_delivery(profile)` uses that payload and validates delivery
 
 ### Run It
 
@@ -111,6 +110,7 @@ uv run journey --file docs/selection_journeys/selection_journeys.py --journey in
 ## What To Notice
 
 - Step outputs stay explicit. The second step receives the first step's return value directly.
+- Assertions usually live inside the user-flow step that owns the outcome instead of becoming tiny standalone steps.
 - `--journey` is the easiest way to work in a file that holds several flows.
 - `--output jsonl` is for tooling and CI. The default pretty output is better for humans during local development.
 

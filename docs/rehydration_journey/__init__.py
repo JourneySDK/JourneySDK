@@ -2,8 +2,8 @@
 
 from .rehydration_journey import (
     EVENTS,
-    assert_branch_a,
-    assert_branch_b,
+    complete_branch_a_from_anchor,
+    complete_branch_b_from_anchor,
     next_external_payload,
     prepare_context,
     rehydration_journey,
@@ -13,8 +13,8 @@ from .rehydration_journey import (
 
 __all__ = [
     "EVENTS",
-    "assert_branch_a",
-    "assert_branch_b",
+    "complete_branch_a_from_anchor",
+    "complete_branch_b_from_anchor",
     "next_external_payload",
     "prepare_context",
     "rehydration_journey",

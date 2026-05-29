@@ -2,20 +2,20 @@
 
 from .branching_journey import (
     EVENTS,
-    assert_fast_track_path,
-    assert_manual_review_path,
+    approve_fast_track_signup,
     branching_journey,
     classify_signup_request,
     load_signup_request,
+    queue_manual_review_signup,
     reset_demo_state,
 )
 
 __all__ = [
     "EVENTS",
-    "assert_fast_track_path",
-    "assert_manual_review_path",
+    "approve_fast_track_signup",
     "branching_journey",
     "classify_signup_request",
     "load_signup_request",
+    "queue_manual_review_signup",
     "reset_demo_state",
 ]

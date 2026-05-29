@@ -127,7 +127,7 @@ def _parse_increment_payload(
     }
 
 
-def assert_stack_ready(stack: DockerComposeStack) -> bool:
+def _assert_stack_ready(stack: DockerComposeStack) -> None:
     """Confirm that the demo app and database are healthy before snapshotting."""
 
     app_status = _require_service_status(stack, "app")
@@ -150,10 +150,9 @@ def assert_stack_ready(stack: DockerComposeStack) -> bool:
         raise AssertionError(
             "Expected Docker demo /health endpoint to report status='ok' and database='ready'."
         )
-    return True
 
 
-def capture_baseline_state(stack: DockerComposeStack) -> dict[str, object]:
+def _capture_baseline_state(stack: DockerComposeStack) -> dict[str, object]:
     """Read one small serializable baseline payload from the running app."""
 
     app_status = _require_service_status(stack, "app")
@@ -170,7 +169,7 @@ def capture_baseline_state(stack: DockerComposeStack) -> dict[str, object]:
     }
 
 
-def increment_counter(stack: DockerComposeStack) -> dict[str, int]:
+def _increment_counter(stack: DockerComposeStack) -> dict[str, int]:
     """Mutate the app+db state in one branch."""
 
     return _parse_increment_payload(
@@ -179,7 +178,7 @@ def increment_counter(stack: DockerComposeStack) -> dict[str, int]:
     )
 
 
-def read_counter_state(stack: DockerComposeStack) -> dict[str, object]:
+def _read_counter_state(stack: DockerComposeStack) -> dict[str, object]:
     """Read the counter after Journey restores the saved Docker snapshot."""
 
     return _parse_counter_payload(
@@ -188,10 +187,10 @@ def read_counter_state(stack: DockerComposeStack) -> dict[str, object]:
     )
 
 
-def assert_increment_branch(
+def _assert_increment_branch(
     baseline: Mapping[str, object],
     incremented: Mapping[str, object],
-) -> bool:
+) -> None:
     """Confirm that the mutation branch changed the database-backed counter."""
 
     baseline_count = _require_int_field(
@@ -213,13 +212,12 @@ def assert_increment_branch(
         raise AssertionError(
             f"Expected counter transition {baseline_count}->{baseline_count + 1}, got {before}->{after}."
         )
-    return True
 
 
-def assert_restored_counter_branch(
+def _assert_restored_counter_branch(
     baseline: Mapping[str, object],
     restored: Mapping[str, object],
-) -> bool:
+) -> None:
     """Confirm that the rewind branch sees the original baseline state again."""
 
     baseline_count = _require_int_field(
@@ -236,7 +234,6 @@ def assert_restored_counter_branch(
         raise AssertionError(
             f"Expected restored counter {baseline_count}, got {restored_count}."
         )
-    return True
 
 
 def start_docker_stack() -> DockerComposeStack:
@@ -254,14 +251,32 @@ def start_docker_stack() -> DockerComposeStack:
     )
 
 
+def counter_baseline_ready(stack: DockerComposeStack) -> dict[str, object]:
+    _assert_stack_ready(stack)
+    return _capture_baseline_state(stack)
+
+
+def increment_counter_and_assert_branch(
+    stack: DockerComposeStack,
+    baseline: Mapping[str, object],
+) -> bool:
+    _assert_increment_branch(baseline, _increment_counter(stack))
+    return True
+
+
+def read_restored_counter_and_assert_branch(
+    stack: DockerComposeStack,
+    baseline: Mapping[str, object],
+) -> bool:
+    _assert_restored_counter_branch(baseline, _read_counter_state(stack))
+    return True
+
+
 @journey
 def docker_compose_journey() -> None:
     stack = step(start_docker_stack)
-    step(assert_stack_ready, stack)
-    baseline = step(capture_baseline_state, stack)
+    baseline = step(counter_baseline_ready, stack)
     if branch(start_from=baseline):
-        incremented = step(increment_counter, stack)
-        step(assert_increment_branch, baseline, incremented)
+        step(increment_counter_and_assert_branch, stack, baseline)
     elif branch(start_from=baseline):
-        restored = step(read_counter_state, stack)
-        step(assert_restored_counter_branch, baseline, restored)
+        step(read_restored_counter_and_assert_branch, stack, baseline)

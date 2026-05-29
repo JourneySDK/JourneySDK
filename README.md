@@ -9,8 +9,8 @@ other systems that participate in a user flow.
 ## Why Journey
 
 - **One Python journey for meaningful user paths**: author the shared setup once and use `branch()` for alternate paths.
-- **Fast replay from durable boundaries**: use `branch(start_from=...)`, retries, and state so late steps can be
-  developed without rerunning every expensive setup action.
+- **Fast replay from durable boundaries**: make each step earn its checkpoint, then use `branch(start_from=...)`,
+  retries, and state so late user-flow steps can be developed without rerunning every expensive setup action.
 - **Touchpoints for real systems**: drive the browser, start Docker Compose apps, wait for email or webhooks, and keep
   app-specific checks in ordinary Python helpers.
 - **Agent-friendly CLI loops**: coding assistants can run one target step with `--develop-step`, retry it after edits,
@@ -53,7 +53,8 @@ running one file, selecting one journey, and JSON Lines output for tools.
 ## Authoring Guides
 
 - [Branching and Targeted Runs](docs/02-branching-and-targeted-runs.md): canonical guidance for adding journey specs,
-  choosing durable step boundaries, using `branch(start_from=...)`, and iterating with `--step` and `--develop-step`.
+  choosing coarse durable step boundaries, using `branch(start_from=...)`, and iterating with `--step` and
+  `--develop-step`.
 - [Retries and Resume](docs/03-retries-and-resume.md): retry boundaries, interrupted runs, default state, and resume.
 - [Browser and Local Touchpoints](docs/04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
   browser prompt tutorials.

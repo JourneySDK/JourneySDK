@@ -20,8 +20,8 @@ affected journey or step.
 
 ## Keep Journeys User-Centered
 
-- Journeys should read like a user flow. The `@journey` function should stay short and describe the story in a few clear steps.
-- Use user-journey step names, such as `create_watch`, `change_watched_page`, or `assert_change_notification`, instead of technical implementation actions.
+- Journeys should read like a user flow. The `@journey` function should stay short and describe the story in a few clear, durable steps.
+- Use user-journey step names, such as `create_watch`, `change_watched_page`, or `deliver_change_notification`, instead of technical implementation actions.
 - Avoid turning journey files into infrastructure harnesses. Put subprocess management, embedded HTTP servers, raw polling loops, PID files, ports, datastore cleanup, and similar plumbing in helpers, fixtures, Docker Compose, or touchpoints.
 - Technical helpers are acceptable only when they make the Journey spec simpler to read.
 - Use the shortest deterministic route that proves the real user journey. Do not model every setup detail in the journey when a fixture, helper, or touchpoint can provide a readable boundary.
@@ -43,12 +43,12 @@ def change_page_and_wait_for_detection(watch):
     return changedetection_demo.change_page_and_wait_for_detection(watch)
 
 
-def assert_diff_visible_to_user(detected_change):
-    changedetection_demo.assert_diff_visible_to_user(detected_change)
+def review_detected_diff(detected_change):
+    changedetection_demo.review_detected_diff(detected_change)
 
 
-def assert_notification_sent(detected_change):
-    changedetection_demo.assert_notification_sent(detected_change)
+def deliver_change_notification(detected_change):
+    changedetection_demo.deliver_change_notification(detected_change)
 
 
 @journey
@@ -58,18 +58,19 @@ def changedetection_core_journey() -> None:
     detected = step(change_page_and_wait_for_detection, watch, retry=30, retry_delay=2)
 
     if branch(start_from=detected):
-        step(assert_diff_visible_to_user, detected)
+        step(review_detected_diff, detected)
     elif branch(start_from=detected):
-        step(assert_notification_sent, detected)
+        step(deliver_change_notification, detected)
 ```
 
 ## Use Steps
 
-- Each `step(...)` should encapsulate a meaningful, retryable part of the user journey, such as `clear_basket_and_add_items`, `submit_order`, or `assert_confirmation_email`.
-- Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
-- Avoid tiny implementation fragments like `click_button` or `assert_text` unless that action is itself the durable user-journey boundary.
+- Each `step(...)` should encapsulate a meaningful, retryable part of the user journey, such as `clear_basket_and_add_items`, `submit_order_and_verify_confirmation`, or `receive_confirmation_email`.
+- A step earns a checkpoint. Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
+- Avoid tiny implementation fragments like `click_button`, `fill_form`, or `assert_text` unless that action is itself the durable user-journey boundary.
 - Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
 - Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or `change_page_and_wait_for_detection`.
+- Put assertions inside the user-flow step that owns the outcome when they are not useful independent replay anchors.
 - Put retry on the async user-flow boundary, not on many tiny follow-up checks.
 - Prefer explicit top-level step functions over lambdas or nested closures.
 - Step function names are stable CLI labels used by `--step`, `--develop-step`, state files, retries, and branch replay. Rename them only when updating those references intentionally.
@@ -88,17 +89,17 @@ def changedetection_core_journey() -> None:
 
 ## Use Touchpoints
 
-- Touchpoints are systems a step talks to; steps remain the durable retry/replay boundary.
+- Touchpoints are systems a step talks to; steps remain the coarse durable retry/replay boundary.
 - Before using an official touchpoint, run `journey --touchpoint-docs <name>` and follow that reference. For Docker-backed apps, run `journey --touchpoint-docs docker`.
 - Use official helpers from `journeysdk.touchpoints` for browser, email, webhook, and Docker Compose touchpoints; write app-specific touchpoints as plain Python helper functions when the SDK has no generic helper.
 - Use touchpoints and app-specific helpers to keep specs readable; they should hide low-level setup while Journey steps keep meaningful user-flow boundaries.
 - Prefer documented touchpoint helpers over hand-written `urlopen`, `time.sleep`, Docker port plumbing, raw selectors, or custom polling.
 - Acquire live resources inside step execution, not at module import or between steps.
-- Return serializable or rehydratable handles when later steps need touchpoint state.
-- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)`, use `page.prompt(..., memory=...)` for bounded UI tasks, and keep recordings enabled unless sensitive data requires `--no-browser-recording`.
+- Return serializable or rehydratable handles only when later steps need touchpoint state.
+- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, and keep recordings enabled unless sensitive data requires `--no-browser-recording`.
 - Email: use `step(get_email_inbox())`, `step(send_email(...))`, and `step(wait_for_email(...), inbox, retry=..., retry_delay=...)`; set `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL`.
 - Webhook: use `step(get_webhook_endpoint(path=...))`, pass `endpoint.url` to the app under test, then use `step(wait_for_webhook_request(path=...), endpoint, retry=..., retry_delay=...)`.
-- Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, and use later `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
+- Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, and use later coarse `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
 
 ## Quick Verification Loop
 

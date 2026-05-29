@@ -12,7 +12,8 @@ Use the browser touchpoint when a step needs to act through the UI or preserve a
 
 ## Authoring Pattern
 
-Call `open_page(...)` inside a step function, never at module import time or while planning. Return a
+Call `open_page(...)` inside a coarse user-flow step function, never at module import time or while planning. Do not
+split one browser outcome into one Journey step per click, form fill, wait, and assertion. Return a
 `JourneyBrowserPage` only when later steps should reopen the same browser state:
 
 ```python
@@ -67,4 +68,5 @@ the generated artifact paths for sharing or later inspection.
 ## Replay
 
 `JourneyBrowserPage` stores URL, cookies, and local storage. Reopen it with `open_page(saved_page)` inside a later step.
-Do not pass live Playwright objects through step results.
+Do that only when the later step needs the same browser state as a real replay boundary. Do not pass live Playwright
+objects through step results.
