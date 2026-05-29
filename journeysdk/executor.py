@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 import re
+import shutil
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -356,11 +357,14 @@ class _BrowserRecordingController:
         *,
         enabled: bool,
         root: Path,
+        clean_existing: bool,
     ) -> None:
         self.enabled = enabled
         self.root = root
         self.run_id = uuid4().hex[:12]
         self._sequence = 0
+        if clean_existing:
+            _clean_browser_recording_root(root)
 
     def allocate(
         self,
@@ -402,6 +406,13 @@ class _BrowserRecordingController:
             node_index=node_index,
             attempt=attempt,
         )
+
+
+def _clean_browser_recording_root(root: Path) -> None:
+    if root.is_symlink() or root.is_file():
+        root.unlink(missing_ok=True)
+        return
+    shutil.rmtree(root, ignore_errors=True)
 
 
 @dataclass(frozen=True)
@@ -3805,6 +3816,7 @@ def _execute_plan(
     no_memory: bool = False,
     no_memory_update: bool = False,
     no_browser_recording: bool = False,
+    clean_browser_recordings: bool = True,
     prompt_memory_root: str | Path | None = None,
 ) -> ExecutionReport | _PausedExecution:
     if no_state and state is not None:
@@ -3869,6 +3881,7 @@ def _execute_plan(
     browser_recording_controller = _BrowserRecordingController(
         enabled=not no_browser_recording,
         root=_resolve_browser_recording_root(journey_fn),
+        clean_existing=clean_browser_recordings,
     )
 
     case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
@@ -4035,6 +4048,7 @@ def execute(
     no_memory: bool = False,
     no_memory_update: bool = False,
     no_browser_recording: bool = False,
+    clean_browser_recordings: bool = True,
 ) -> ExecutionReport:
     """Compile a journey and execute full cases or one targeted step flow.
 
@@ -4047,6 +4061,7 @@ def execute(
         no_memory: Disable prompt-memory reads and writes for this run.
         no_memory_update: Disable prompt-memory writes while still allowing reads.
         no_browser_recording: Disable browser trace/video artifacts for this run.
+        clean_browser_recordings: Remove existing browser recordings before this run.
     """
 
     plan = compile_journey(journey_fn)
@@ -4060,4 +4075,5 @@ def execute(
         no_memory=no_memory,
         no_memory_update=no_memory_update,
         no_browser_recording=no_browser_recording,
+        clean_browser_recordings=clean_browser_recordings,
     )

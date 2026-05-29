@@ -38,11 +38,12 @@ the helper smaller and easier to maintain. Keep prompts specific and include the
 ## Recordings
 
 By default, `open_page(...)` records a Playwright trace and video under `.journey/recordings/` for debugging. Disable
-recordings with `journey --no-browser-recording` only when sensitive data should not be written.
+recordings with `journey --no-browser-recording` only when sensitive data should not be written. Journey clears existing
+browser recordings at the start of a run so the browser recording list reflects the current run.
 
 Use `journey recordings` from the project root to browse completed browser-recorded cases. Pick a case, then choose
 whether to open a merged Playwright trace, open a merged WebM recording, print the generated artifact paths, go back to
-the case list, or quit.
+the case list, or quit. Choose the all-cases entry to open or print one unified trace/video for the whole execution.
 
 ```bash
 journey recordings
@@ -50,19 +51,20 @@ journey recordings
 
 ```console
 Recordings
+a. all cases  journey=signup_journey run=8bc31a94e2f1 cases=2 steps=7 traces=7 videos=7 started=2026-05-28T12:00:01Z dir=.journey/recordings
 1. case_1  journey=signup_journey run=8bc31a94e2f1 branches={} steps=3 traces=3 videos=3 started=2026-05-28T12:00:01Z dir=.journey/recordings
 2. case_2  journey=signup_journey run=8bc31a94e2f1 branches={plan=paid} steps=4 traces=4 videos=4 started=2026-05-28T12:01:12Z dir=.journey/recordings
-Select a case number, or q to quit:
+Select a case number, a for all cases, or q to quit:
 ```
 
-After selecting a case:
+After selecting a case or the all-cases entry:
 
 ```console
 case_1: [t] open trace, [v] open video, [p] print paths, [b] back, [q] quit:
 ```
 
-Choose `t` to merge the case's step traces into one `.trace.zip` and open it with Playwright Trace Viewer. Choose `v`
-to merge the case's step videos into one `.webm` and open it with the OS video viewer. Choose `p` when you only need
+Choose `t` to merge the selected case or execution traces into one `.trace.zip` and open it with Playwright Trace
+Viewer. Choose `v` to merge videos into one `.webm` and open it with the OS video viewer. Choose `p` when you only need
 the generated artifact paths for sharing or later inspection.
 
 ## Replay

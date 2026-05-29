@@ -1514,6 +1514,35 @@ def test_open_page_records_trace_video_and_manifest_by_default(
     assert recording_logs[0]["manifest_path"] == str(manifests[0])
 
 
+def test_execute_cleans_previous_browser_recordings_before_run(monkeypatch):
+    root = _browser_recording_root()
+    root.mkdir(parents=True)
+    old_manifest = root / "0001-case_1-old-attempt-1-context-1-run-old.manifest.json"
+    old_manifest.write_text("{}", encoding="utf-8")
+
+    events: list[object] = []
+    _install_fake_playwright(
+        monkeypatch,
+        events,
+        record_recording_events=True,
+    )
+
+    def open_login() -> journey_browser.JourneyBrowserPage:
+        return journey_browser.open_page("http://example.test/login")
+
+    def journey():
+        journey_sdk.step(open_login)
+
+    journey_sdk.execute(journey, no_state=True)
+
+    manifests = sorted(root.glob("*.manifest.json"))
+    assert not old_manifest.exists()
+    assert len(manifests) == 1
+    assert manifests[0].name.startswith(
+        "0001-case_1-open_login-attempt-1-context-1-run-"
+    )
+
+
 def test_open_page_records_flat_incrementing_files_for_multiple_contexts(monkeypatch):
     events: list[object] = []
     _install_fake_playwright(
@@ -1546,6 +1575,10 @@ def test_open_page_records_flat_incrementing_files_for_multiple_contexts(monkeyp
 
 
 def test_execute_can_disable_browser_recording(monkeypatch):
+    root = _browser_recording_root()
+    root.mkdir(parents=True)
+    (root / "old.manifest.json").write_text("{}", encoding="utf-8")
+
     events: list[object] = []
     _install_fake_playwright(
         monkeypatch,

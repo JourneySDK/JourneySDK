@@ -152,6 +152,25 @@ def test_discover_recording_cases_sorts_cases_alphabetically(tmp_path: Path):
     assert [case.case_id for case in result.cases] == ["case_a", "case_b"]
 
 
+def test_discover_recording_cases_groups_cases_into_executions(tmp_path: Path):
+    recordings_dir = tmp_path / ".journey" / "recordings"
+    _write_manifest(recordings_dir, sequence=1, case_id="case_b")
+    _write_manifest(recordings_dir, sequence=2, case_id="case_a")
+    _write_manifest(recordings_dir, sequence=3, case_id="case_old", run_id="oldrun")
+
+    result = recordings.discover_recording_cases(recordings_dir)
+
+    assert len(result.executions) == 2
+    current = [
+        execution for execution in result.executions if execution.run_id == "run123"
+    ][0]
+    assert current.case_count == 2
+    assert current.step_count == 2
+    assert current.trace_count == 2
+    assert current.video_count == 2
+    assert [manifest.sequence for manifest in current.manifests] == [1, 2]
+
+
 def test_ensure_case_trace_merges_playwright_streams_and_reuses_current_artifact(
     tmp_path: Path,
 ):
@@ -181,6 +200,31 @@ def test_ensure_case_trace_merges_playwright_streams_and_reuses_current_artifact
     manifest = json.loads(created.manifest_path.read_text(encoding="utf-8"))
     assert manifest["format"] == "journey.case_recording"
     assert manifest["kind"] == "trace"
+    assert len(manifest["sources"]) == 2
+
+
+def test_ensure_execution_trace_merges_all_cases_in_sequence(tmp_path: Path):
+    recordings_dir = tmp_path / ".journey" / "recordings"
+    _write_manifest(recordings_dir, sequence=1, case_id="case_b", step_name="first")
+    _write_manifest(recordings_dir, sequence=2, case_id="case_a", step_name="second")
+    [execution] = recordings.discover_recording_cases(recordings_dir).executions
+
+    created = recordings.ensure_execution_trace(execution)
+    reused = recordings.ensure_execution_trace(execution)
+
+    assert created.created is True
+    assert reused.created is False
+    assert created.path == reused.path
+    assert created.path.name == "demo_journey-run-run123.trace.zip"
+    with zipfile.ZipFile(created.path) as archive:
+        names = set(archive.namelist())
+        assert "0001-first-attempt-1-context-1.trace" in names
+        assert "0002-second-attempt-1-context-1.trace" in names
+
+    manifest = json.loads(created.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["format"] == "journey.execution_recording"
+    assert manifest["kind"] == "trace"
+    assert manifest["case_ids"] == ["case_b", "case_a"]
     assert len(manifest["sources"]) == 2
 
 
@@ -236,3 +280,41 @@ def test_ensure_case_video_uses_ffmpeg_copy_then_reencode_fallback(
     assert artifact.path.read_bytes() == b"merged video"
     assert calls[0][calls[0].index("-c") + 1] == "copy"
     assert calls[1][calls[1].index("-c:v") + 1] == "libvpx-vp9"
+
+
+def test_ensure_execution_video_merges_all_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recordings_dir = tmp_path / ".journey" / "recordings"
+    _write_manifest(recordings_dir, sequence=1, case_id="case_1", step_name="first")
+    _write_manifest(recordings_dir, sequence=2, case_id="case_2", step_name="second")
+    [execution] = recordings.discover_recording_cases(recordings_dir).executions
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "imageio_ffmpeg",
+        SimpleNamespace(get_ffmpeg_exe=lambda: "/fake/ffmpeg"),
+    )
+    concat_inputs: list[str] = []
+
+    def fake_run(cmd: list[str], *, capture_output: bool, text: bool):
+        del capture_output, text
+        concat_path = Path(cmd[cmd.index("-i") + 1])
+        concat_inputs.append(concat_path.read_text(encoding="utf-8"))
+        Path(cmd[-1]).write_bytes(b"merged execution video")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(recordings.subprocess, "run", fake_run)
+
+    artifact = recordings.ensure_execution_video(execution)
+    reused = recordings.ensure_execution_video(execution)
+
+    assert artifact.created is True
+    assert reused.created is False
+    assert artifact.path.name == "demo_journey-run-run123.video.webm"
+    assert artifact.path.read_bytes() == b"merged execution video"
+    assert "0001-case_1-first.webm" in concat_inputs[0]
+    assert "0002-case_2-second.webm" in concat_inputs[0]
+    manifest = json.loads(artifact.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["format"] == "journey.execution_recording"
+    assert manifest["kind"] == "video"

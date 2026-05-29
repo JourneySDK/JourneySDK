@@ -82,10 +82,12 @@ should read existing state but leave the state file unchanged.
 Playwright and LangChain are included in the default package install. The first Journey browser step automatically
 downloads Chromium in the active environment. That first launch needs network access and can take a moment.
 Browser steps record Playwright traces and videos by default under `.journey/recordings/`. Use
-`--no-browser-recording` when a run should not write browser debugging artifacts.
+`--no-browser-recording` when a run should not write browser debugging artifacts. Journey clears existing browser
+recordings at the start of a run so `journey recordings` shows the current run's cases.
 
 After a run, use `journey recordings` from the project root to list recorded cases interactively. The command can merge
-one case into a Playwright-compatible trace archive, open it in Trace Viewer, or merge and open the case WebM recording.
+the whole execution or one case into a Playwright-compatible trace archive, open it in Trace Viewer, or merge and open
+the matching WebM recording.
 
 ## Local Development Installs
 

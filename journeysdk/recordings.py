@@ -19,6 +19,7 @@ from .state import DEFAULT_STATE_DIR
 
 
 _CASE_ARTIFACT_FORMAT = "journey.case_recording"
+_EXECUTION_ARTIFACT_FORMAT = "journey.execution_recording"
 _BROWSER_RECORDING_FORMAT = "journey.browser_recording"
 _RECORDING_SKIP_DIRS = {
     ".git",
@@ -122,9 +123,72 @@ class CaseRecording:
 
 
 @dataclass(frozen=True)
+class ExecutionRecording:
+    recordings_dir: Path
+    run_id: str
+    journey_id: str
+    function_ref: str
+    cases: tuple[CaseRecording, ...]
+
+    @property
+    def case_count(self) -> int:
+        return len(self.cases)
+
+    @property
+    def step_count(self) -> int:
+        return sum(case.step_count for case in self.cases)
+
+    @property
+    def trace_count(self) -> int:
+        return len(self.trace_inputs())
+
+    @property
+    def video_count(self) -> int:
+        return len(self.video_inputs())
+
+    @property
+    def started_at(self) -> str | None:
+        values = [case.started_at for case in self.cases if case.started_at]
+        return min(values) if values else None
+
+    @property
+    def stopped_at(self) -> str | None:
+        values = [case.stopped_at for case in self.cases if case.stopped_at]
+        return max(values) if values else None
+
+    @property
+    def manifests(self) -> tuple[RecordingManifest, ...]:
+        return tuple(
+            sorted(
+                (manifest for case in self.cases for manifest in case.manifests),
+                key=lambda manifest: manifest.sequence,
+            )
+        )
+
+    def trace_inputs(self) -> tuple[RecordingManifest, ...]:
+        return tuple(
+            manifest
+            for manifest in self.manifests
+            if manifest.trace_saved
+            and manifest.trace_path is not None
+            and manifest.trace_path.exists()
+        )
+
+    def video_inputs(self) -> tuple[RecordingManifest, ...]:
+        return tuple(
+            manifest
+            for manifest in self.manifests
+            if manifest.video_saved
+            and manifest.video_path is not None
+            and manifest.video_path.exists()
+        )
+
+
+@dataclass(frozen=True)
 class RecordingDiscoveryResult:
     cases: tuple[CaseRecording, ...]
     warnings: tuple[str, ...]
+    executions: tuple[ExecutionRecording, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -188,7 +252,57 @@ def discover_recording_cases(root: str | Path) -> RecordingDiscoveryResult:
             case.recordings_dir.as_posix(),
         ),
     )
-    return RecordingDiscoveryResult(cases=tuple(cases), warnings=tuple(warnings))
+    case_tuple = tuple(cases)
+    return RecordingDiscoveryResult(
+        cases=case_tuple,
+        warnings=tuple(warnings),
+        executions=group_execution_recordings(case_tuple),
+    )
+
+
+def group_execution_recordings(
+    cases: tuple[CaseRecording, ...],
+) -> tuple[ExecutionRecording, ...]:
+    """Group discovered cases into whole execution recordings."""
+
+    groups: dict[tuple[Path, str, str, str], list[CaseRecording]] = {}
+    for case in cases:
+        key = (
+            case.recordings_dir,
+            case.run_id,
+            case.journey_id,
+            case.function_ref,
+        )
+        groups.setdefault(key, []).append(case)
+
+    executions = [
+        ExecutionRecording(
+            recordings_dir=recordings_dir,
+            run_id=run_id,
+            journey_id=journey_id,
+            function_ref=function_ref,
+            cases=tuple(
+                sorted(
+                    items,
+                    key=lambda case: (
+                        case.started_at or "",
+                        case.case_id,
+                        case.branch_summary(),
+                    ),
+                )
+            ),
+        )
+        for (recordings_dir, run_id, journey_id, function_ref), items in groups.items()
+    ]
+    executions.sort(
+        key=lambda execution: (
+            execution.journey_id,
+            execution.started_at or "",
+            execution.run_id,
+            execution.recordings_dir.as_posix(),
+        ),
+    )
+    return tuple(executions)
 
 
 def ensure_case_trace(case: CaseRecording) -> RecordingArtifact:
@@ -265,7 +379,11 @@ def ensure_case_video(case: CaseRecording) -> RecordingArtifact:
             shutil.copyfile(source, tmp_path)
         else:
             _merge_webm_videos(
-                [manifest.video_path for manifest in inputs if manifest.video_path is not None],
+                [
+                    manifest.video_path
+                    for manifest in inputs
+                    if manifest.video_path is not None
+                ],
                 tmp_path,
             )
         tmp_path.replace(artifact_path)
@@ -273,6 +391,103 @@ def ensure_case_video(case: CaseRecording) -> RecordingArtifact:
             manifest_path,
             artifact_path=artifact_path,
             case=case,
+            kind="video",
+            sources=source_fingerprint,
+        )
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return RecordingArtifact(artifact_path, manifest_path, created=True)
+
+
+def ensure_execution_trace(execution: ExecutionRecording) -> RecordingArtifact:
+    """Create or reuse one Playwright-compatible trace archive for all cases in a run."""
+
+    inputs = execution.trace_inputs()
+    if not inputs:
+        raise RecordingError(
+            f"No saved trace files were found for run {execution.run_id}."
+        )
+
+    artifact_path, manifest_path = _execution_artifact_paths(execution, "trace", ".zip")
+    source_fingerprint = _source_fingerprint(
+        manifest.trace_path for manifest in inputs if manifest.trace_path is not None
+    )
+    if _execution_artifact_is_current(
+        artifact_path,
+        manifest_path,
+        execution=execution,
+        kind="trace",
+        sources=source_fingerprint,
+    ):
+        return RecordingArtifact(artifact_path, manifest_path, created=False)
+
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{artifact_path.stem}.",
+        suffix=".tmp",
+        dir=artifact_path.parent,
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        _merge_trace_archives(inputs, tmp_path)
+        tmp_path.replace(artifact_path)
+        _write_execution_artifact_manifest(
+            manifest_path,
+            artifact_path=artifact_path,
+            execution=execution,
+            kind="trace",
+            sources=source_fingerprint,
+        )
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return RecordingArtifact(artifact_path, manifest_path, created=True)
+
+
+def ensure_execution_video(execution: ExecutionRecording) -> RecordingArtifact:
+    """Create or reuse one merged WebM video for all cases in a run."""
+
+    inputs = execution.video_inputs()
+    if not inputs:
+        raise RecordingError(
+            f"No saved video files were found for run {execution.run_id}."
+        )
+
+    artifact_path, manifest_path = _execution_artifact_paths(execution, "video", ".webm")
+    source_fingerprint = _source_fingerprint(
+        manifest.video_path for manifest in inputs if manifest.video_path is not None
+    )
+    if _execution_artifact_is_current(
+        artifact_path,
+        manifest_path,
+        execution=execution,
+        kind="video",
+        sources=source_fingerprint,
+    ):
+        return RecordingArtifact(artifact_path, manifest_path, created=False)
+
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = artifact_path.with_name(f".{artifact_path.stem}.{os.getpid()}.tmp.webm")
+    try:
+        if len(inputs) == 1:
+            source = inputs[0].video_path
+            if source is None:
+                raise RecordingError(
+                    f"No saved video file was found for run {execution.run_id}."
+                )
+            shutil.copyfile(source, tmp_path)
+        else:
+            _merge_webm_videos(
+                [manifest.video_path for manifest in inputs if manifest.video_path is not None],
+                tmp_path,
+            )
+        tmp_path.replace(artifact_path)
+        _write_execution_artifact_manifest(
+            manifest_path,
+            artifact_path=artifact_path,
+            execution=execution,
             kind="video",
             sources=source_fingerprint,
         )
@@ -453,6 +668,20 @@ def _artifact_paths(
     return artifact_path, cases_dir / f"{stem}.{kind}.manifest.json"
 
 
+def _execution_artifact_paths(
+    execution: ExecutionRecording,
+    kind: str,
+    suffix: str,
+) -> tuple[Path, Path]:
+    stem = (
+        f"{_slug(execution.journey_id, fallback='journey')}-"
+        f"run-{_slug(execution.run_id, fallback='run')}"
+    )
+    executions_dir = execution.recordings_dir / "executions"
+    artifact_path = executions_dir / f"{stem}.{kind}{suffix}"
+    return artifact_path, executions_dir / f"{stem}.{kind}.manifest.json"
+
+
 def _slug(value: object, *, fallback: str) -> str:
     slug = _SLUG_RE.sub("-", str(value)).strip("-._")
     return (slug or fallback)[:96]
@@ -525,6 +754,78 @@ def _write_artifact_manifest(
                 "stopped_at": case.stopped_at,
                 "source_manifests": [
                     str(manifest.manifest_path) for manifest in case.manifests
+                ],
+                "sources": sources,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _execution_artifact_is_current(
+    artifact_path: Path,
+    manifest_path: Path,
+    *,
+    execution: ExecutionRecording,
+    kind: str,
+    sources: list[dict[str, object]],
+) -> bool:
+    if not artifact_path.exists() or not manifest_path.exists():
+        return False
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return (
+        isinstance(payload, Mapping)
+        and payload.get("format") == _EXECUTION_ARTIFACT_FORMAT
+        and payload.get("version") == 1
+        and payload.get("kind") == kind
+        and payload.get("run_id") == execution.run_id
+        and payload.get("journey_id") == execution.journey_id
+        and payload.get("function_ref") == execution.function_ref
+        and payload.get("case_ids") == [case.case_id for case in execution.cases]
+        and payload.get("sources") == sources
+    )
+
+
+def _write_execution_artifact_manifest(
+    manifest_path: Path,
+    *,
+    artifact_path: Path,
+    execution: ExecutionRecording,
+    kind: str,
+    sources: list[dict[str, object]],
+) -> None:
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": _EXECUTION_ARTIFACT_FORMAT,
+                "version": 1,
+                "kind": kind,
+                "output_path": str(artifact_path.resolve()),
+                "recordings_dir": str(execution.recordings_dir),
+                "run_id": execution.run_id,
+                "journey_id": execution.journey_id,
+                "function_ref": execution.function_ref,
+                "case_ids": [case.case_id for case in execution.cases],
+                "cases": [
+                    {
+                        "case_id": case.case_id,
+                        "branch_env": case.branch_env,
+                        "source_manifests": [
+                            str(manifest.manifest_path) for manifest in case.manifests
+                        ],
+                    }
+                    for case in execution.cases
+                ],
+                "started_at": execution.started_at,
+                "stopped_at": execution.stopped_at,
+                "source_manifests": [
+                    str(manifest.manifest_path) for manifest in execution.manifests
                 ],
                 "sources": sources,
             },

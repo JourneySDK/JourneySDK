@@ -74,11 +74,12 @@ def _capture_prompt_memory_roots(
         no_memory: bool = False,
         no_memory_update: bool = False,
         no_browser_recording: bool = False,
+        clean_browser_recordings: bool = True,
         prompt_memory_root: str | Path | None = None,
     ) -> ExecutionReport:
         del journey_fn, step, develop_step, pause_action, state, observer
         del no_state, no_state_update, no_memory, no_memory_update
-        del no_browser_recording
+        del no_browser_recording, clean_browser_recordings
         captured_roots.append(
             Path(prompt_memory_root) if prompt_memory_root is not None else None
         )

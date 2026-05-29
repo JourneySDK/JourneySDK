@@ -31,6 +31,7 @@ from .executor import (
     _ExecutionObserver,
     _PausedExecution,
     _execute_plan,
+    _resolve_browser_recording_root,
     _use_step_interrupt_controller,
 )
 from .logger import configure_logging, get_logger, pretty_line, pretty_row
@@ -45,10 +46,14 @@ from .models import (
 from .planner import compile_journey
 from .recordings import (
     CaseRecording,
+    ExecutionRecording,
     RecordingError,
     discover_recording_cases,
     ensure_case_trace,
     ensure_case_video,
+    ensure_execution_trace,
+    ensure_execution_video,
+    group_execution_recordings,
     open_trace_viewer,
     open_video_recording,
 )
@@ -1061,8 +1066,12 @@ def _execute_all_targets(
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
     executed: list[_ExecutedJourney] = []
     errors: list[_CommandError] = []
+    cleaned_recording_roots: set[Path] = set()
 
     for index, item in enumerate(compiled):
+        recording_root = _resolve_browser_recording_root(item.function)
+        clean_browser_recordings = recording_root not in cleaned_recording_roots
+        cleaned_recording_roots.add(recording_root)
         _CLI_LOGGER.info(
             "execution_start",
             "executing journey",
@@ -1091,6 +1100,7 @@ def _execute_all_targets(
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
+                clean_browser_recordings=clean_browser_recordings,
                 prompt_memory_root=root,
             )
         except Exception as exc:
@@ -1322,6 +1332,7 @@ def _execute_target_pause(
             else None
         )
         pause_action: str | None = None
+        clean_browser_recordings = True
 
         if not interactive:
             if not no_state:
@@ -1342,6 +1353,7 @@ def _execute_target_pause(
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
+                clean_browser_recordings=clean_browser_recordings,
                 prompt_memory_root=root,
             )
             if isinstance(outcome, _PausedExecution):
@@ -1392,8 +1404,10 @@ def _execute_target_pause(
                 no_memory=no_memory,
                 no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
+                clean_browser_recordings=clean_browser_recordings,
                 prompt_memory_root=root,
             )
+            clean_browser_recordings = False
             if isinstance(outcome, _PausedExecution):
                 try:
                     choice = _prompt_for_pause_action(outcome)
@@ -1830,8 +1844,47 @@ def _recording_case_line(index: int, case: CaseRecording, *, root: Path) -> str:
     )
 
 
-def _emit_recording_cases(cases: tuple[CaseRecording, ...], *, root: Path) -> None:
+def _recording_execution_option(
+    index: int,
+    executions: tuple[ExecutionRecording, ...],
+) -> str:
+    return "a" if len(executions) == 1 else f"a{index}"
+
+
+def _recording_execution_line(
+    option: str,
+    execution: ExecutionRecording,
+    *,
+    root: Path,
+) -> str:
+    started = execution.started_at or "<unknown time>"
+    try:
+        recordings_dir = str(execution.recordings_dir.relative_to(root))
+    except ValueError:
+        recordings_dir = str(execution.recordings_dir)
+    return (
+        f"{option}. all cases  journey={execution.journey_id} "
+        f"run={execution.run_id} cases={execution.case_count} "
+        f"steps={execution.step_count} traces={execution.trace_count} "
+        f"videos={execution.video_count} started={started} dir={recordings_dir}"
+    )
+
+
+def _emit_recording_cases(
+    cases: tuple[CaseRecording, ...],
+    *,
+    executions: tuple[ExecutionRecording, ...],
+    root: Path,
+) -> None:
     lines: list[str | object] = [pretty_line("Recordings", style="heading")]
+    lines.extend(
+        _recording_execution_line(
+            _recording_execution_option(index, executions),
+            execution,
+            root=root,
+        )
+        for index, execution in enumerate(executions, start=1)
+    )
     lines.extend(
         _recording_case_line(index, case, root=root)
         for index, case in enumerate(cases, start=1)
@@ -1841,19 +1894,35 @@ def _emit_recording_cases(cases: tuple[CaseRecording, ...], *, root: Path) -> No
         "browser recording cases discovered",
         pretty=lines,
         cases=len(cases),
+        executions=len(executions),
     )
 
 
-def _select_recording_case(
+def _recording_selection_prompt(executions: tuple[ExecutionRecording, ...]) -> str:
+    if len(executions) == 1:
+        return "Select a case number, a for all cases, or q to quit:"
+    if len(executions) > 1:
+        return "Select a case number, an all-cases label, or q to quit:"
+    return "Select a case number, or q to quit:"
+
+
+def _select_recording(
     cases: tuple[CaseRecording, ...],
     *,
+    executions: tuple[ExecutionRecording, ...],
     root: Path,
-) -> CaseRecording | None:
+) -> CaseRecording | ExecutionRecording | None:
     while True:
-        _emit_recording_cases(cases, root=root)
-        choice = _read_recordings_choice("Select a case number, or q to quit:")
+        _emit_recording_cases(cases, executions=executions, root=root)
+        choice = _read_recordings_choice(_recording_selection_prompt(executions))
         if choice == "q":
             return None
+        for index, execution in enumerate(executions, start=1):
+            options = {_recording_execution_option(index, executions)}
+            if len(executions) == 1:
+                options.add("all")
+            if choice in options:
+                return execution
         if choice.isdigit():
             index = int(choice)
             if 1 <= index <= len(cases):
@@ -1861,7 +1930,10 @@ def _select_recording_case(
         _CLI_LOGGER.warning(
             "recording_invalid_case_selection",
             "invalid recording case selection",
-            pretty=pretty_line("Choose one of the listed case numbers, or q to quit.", style="warning"),
+            pretty=pretty_line(
+                "Choose one of the listed case numbers, all-cases labels, or q to quit.",
+                style="warning",
+            ),
             selection=choice,
         )
 
@@ -1892,6 +1964,38 @@ def _open_case_video(case: CaseRecording) -> None:
     open_video_recording(artifact.path)
 
 
+def _open_execution_trace(execution: ExecutionRecording) -> None:
+    artifact = ensure_execution_trace(execution)
+    action = "created" if artifact.created else "reused"
+    _CLI_LOGGER.info(
+        "recording_execution_trace_open",
+        "opening merged execution trace",
+        pretty=pretty_line(
+            f"Opening merged execution trace ({action}): {artifact.path}",
+            style="context",
+        ),
+        path=str(artifact.path),
+        created=artifact.created,
+    )
+    open_trace_viewer(artifact.path)
+
+
+def _open_execution_video(execution: ExecutionRecording) -> None:
+    artifact = ensure_execution_video(execution)
+    action = "created" if artifact.created else "reused"
+    _CLI_LOGGER.info(
+        "recording_execution_video_open",
+        "opening merged execution video",
+        pretty=pretty_line(
+            f"Opening merged execution video ({action}): {artifact.path}",
+            style="context",
+        ),
+        path=str(artifact.path),
+        created=artifact.created,
+    )
+    open_video_recording(artifact.path)
+
+
 def _emit_case_artifact_paths(case: CaseRecording) -> None:
     lines: list[str | object] = [
         pretty_line(f"{case.case_id} artifacts", style="heading"),
@@ -1915,14 +2019,71 @@ def _emit_case_artifact_paths(case: CaseRecording) -> None:
     )
 
 
-def _recording_action_loop(case: CaseRecording) -> str:
+def _emit_execution_artifact_paths(execution: ExecutionRecording) -> None:
+    lines: list[str | object] = [
+        pretty_line(
+            f"all cases artifacts for {execution.journey_id} run {execution.run_id}",
+            style="heading",
+        ),
+    ]
+    for label, ensure in (
+        ("trace", ensure_execution_trace),
+        ("video", ensure_execution_video),
+    ):
+        try:
+            artifact = ensure(execution)
+        except RecordingError as exc:
+            lines.append(f"{label}: unavailable ({exc})")
+            continue
+        action = "created" if artifact.created else "reused"
+        lines.append(f"{label}: {artifact.path} ({action})")
+    _CLI_LOGGER.info(
+        "recording_execution_artifact_paths",
+        "recording execution artifact paths",
+        pretty=lines,
+        run_id=execution.run_id,
+        journey=execution.journey_id,
+    )
+
+
+def _recording_action_label(recording: CaseRecording | ExecutionRecording) -> str:
+    if isinstance(recording, ExecutionRecording):
+        return f"all cases for {recording.journey_id} run {recording.run_id}"
+    return recording.case_id
+
+
+def _open_recording_trace(recording: CaseRecording | ExecutionRecording) -> None:
+    if isinstance(recording, ExecutionRecording):
+        _open_execution_trace(recording)
+        return
+    _open_case_trace(recording)
+
+
+def _open_recording_video(recording: CaseRecording | ExecutionRecording) -> None:
+    if isinstance(recording, ExecutionRecording):
+        _open_execution_video(recording)
+        return
+    _open_case_video(recording)
+
+
+def _emit_recording_artifact_paths(
+    recording: CaseRecording | ExecutionRecording,
+) -> None:
+    if isinstance(recording, ExecutionRecording):
+        _emit_execution_artifact_paths(recording)
+        return
+    _emit_case_artifact_paths(recording)
+
+
+def _recording_action_loop(recording: CaseRecording | ExecutionRecording) -> str:
+    label = _recording_action_label(recording)
     while True:
         choice = _read_recordings_choice(
-            f"{case.case_id}: [t] open trace, [v] open video, [p] print paths, [b] back, [q] quit:"
+            f"{label}: [t] open trace, [v] open video, [p] print paths, [b] back, [q] quit:"
         )
         if choice == "t":
             try:
-                _open_case_trace(case)
+                _open_recording_trace(recording)
             except RecordingError as exc:
                 _CLI_LOGGER.warning(
                     "recording_trace_open_failure",
@@ -1932,7 +2093,7 @@ def _recording_action_loop(case: CaseRecording) -> str:
                 )
         elif choice == "v":
             try:
-                _open_case_video(case)
+                _open_recording_video(recording)
             except RecordingError as exc:
                 _CLI_LOGGER.warning(
                     "recording_video_open_failure",
@@ -1941,7 +2102,7 @@ def _recording_action_loop(case: CaseRecording) -> str:
                     error=str(exc),
                 )
         elif choice == "p":
-            _emit_case_artifact_paths(case)
+            _emit_recording_artifact_paths(recording)
         elif choice == "b":
             return "back"
         elif choice == "q":
@@ -1977,11 +2138,16 @@ def _cmd_recordings(args: argparse.Namespace) -> int:
         )
         return 1
 
+    executions = result.executions or group_execution_recordings(result.cases)
     while True:
-        case = _select_recording_case(result.cases, root=root)
-        if case is None:
+        recording = _select_recording(
+            result.cases,
+            executions=executions,
+            root=root,
+        )
+        if recording is None:
             return 0
-        outcome = _recording_action_loop(case)
+        outcome = _recording_action_loop(recording)
         if outcome == "quit":
             return 0
 
