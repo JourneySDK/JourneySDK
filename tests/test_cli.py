@@ -224,6 +224,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "--no-memory",
             "--no-memory-update",
             "--no-browser-recording",
+            "--plan-only",
         ]
     )
     assert execute_args.file == "journeys.py"
@@ -237,6 +238,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.no_memory is True
     assert execute_args.no_memory_update is True
     assert execute_args.no_browser_recording is True
+    assert execute_args.plan_only is True
 
     agent_args = parser.parse_args(["--agent-instructions", "codex"])
     assert agent_args.agent_instructions == "codex"
@@ -646,6 +648,90 @@ def test_execute_interactive_requires_develop_step(
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
     assert "--interactive requires --develop-step" in captured.out
+    assert captured.err == ""
+
+
+def test_execute_plan_only_compiles_without_running_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events_file = tmp_path / "events.log"
+    _write(
+        tmp_path / "flow.py",
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def run_target():
+            EVENTS.write_text("ran", encoding="utf-8")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(run_target)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    exit_code = main(["--file", "flow.py", "--plan-only"])
+
+    captured = capsys.readouterr()
+    output = captured.out
+    assert exit_code == 0
+    assert "Plan" in output
+    assert "run_target" in output
+    assert "Plan-only mode: execution skipped." in output
+    assert "Execution" not in output
+    assert not events_file.exists()
+
+
+def test_execute_plan_only_validates_requested_step_without_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events_file = tmp_path / "events.log"
+    _write(
+        tmp_path / "flow.py",
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def run_target():
+            EVENTS.write_text("ran", encoding="utf-8")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(run_target)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    exit_code = main(["--file", "flow.py", "--plan-only", "--step", "missing"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "Step label 'missing' was not found in the selected journey." in output
+    assert "Plan-only mode: execution skipped." in output
+    assert "Execution" not in output
+    assert not events_file.exists()
+
+
+def test_execute_plan_only_rejects_interactive_mode(
+    capsys: pytest.CaptureFixture[str],
+):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--plan-only", "--develop-step", "target", "--interactive"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "--interactive cannot be used with --plan-only" in captured.out
     assert captured.err == ""
 
 
@@ -1497,6 +1583,66 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
         "publish",
         "cleanup",
     ]
+
+
+def test_execute_develop_step_retry_allows_unrelated_branch_anchor_snapshots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events_file = tmp_path / "events.log"
+    _write(
+        tmp_path / "flow.py",
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare_workspace():
+            _append("prepare_workspace")
+            return {{"workspace": "ready"}}
+
+        def create_thread(workspace):
+            _append("create_thread")
+            return {{"thread": workspace["workspace"]}}
+
+        def review_thread(thread):
+            _append("review_thread")
+            return True
+
+        def check_visibility(workspace):
+            _append("check_visibility")
+            return True
+
+        @journey.journey
+        def flow():
+            workspace = journey.step(prepare_workspace)
+            if journey.branch():
+                thread = journey.step(create_thread, workspace)
+                if journey.branch(start_from=thread):
+                    journey.step(review_thread, thread)
+            elif journey.branch(start_from=workspace):
+                journey.step(check_visibility, workspace)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    first_exit = main(["--file", "flow.py", "--develop-step", "review_thread"])
+    first_output = capsys.readouterr().out
+    second_exit = main(["--file", "flow.py", "--develop-step", "review_thread"])
+    second_output = capsys.readouterr().out
+
+    assert first_exit == 0
+    assert second_exit == 0
+    assert "invalid branch anchor snapshot data" not in first_output
+    assert "invalid branch anchor snapshot data" not in second_output
+    assert "Development mode stopped after step review_thread attempt=1 ok." in first_output
+    assert "Development mode stopped after step review_thread attempt=2 ok." in second_output
 
 
 def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(

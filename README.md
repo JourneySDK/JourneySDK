@@ -13,8 +13,8 @@ other systems that participate in a user flow.
   retries, and state so late user-flow steps can be developed without rerunning every expensive setup action.
 - **Touchpoints for real systems**: drive the browser, start Docker Compose apps, wait for email or webhooks, and keep
   app-specific checks in ordinary Python helpers.
-- **Agent-friendly CLI loops**: coding assistants can run one target step with `--develop-step`, retry it after edits,
-  then broaden to `--step` or the full journey before finishing.
+- **Agent-friendly CLI loops**: coding assistants can inspect generated cases with `--plan-only`, run one target step
+  with `--develop-step`, retry it after edits, then broaden to `--step` or the full journey before finishing.
 
 ## Install
 

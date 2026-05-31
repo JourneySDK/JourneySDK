@@ -1369,9 +1369,9 @@ class _StateController:
         expected_cases = _selected_case_refs(self.selected_cases)
         expected_anchor_keys = {
             step_keys[node.start_from]
-            for selected_case in self.selected_cases
-            for step_keys in [_case_rehydration_maps(selected_case.case_plan)]
-            for node in selected_case.case_plan.nodes
+            for case_plan in self.journey_plan.case_plans
+            for step_keys in [_case_rehydration_maps(case_plan)]
+            for node in case_plan.nodes
             if isinstance(node, BranchMarkerNode)
             and node.start_from is not None
             and node.start_from in step_keys

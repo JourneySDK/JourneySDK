@@ -88,6 +88,25 @@ printed by `journey --touchpoint-docs <name>`.
 Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
 targeted run uses the compiled labels to choose one case.
 
+### Inspect Generated Cases First
+
+```bash
+uv run journey --file docs/branching_journey/branching_journey.py --plan-only
+```
+
+```console
+Plan
+  docs/branching_journey/branching_journey.py:branching_journey ...
+    case_1  labels: load_signup_request, classify_signup_request, approve_fast_track_signup; branches: {bg_1=branch_1}
+    case_2  labels: load_signup_request, classify_signup_request, queue_manual_review_signup; branches: {bg_1=branch_2}
+  Summary: 1 journey planned, 2 cases planned, 0 failed
+  Plan-only mode: execution skipped.
+```
+
+Use `--plan-only` before a heavy Docker or browser journey when you need the case map and stable step labels without
+mutating app state. If you include `--step` or `--develop-step`, Journey validates that the requested label selects one
+target flow and still exits before execution.
+
 ### Run Only the Branch That Reaches One Step
 
 ```bash

@@ -57,6 +57,20 @@ uv add journey-sdk
 uv run journey --help
 ```
 
+## Inspect A Plan Without Running
+
+Use `--plan-only` when you want to discover journeys, compile branch cases, validate a requested target label, and exit
+before any step code executes:
+
+```bash
+uv run journey --file journeys/checkout_journey.py --plan-only
+uv run journey --file journeys/checkout_journey.py --develop-step submit_order --plan-only
+```
+
+This is the safest first command for coding agents working in a large app. It shows the step labels and branch cases
+available for targeted execution without starting Docker services, opening browsers, sending emails, or mutating app
+state.
+
 ## Ctrl-C And Resumable Runs
 
 Journey persists execution state by default when you want a long run to survive interruption:

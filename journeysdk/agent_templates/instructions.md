@@ -9,7 +9,7 @@ affected journey or step.
 - Always use Journey SDK when a change should be verified against a real user journey, treating it like an end-to-end test for that flow.
 - When implementing new features, extend existing journey specs or add new ones so the new user behavior is covered.
 - Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
-- Use it for fast partial verification: run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
+- Use it for fast partial verification: inspect the compiled plan without execution, run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
 
 ## Add Journey Specs
 
@@ -104,21 +104,27 @@ def changedetection_core_journey() -> None:
 ## Quick Verification Loop
 
 1. Run from the project that owns the journey.
-2. Use the narrowest useful Journey command while editing:
+2. Inspect the compiled cases before starting a heavy flow:
+
+```bash
+journey --file journeys/<feature>_journey.py --plan-only
+```
+
+3. Use the narrowest useful Journey command while editing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --develop-step target_label
 ```
 
-3. Rerun the same `--develop-step` command after edits to retry the paused step with Journey's default persistent state.
-4. Broaden verification before finishing:
+4. Rerun the same `--develop-step` command after edits to retry the paused step with Journey's default persistent state.
+5. Broaden verification before finishing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label
 journey --file journeys/<feature>_journey.py
 ```
 
-5. Use JSON Lines output when another tool or script needs to parse results:
+6. Use JSON Lines output when another tool or script needs to parse results:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label --output jsonl
