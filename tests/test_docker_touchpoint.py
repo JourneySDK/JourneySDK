@@ -129,6 +129,7 @@ class _FakeDockerRuntime:
         logs_by_service: dict[str, str] | None = None,
         container_logs: dict[str, str] | None = None,
         published_ports: dict[tuple[str, int], str] | None = None,
+        compose_ps_json_lines: bool = False,
     ) -> None:
         self.compose_config = compose_config or {
             "services": {
@@ -186,6 +187,7 @@ class _FakeDockerRuntime:
         self.published_ports = published_ports or {
             ("web", 8000): "0.0.0.0:5050\n",
         }
+        self.compose_ps_json_lines = compose_ps_json_lines
         self.volume_names = {"demo_demo_data"}
         self.volume_labels: dict[str, dict[str, str]] = {}
         self.phase = "live"
@@ -213,12 +215,27 @@ class _FakeDockerRuntime:
 
         if args[:2] == ["docker", "compose"] and "ps" in args:
             rows = self.restored_ps_rows if self.phase == "restored" else self.live_ps_rows
+            if self.compose_ps_json_lines:
+                return "\n".join(json.dumps(row) for row in rows)
             return json.dumps(rows)
 
         if args[:2] == ["docker", "inspect"]:
             container_ids = args[4:]
             rows = self.restored_inspect_rows if self.phase == "restored" else self.live_inspect_rows
-            return json.dumps([rows[container_id] for container_id in container_ids])
+            selected_rows = []
+            for container_id in container_ids:
+                row = rows.get(container_id)
+                if row is None:
+                    matches = [
+                        candidate
+                        for full_id, candidate in rows.items()
+                        if full_id.startswith(container_id)
+                    ]
+                    if len(matches) != 1:
+                        raise KeyError(container_id)
+                    row = matches[0]
+                selected_rows.append(row)
+            return json.dumps(selected_rows)
 
         if args[:2] == ["docker", "compose"] and "logs" in args:
             service = args[-1]
@@ -1423,6 +1440,45 @@ def test_store_docker_matches_abbreviated_compose_ps_ids(
     snapshot_dir = journey_docker._snapshot_dir(stack=stack, snapshot_name="after_boot")
     manifest = json.loads((snapshot_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["containers"][0]["container_id"] == full_container_id[:12]
+
+
+def test_docker_stack_statuses_accept_compose_ps_json_lines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    runtime = _FakeDockerRuntime(compose_ps_json_lines=True)
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    statuses = stack.statuses
+
+    assert statuses["web"][0].container_id == "web-container-1"
+
+
+def test_docker_stack_statuses_accept_short_compose_container_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    short_id = "abc123def456"
+    full_id = f"{short_id}7890abcdef7890abcdef7890abcdef7890abcdef7890abcdef"
+    runtime = _FakeDockerRuntime(
+        live_ps_rows=[_ps_row(short_id, "demo-web-1", "web")],
+        live_inspect_rows=[
+            _inspect_row(
+                container_id=full_id,
+                name="demo-web-1",
+                service="web",
+                image="demo-web:latest",
+            )
+        ],
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    statuses = stack.statuses
+
+    assert statuses["web"][0].container_id == short_id
+    assert statuses["web"][0].container_name == "demo-web-1"
 
 
 def test_docker_compose_stack_is_pickle_serializable(tmp_path: Path):

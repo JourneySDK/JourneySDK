@@ -2350,6 +2350,9 @@ def _load_live_containers(
     )
     inspect_rows = _parse_json_list(owner=owner, payload=inspect_output, label="inspect")
     inspect_by_id: dict[str, dict[str, Any]] = {}
+    for requested_id, row in zip(container_ids, inspect_rows):
+        if requested_id:
+            inspect_by_id[requested_id] = row
     for row in inspect_rows:
         container_id = row.get("Id")
         if isinstance(container_id, str) and container_id:
