@@ -1592,6 +1592,7 @@ def _emit_execute_output(
     *,
     result_errors: list[_CommandError] | None = None,
     failure_count: int | None = None,
+    develop_step_stopped: str | None = None,
 ) -> None:
     _emit_errors(errors)
 
@@ -1609,23 +1610,24 @@ def _emit_execute_output(
         ],
         "errors": [asdict(error) for error in payload_errors],
     }
-    _CLI_LOGGER.info(
-        "execute_summary",
-        "Summary: "
-        f"{_count(len(executed), 'journey')} executed, "
-        f"{_count(total_cases, 'case')} executed, "
-        f"{failed} failed",
-        pretty=pretty_line(
+    summary = (
+        f"Summary: develop-step {develop_step_stopped} stopped after target, {failed} failed"
+        if develop_step_stopped is not None
+        else (
             "Summary: "
             f"{_count(len(executed), 'journey')} executed, "
             f"{_count(total_cases, 'case')} executed, "
-            f"{failed} failed",
-            indent=2,
-            style="heading",
-        ),
+            f"{failed} failed"
+        )
+    )
+    _CLI_LOGGER.info(
+        "execute_summary",
+        summary,
+        pretty=pretty_line(summary, indent=2, style="heading"),
         journeys=len(executed),
         cases=total_cases,
         failures=failed,
+        develop_step=develop_step_stopped,
     )
     _CLI_LOGGER.info(
         "execute_result",
@@ -1804,6 +1806,11 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         run_errors,
         result_errors=all_errors,
         failure_count=len(all_errors),
+        develop_step_stopped=(
+            args.develop_step
+            if args.develop_step is not None and not executed and not all_errors
+            else None
+        ),
     )
     return 0 if not all_errors else 1
 

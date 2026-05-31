@@ -151,7 +151,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
 
     assert exit_code == 0
     assert "Development mode stopped after step queue_manual_review_signup attempt=1 ok." in logs
-    assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
+    assert "Summary: develop-step queue_manual_review_signup stopped after target, 0 failed" in output
 
 
 def test_retry_readme_commands_show_retry_behavior(

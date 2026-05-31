@@ -1396,9 +1396,16 @@ class _StateController:
                 f"not {self.step!r}."
             )
         if state.develop_step != self.develop_step:
+            hint = None
+            if state.develop_step is not None and self.develop_step is None:
+                hint = (
+                    "Rerun the same --develop-step target to keep iterating, or use "
+                    "`--no-state` for a fresh --step/full journey verification after a develop-step pause."
+                )
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' was created for develop_step "
-                f"{state.develop_step!r}, not {self.develop_step!r}."
+                f"{state.develop_step!r}, not {self.develop_step!r}.",
+                hint=hint,
             )
         if (
             self._allow_stale_develop_pause

@@ -1509,7 +1509,7 @@ def test_execute_develop_step_exits_after_target_without_prompt(
     assert "Development mode stopped after step publish attempt=1 ok." in log_output
     assert "cleanup                       ok attempt=1 duration=" not in log_output
     assert "Press c to continue or r to retry" not in output
-    assert "Summary: 0 journeys executed, 0 cases executed, 0 failed" in output
+    assert "Summary: develop-step publish stopped after target, 0 failed" in output
 
 
 def test_execute_develop_step_state_retries_same_target_by_default_and_later_target_continues(
@@ -1583,6 +1583,51 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
         "publish",
         "cleanup",
     ]
+
+
+def test_execute_after_develop_step_guides_fresh_broad_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+
+        def prepare():
+            return True
+
+        def publish():
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(publish)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    develop_exit = main(["--file", "flow.py", "--develop-step", "publish"])
+    capsys.readouterr()
+
+    broad_exit = main(["--file", "flow.py"])
+    broad_output = capsys.readouterr().out
+
+    assert develop_exit == 0
+    assert broad_exit == 1
+    assert "created for develop_step 'publish', not None" in broad_output
+    assert (
+        "Rerun the same --develop-step target to keep iterating, or use `--no-state` "
+        "for a fresh --step/full journey verification after a develop-step pause."
+    ) in broad_output
+
+    fresh_exit = main(["--file", "flow.py", "--no-state"])
+    fresh_output = capsys.readouterr().out
+
+    assert fresh_exit == 0
+    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in fresh_output
 
 
 def test_execute_develop_step_retry_allows_unrelated_branch_anchor_snapshots(

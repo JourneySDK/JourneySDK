@@ -120,9 +120,12 @@ journey --file journeys/<feature>_journey.py --develop-step target_label
 5. Broaden verification before finishing:
 
 ```bash
-journey --file journeys/<feature>_journey.py --step target_label
-journey --file journeys/<feature>_journey.py
+journey --file journeys/<feature>_journey.py --step target_label --no-state
+journey --file journeys/<feature>_journey.py --no-state
 ```
+
+Use `--no-state` for this broader verification when you are switching away from a paused `--develop-step` loop; the
+paused state belongs to that target-step retry loop.
 
 6. Use JSON Lines output when another tool or script needs to parse results:
 

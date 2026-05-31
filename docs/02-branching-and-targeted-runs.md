@@ -152,7 +152,7 @@ Plan
 
 Execution
 Development mode stopped after step queue_manual_review_signup attempt=1 ok.
-  Summary: 0 journeys executed, 0 cases executed, 0 failed
+  Summary: develop-step queue_manual_review_signup stopped after target, 0 failed
 ```
 
 Use `--develop-step` when you are actively editing one branch and want Journey to pause after the step boundary you
@@ -160,7 +160,9 @@ care about. Rerun the same command to retry the paused step after editing code, 
 state file to continue. Develop-step retry and continue replay from the paused step's nearest explicit replay boundary;
 when no explicit boundary exists, the selected case starts again from the beginning. Add `--interactive` when you want
 Journey to keep the process open and prompt after each paused step. Journey reloads and recompiles the selected journey
-file before each retry or continue, so edits are picked up immediately.
+file before each retry or continue, so edits are picked up immediately. When you are done with the focused loop and want
+broader verification, run the final `--step` or full journey with `--no-state` so the paused develop-step state is not
+reused for a different selection.
 
 ## Rehydrate Later Cases from a Step Anchor
 
