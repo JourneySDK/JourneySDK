@@ -1,20 +1,26 @@
 # Journey SDK
 
-With AI, testing is the new coding.
+Agent-native verification loops for long product workflows.
 
-Journey SDK helps developers and coding assistants verify real user journeys, not just units or partial integrations.
-One Python spec can cover branching paths, browser work, async side effects, local Docker services, email, webhooks, and
-other systems that participate in a user flow.
+Journey SDK helps developers and AI coding agents prove that critical user journeys still work after code changes.
+One Python spec can cover a long product flow across branching paths, browser work, async side effects, local Docker
+services, hosted email, hosted webhooks, and app-specific integrations that participate in the user flow.
+
+The wedge is simple: AI coding agents can write code quickly, but high-revenue teams need reliable, resumable,
+cross-system verification loops before they trust those changes. Journey keeps those loops in ordinary Python and makes
+late-flow iteration practical through durable step boundaries, branch replay, targeted runs, and packaged agent
+instructions.
 
 ## Why Journey
 
-- **One Python journey for meaningful user paths**: author the shared setup once and use `branch()` for alternate paths.
+- **Built for coding-agent loops**: agents can inspect generated cases with `--plan-only`, run one target step with
+  `--develop-step`, retry it after edits, then broaden to `--step` or the full journey before finishing.
+- **One Python journey for meaningful user paths**: author shared setup once and use `branch()` for alternate paths
+  instead of duplicating checkout, onboarding, billing, or lifecycle tests.
 - **Fast replay from durable boundaries**: make each step earn its checkpoint, then use `branch(start_from=...)`,
   retries, and state so late user-flow steps can be developed without rerunning every expensive setup action.
-- **Touchpoints for real systems**: drive the browser, start Docker Compose apps, wait for email or webhooks, and keep
-  app-specific checks in ordinary Python helpers.
-- **Agent-friendly CLI loops**: coding assistants can inspect generated cases with `--plan-only`, run one target step
-  with `--develop-step`, retry it after edits, then broaden to `--step` or the full journey before finishing.
+- **Cross-system verification without a new DSL**: drive the browser, start Docker Compose apps, wait for hosted email
+  or webhook callbacks, and keep app-specific checks in ordinary Python helpers.
 
 ## Install
 
