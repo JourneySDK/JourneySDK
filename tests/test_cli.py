@@ -1335,6 +1335,7 @@ def test_execute_streams_live_case_progress_for_all_branches(
     assert "finish_fast" in log_output
     assert "finish_manual" in log_output
     assert "Summary: 1 journey executed, 2 cases executed, 0 failed" in output
+    assert "Summary: 1 journey executed, 2 cases executed, 0 failed, duration=" in output
     _assert_ordered(
         output,
         "Plan",
@@ -1510,6 +1511,7 @@ def test_execute_develop_step_exits_after_target_without_prompt(
     assert "cleanup                       ok attempt=1 duration=" not in log_output
     assert "Press c to continue or r to retry" not in output
     assert "Summary: develop-step publish stopped after target, 0 failed" in output
+    assert "Summary: develop-step publish stopped after target, 0 failed, duration=" in output
 
 
 def test_execute_develop_step_state_retries_same_target_by_default_and_later_target_continues(
@@ -1697,6 +1699,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
 ):
     flow_file = tmp_path / "flow.py"
     state_file = _state_path(flow_file)
+    recording_dir = tmp_path / ".journey" / "recordings"
     attempts_file = tmp_path / "attempts.count"
     _write(
         flow_file,
@@ -1705,6 +1708,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
         from pathlib import Path
 
         ATTEMPTS = Path({str(attempts_file)!r})
+        RECORDINGS = Path({str(recording_dir)!r})
 
         def _read_attempts():
             if not ATTEMPTS.exists():
@@ -1712,6 +1716,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
             return int(ATTEMPTS.read_text(encoding="utf-8"))
 
         def poll():
+            RECORDINGS.mkdir(parents=True, exist_ok=True)
             attempts = _read_attempts() + 1
             ATTEMPTS.write_text(str(attempts), encoding="utf-8")
             if attempts < 2:
@@ -1733,6 +1738,12 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     assert first_exit == 1
     assert "Development mode stopped after step poll attempt=1 failed (pending)." in first_logs
     assert "retry attempts were exhausted" not in first_output
+    assert (
+        "Retry failed step: journey --file flow.py --journey flow --develop-step poll"
+        in first_output
+    )
+    assert "Artifacts: .journey/recordings (run `journey recordings` to inspect)" in first_output
+    assert "Summary: 0 journeys executed, 0 cases executed, 1 failed, duration=" in first_output
     assert state_file.exists()
 
     second_exit = main(["--file", "flow.py", "--develop-step", "poll"])

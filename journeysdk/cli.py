@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import os
 import signal
+import shlex
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -219,6 +221,7 @@ class _CommandError:
     error_type: str
     message: str
     hint: str | None
+    step_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -689,6 +692,7 @@ def _error_from_exception(
     file_path: str | None = None,
     journey_name: str | None = None,
 ) -> _CommandError:
+    step_label = getattr(exc, "step_label", None)
     return _CommandError(
         file=file_path,
         journey_name=journey_name,
@@ -696,10 +700,11 @@ def _error_from_exception(
         error_type=type(exc).__name__,
         message=str(exc),
         hint=exc.hint if isinstance(exc, JourneyError) else None,
+        step_label=step_label if isinstance(step_label, str) else None,
     )
 
 
-def _emit_errors(errors: list[_CommandError]) -> None:
+def _emit_errors(root: Path, errors: list[_CommandError]) -> None:
     for error in errors:
         location = error.file or "<selection>"
         if error.journey_name is not None:
@@ -733,6 +738,66 @@ def _emit_errors(errors: list[_CommandError]) -> None:
                 location=location,
                 error_type=error.error_type,
             )
+        retry_command = _retry_command_for_error(root, error)
+        if retry_command is not None:
+            _CLI_LOGGER.error(
+                "command_error_retry",
+                f"Retry failed step: {retry_command}",
+                pretty=pretty_line(f"Retry failed step: {retry_command}", style="error"),
+                phase=error.phase,
+                location=location,
+                error_type=error.error_type,
+                retry_command=retry_command,
+            )
+        artifacts = _artifact_hint_for_error(root, error)
+        if artifacts is not None:
+            _CLI_LOGGER.error(
+                "command_error_artifacts",
+                f"Artifacts: {artifacts}",
+                pretty=pretty_line(f"Artifacts: {artifacts}", style="error"),
+                phase=error.phase,
+                location=location,
+                error_type=error.error_type,
+                artifacts=artifacts,
+            )
+
+
+def _retry_command_for_error(root: Path, error: _CommandError) -> str | None:
+    if error.phase != "execute":
+        return None
+    if error.file is None or error.journey_name is None or error.step_label is None:
+        return None
+    try:
+        display_file = _display_path(root, Path(error.file))
+    except TypeError:
+        display_file = error.file
+    return " ".join(
+        shlex.quote(part)
+        for part in (
+            "journey",
+            "--file",
+            display_file,
+            "--journey",
+            error.journey_name,
+            "--develop-step",
+            error.step_label,
+        )
+    )
+
+
+def _artifact_hint_for_error(root: Path, error: _CommandError) -> str | None:
+    if error.phase != "execute":
+        return None
+    if error.file is None:
+        return None
+    return _artifact_hint_for_file(root, error.file)
+
+
+def _artifact_hint_for_file(root: Path, file_path: str | Path) -> str | None:
+    recording_root = Path(file_path).resolve().parent / ".journey" / "recordings"
+    if not recording_root.exists():
+        return None
+    return f"{_display_path(root, recording_root)} (run `journey recordings` to inspect)"
 
 
 def _discover_targets(
@@ -969,6 +1034,7 @@ def _paused_failure_error(
         error_type="CallableExecutionError",
         message=message,
         hint=paused.paused_step.failure_hint,
+        step_label=paused.paused_step.label or paused.paused_step.node_id,
     )
 
 
@@ -1562,7 +1628,7 @@ def _emit_plan_output(
                 labels=labels,
             )
 
-    _emit_errors(errors)
+    _emit_errors(root, errors)
 
     total_cases = sum(len(item.plan.case_plans) for item in compiled)
     _CLI_LOGGER.info(
@@ -1593,8 +1659,9 @@ def _emit_execute_output(
     result_errors: list[_CommandError] | None = None,
     failure_count: int | None = None,
     develop_step_stopped: str | None = None,
+    duration_seconds: float | None = None,
 ) -> None:
-    _emit_errors(errors)
+    _emit_errors(root, errors)
 
     total_cases = sum(len(item.report.case_reports) for item in executed)
     failed = len(errors) if failure_count is None else failure_count
@@ -1620,6 +1687,8 @@ def _emit_execute_output(
             f"{failed} failed"
         )
     )
+    if duration_seconds is not None:
+        summary = f"{summary}, duration={_format_duration(duration_seconds)}"
     _CLI_LOGGER.info(
         "execute_summary",
         summary,
@@ -1628,7 +1697,22 @@ def _emit_execute_output(
         cases=total_cases,
         failures=failed,
         develop_step=develop_step_stopped,
+        duration_seconds=duration_seconds,
     )
+    artifact_hints = sorted(
+        {
+            hint
+            for item in executed
+            if (hint := _artifact_hint_for_file(root, item.file_path)) is not None
+        }
+    )
+    for hint in artifact_hints:
+        _CLI_LOGGER.info(
+            "execute_artifacts",
+            f"Artifacts: {hint}",
+            pretty=pretty_line(f"Artifacts: {hint}", indent=2, style="muted"),
+            artifacts=hint,
+        )
     _CLI_LOGGER.info(
         "execute_result",
         "execution result",
@@ -1708,6 +1792,7 @@ def _emit_interrupt_output(*, resumable: bool) -> None:
 
 
 def _cmd_execute(args: argparse.Namespace) -> int:
+    started_at = time.perf_counter()
     try:
         root, targets, errors = _discover_targets(args)
     except JourneySelectionError as exc:
@@ -1724,6 +1809,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
             [],
             result_errors=[error],
             failure_count=1,
+            duration_seconds=time.perf_counter() - started_at,
         )
         return 1
 
@@ -1811,6 +1897,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
             if args.develop_step is not None and not executed and not all_errors
             else None
         ),
+        duration_seconds=time.perf_counter() - started_at,
     )
     return 0 if not all_errors else 1
 

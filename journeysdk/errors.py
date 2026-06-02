@@ -170,8 +170,10 @@ class CallableExecutionError(ExecutionError):
         message: str = "A journey step failed while it was running.",
         *,
         hint: str | None = None,
+        step_label: str | None = None,
     ) -> None:
         super().__init__(message, hint=hint)
+        self.step_label = step_label
 
 
 class ExecutionStateError(ExecutionError):

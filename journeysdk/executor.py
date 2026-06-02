@@ -1068,7 +1068,7 @@ def _callable_execution_error_for_step(
             "Inspect the step implementation, or increase step(..., retry=...) if "
             "the failure is expected to clear on its own."
         )
-    return CallableExecutionError(message, hint=hint)
+    return CallableExecutionError(message, hint=hint, step_label=node.label or node.node_id)
 
 
 def _exception_hint(exc: Exception) -> str | None:
