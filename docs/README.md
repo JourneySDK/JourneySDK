@@ -34,11 +34,17 @@ journey --touchpoint-docs all
 AI coding assistant guidance is packaged separately:
 
 ```bash
+journey --agent-bootstrap codex
+journey --agent-bootstrap claude
 journey --agent-instructions codex
 journey --agent-instructions claude
 journey --agent-instructions cursor
 journey --agent-instructions generic
 ```
+
+Use `--agent-bootstrap` when an agent needs the complete verification loop plus touchpoint references in one response.
+Use `--agent-instructions ... --install-agent-instructions` when the project should receive a persistent assistant
+instruction file.
 
 The canonical source files are `journeysdk/touchpoint_docs/*.md` and
 `journeysdk/agent_templates/instructions.md`.

@@ -30,6 +30,18 @@ A touchpoint is not a special kind of step. It is the external surface a step ta
 the browser touchpoint to click through checkout, then a later step might use an email or webhook touchpoint to confirm
 the service produced the expected side effect.
 
+## Agent Bootstrap
+
+When Codex, Claude Code, Cursor, or another coding agent is about to add or debug journeys, start with the bootstrap
+packet:
+
+```bash
+journey --agent-bootstrap codex
+```
+
+That one command gives the agent the installed Journey instructions, the targeted verification loop, and the packaged
+touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or polling helpers.
+
 ## The Smallest Useful Journey
 
 Read `docs/first_journey/first_journey.py`.

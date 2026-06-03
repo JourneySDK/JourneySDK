@@ -129,7 +129,19 @@ For the full contributor workflow, including package smoke tests and manual publ
 
 ## AI Agent Instructions
 
-AI coding agents can ask the installed CLI for assistant-specific Journey guidance:
+AI coding agents can ask the installed CLI for a complete bootstrap packet:
+
+```bash
+journey --agent-bootstrap codex
+journey --agent-bootstrap claude
+journey --agent-bootstrap cursor
+journey --agent-bootstrap generic
+```
+
+The bootstrap output includes assistant-specific Journey guidance, the canonical targeted verification loop, copy-paste
+commands, and packaged touchpoint references. It is print-only and does not write files.
+
+Use assistant-specific instructions when a project-level agent file should be installed or printed by itself:
 
 ```bash
 journey --agent-instructions codex

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .agent_instructions import (
     install_agent_instructions,
+    render_agent_bootstrap,
     render_agent_instructions,
     supported_agent_instruction_targets,
 )
@@ -1942,6 +1943,11 @@ def _cmd_agent_instructions(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_agent_bootstrap(args: argparse.Namespace) -> int:
+    sys.stdout.write(render_agent_bootstrap(args.agent_bootstrap))
+    return 0
+
+
 def _cmd_touchpoint_docs(args: argparse.Namespace) -> int:
     sys.stdout.write(render_touchpoint_docs(args.touchpoint_docs))
     return 0
@@ -2381,6 +2387,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print assistant instructions for Codex, Claude Code, Cursor, or generic agents",
     )
     parser.add_argument(
+        "--agent-bootstrap",
+        choices=supported_agent_instruction_targets(),
+        help="Print a complete agent bootstrap packet with instructions, loop commands, and touchpoint references",
+    )
+    parser.add_argument(
         "--install-agent-instructions",
         action="store_true",
         help="Write --agent-instructions output to that assistant's default project path",
@@ -2472,6 +2483,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.log_level, output_format=args.output)
+    if args.agent_bootstrap is not None and args.agent_instructions is not None:
+        parser.error("--agent-bootstrap cannot be used with --agent-instructions")
+    if args.agent_bootstrap is not None and args.touchpoint_docs is not None:
+        parser.error("--agent-bootstrap cannot be used with --touchpoint-docs")
+    if args.agent_bootstrap is not None and (
+        args.install_agent_instructions or args.force_agent_instructions
+    ):
+        parser.error(
+            "--agent-bootstrap is print-only; use --agent-instructions with --install-agent-instructions"
+        )
+    if args.agent_bootstrap is not None:
+        return _cmd_agent_bootstrap(args)
     if args.install_agent_instructions and args.agent_instructions is None:
         parser.error("--install-agent-instructions requires --agent-instructions")
     if args.force_agent_instructions and not args.install_agent_instructions:

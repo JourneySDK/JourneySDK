@@ -1,6 +1,7 @@
 # 05 Journey Cloud Touchpoints
 
-Some journeys need resources that should exist outside the local test process: a webhook URL the system under test can reach, or an inbox hosted by Journey Cloud.
+Some journeys need resources that should exist outside the local test process: a webhook URL the system under test can
+reach, or an inbox hosted by Journey Cloud.
 
 That is where Journey Cloud touchpoints fit. A touchpoint is a system, service, or channel that participates in the
 tested journey; these hosted touchpoints let one Journey spec drive the app and verify side effects outside the
@@ -10,6 +11,14 @@ Use a cloud touchpoint when the service under test needs to communicate with som
 external system, but disposable enough for tests. Instead of building a temporary webhook server or borrowing a real
 mailbox, the journey asks Journey Cloud for a handle, passes that handle to the service under test, then waits for the
 effect at a later step.
+
+Journey Cloud touchpoints available in the SDK today:
+
+- hosted webhook endpoints
+- hosted email inboxes
+
+The same model is intended to extend to future hosted resources, such as phone/SMS, payment cards, voice, and messaging,
+but this chapter documents only the implemented email and webhook touchpoints.
 
 Two rules matter before anything else:
 

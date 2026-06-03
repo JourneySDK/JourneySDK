@@ -32,6 +32,7 @@ python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -c "import journeysdk"
 "$VENV_DIR/bin/journey" --help >/dev/null
 "$VENV_DIR/bin/journey" --agent-instructions codex >/dev/null
+"$VENV_DIR/bin/journey" --agent-bootstrap codex >/dev/null
 "$VENV_DIR/bin/journey" --touchpoint-docs docker >/dev/null
 "$VENV_DIR/bin/journey" --touchpoint-docs all >/dev/null
 
@@ -48,12 +49,14 @@ fi
 
 PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --help >/dev/null
 PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --agent-instructions codex >/dev/null
+PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --agent-bootstrap codex >/dev/null
 PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --touchpoint-docs docker >/dev/null
 PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --touchpoint-docs all >/dev/null
 
 echo "Smoke testing one-off uv CLI run from the wheel..."
 HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --help >/dev/null
 HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --agent-instructions codex >/dev/null
+HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --agent-bootstrap codex >/dev/null
 HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --touchpoint-docs docker >/dev/null
 HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --touchpoint-docs all >/dev/null
 

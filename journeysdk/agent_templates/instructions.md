@@ -10,6 +10,7 @@ affected journey or step.
 - When implementing new features, extend existing journey specs or add new ones so the new user behavior is covered.
 - Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
 - Use it for fast partial verification: inspect the compiled plan without execution, run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
+- If you need the complete Journey guidance packet, run `journey --agent-bootstrap <target>` where `<target>` is `codex`, `claude`, `cursor`, or `generic`.
 
 ## Add Journey Specs
 
@@ -100,6 +101,7 @@ def changedetection_core_journey() -> None:
 - Email: use `step(get_email_inbox())`, `step(send_email(...))`, and `step(wait_for_email(...), inbox, retry=..., retry_delay=...)`; set `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL`.
 - Webhook: use `step(get_webhook_endpoint(path=...))`, pass `endpoint.url` to the app under test, then use `step(wait_for_webhook_request(path=...), endpoint, retry=..., retry_delay=...)`.
 - Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, and use later coarse `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
+- Journey Cloud resources available today are hosted email inboxes and hosted webhook endpoints. Treat phone/SMS, payment cards, voice, and messaging as roadmap resources unless the project has its own concrete helper or touchpoint.
 
 ## Quick Verification Loop
 
@@ -141,3 +143,5 @@ journey --file journeys/<feature>_journey.py --step target_label --output jsonl
 ## Verification Standard
 
 Before wrapping up, report the exact Journey command you ran, the targeted step or full journey that passed, and any broader tests that still need to run.
+For browser journeys, also report relevant `journey recordings` traces or videos when they help a human reviewer verify what happened.
+For cloud touchpoint journeys, report the email, webhook, or other payload evidence asserted by the Journey step.

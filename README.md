@@ -53,6 +53,13 @@ Import the primitives you use and write a top-level `@journey` function:
 from journeysdk import journey, step
 ```
 
+Give a coding agent the complete Journey loop from the installed CLI:
+
+```bash
+journey --agent-bootstrap codex
+journey --agent-bootstrap claude
+```
+
 The canonical first-run guide is [Getting Started](docs/01-getting-started.md). It covers the smallest useful journey,
 running one file, selecting one journey, and JSON Lines output for tools.
 
@@ -87,8 +94,18 @@ Those references are sourced from `journeysdk/touchpoint_docs/*.md` in this repo
 
 ## AI Agent Support
 
-Use packaged assistant instructions when an AI coding agent needs to create, execute, debug, or maintain Journey SDK
-journeys:
+Use the bootstrap packet when an AI coding agent needs the whole Journey loop in one command:
+
+```bash
+journey --agent-bootstrap codex
+journey --agent-bootstrap claude
+journey --agent-bootstrap cursor
+journey --agent-bootstrap generic
+```
+
+It prints target-specific assistant guidance, the canonical `--plan-only` -> `--develop-step` -> `--step --no-state`
+-> full journey loop, and packaged touchpoint references. Use packaged assistant instructions when a project-level
+assistant file should be written:
 
 ```bash
 journey --agent-instructions codex

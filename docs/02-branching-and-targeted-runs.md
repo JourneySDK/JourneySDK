@@ -164,6 +164,18 @@ file before each retry or continue, so edits are picked up immediately. When you
 broader verification, run the final `--step` or full journey with `--no-state` so the paused develop-step state is not
 reused for a different selection.
 
+For coding agents, this becomes the default reconciliation loop:
+
+```bash
+journey --file journeys/<feature>_journey.py --plan-only
+journey --file journeys/<feature>_journey.py --develop-step <target_step>
+journey --file journeys/<feature>_journey.py --step <target_step> --no-state
+journey --file journeys/<feature>_journey.py --no-state
+```
+
+The agent should report the exact commands it ran, the target step or journey that passed, and any browser recordings,
+touchpoint payloads, or other artifacts that prove the end-to-end behavior.
+
 ## Rehydrate Later Cases from a Step Anchor
 
 Read `docs/rehydration_journey/rehydration_journey.py`.

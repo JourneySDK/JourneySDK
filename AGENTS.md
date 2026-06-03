@@ -11,6 +11,12 @@ Codex rendering:
 journey --agent-instructions codex
 ```
 
+Full agent bootstrap packet:
+
+```bash
+journey --agent-bootstrap codex
+```
+
 For downstream projects, keep using the packaged install flow when a project-level assistant file should be written:
 
 ```bash

@@ -242,8 +242,13 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
 
     agent_args = parser.parse_args(["--agent-instructions", "codex"])
     assert agent_args.agent_instructions == "codex"
+    assert agent_args.agent_bootstrap is None
     assert agent_args.install_agent_instructions is False
     assert agent_args.force_agent_instructions is False
+
+    bootstrap_args = parser.parse_args(["--agent-bootstrap", "codex"])
+    assert bootstrap_args.agent_bootstrap == "codex"
+    assert bootstrap_args.agent_instructions is None
 
     install_args = parser.parse_args(
         [
@@ -291,6 +296,8 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
         parser.parse_args(["--json"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--agent-instructions", "vim"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--agent-bootstrap", "vim"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--touchpoint-docs", "ftp"])
     removed_flag = "--" + "state"
@@ -353,6 +360,35 @@ def test_touchpoint_docs_prints_reference_without_discovery(
     )
 
     exit_code = main(["--touchpoint-docs", "docker"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out == rendered
+
+
+def test_agent_bootstrap_prints_complete_packet_without_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    rendered = "sentinel agent bootstrap\n"
+
+    def fail_discovery(*args: object, **kwargs: object) -> None:
+        raise AssertionError("agent bootstrap should not discover journeys")
+
+    def fake_render_agent_bootstrap(target: str) -> str:
+        assert target == "codex"
+        return rendered
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("journeysdk.cli.discover_journeys", fail_discovery)
+    monkeypatch.setattr(
+        "journeysdk.cli.render_agent_bootstrap",
+        fake_render_agent_bootstrap,
+    )
+
+    exit_code = main(["--agent-bootstrap", "codex"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -475,6 +511,28 @@ def test_agent_instruction_install_flags_require_agent_instruction_target(
         "--force-agent-instructions requires --install-agent-instructions"
         in capsys.readouterr().out
     )
+
+
+def test_agent_bootstrap_rejects_ambiguous_print_and_install_combinations(
+    capsys: pytest.CaptureFixture[str],
+):
+    with pytest.raises(SystemExit) as instructions_exc:
+        main(["--agent-bootstrap", "codex", "--agent-instructions", "codex"])
+
+    assert instructions_exc.value.code == 2
+    assert "--agent-bootstrap cannot be used with --agent-instructions" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as docs_exc:
+        main(["--agent-bootstrap", "codex", "--touchpoint-docs", "all"])
+
+    assert docs_exc.value.code == 2
+    assert "--agent-bootstrap cannot be used with --touchpoint-docs" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as install_exc:
+        main(["--agent-bootstrap", "codex", "--install-agent-instructions"])
+
+    assert install_exc.value.code == 2
+    assert "--agent-bootstrap is print-only" in capsys.readouterr().out
 
 
 def test_execute_develop_step_rejects_json_mode(
