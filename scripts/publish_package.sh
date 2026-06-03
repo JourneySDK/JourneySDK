@@ -9,6 +9,12 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 
+release_tag="${JOURNEY_RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
+if [ -n "$release_tag" ]; then
+  echo "Checking release tag $release_tag..."
+  python3 "$ROOT_DIR/scripts/assert_release_tag.py" --tag "$release_tag"
+fi
+
 if [ -z "${UV_PUBLISH_TOKEN:-}" ]; then
   echo "UV_PUBLISH_TOKEN must be set before publishing." >&2
   echo "Create a PyPI API token, then run: export UV_PUBLISH_TOKEN='...'" >&2

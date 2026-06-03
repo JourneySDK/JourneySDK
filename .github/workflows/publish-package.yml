@@ -1,0 +1,39 @@
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]*"
+
+concurrency:
+  group: publish-package-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish-package:
+    name: Publish package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Publish package
+        env:
+          JOURNEY_RELEASE_TAG: ${{ github.ref_name }}
+          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
+        run: ./scripts/publish_package.sh

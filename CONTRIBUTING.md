@@ -127,10 +127,13 @@ ANSI color is applied only for TTY streams and only from explicit generic styles
 `code`, `success`, `warning`, `error`, and `muted`. Captured output and CI stay plain ASCII. Sensitive fields and
 password-like text are redacted in all formats, but callers should still avoid putting secrets in prose.
 
-## Manual Release Flow
+## Release Flow
 
 1. Update the package version in `pyproject.toml`.
 2. From the Journey SDK repository root, run `uv run pytest`.
-3. From the Journey SDK repository root, run `./scripts/smoke_test_package.sh`.
-4. Build the release artifacts with `uv build`.
-5. Publish them with `uv publish`.
+3. Create a tag that matches the package version, using either `vX.Y.Z` or `X.Y.Z`.
+4. Push the tag to GitHub.
+5. GitHub Actions runs `.github/workflows/publish-package.yml`, verifies that the tag matches `[project].version`,
+   verifies that the version is not already present on PyPI, then runs `./scripts/publish_package.sh`.
+
+The JourneySDK repository must have a `UV_PUBLISH_TOKEN` secret configured for PyPI publishing.
