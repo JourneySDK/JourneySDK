@@ -22,7 +22,12 @@ from journeysdk.errors import (
     UnsupportedLoopError,
 )
 from journeysdk.models import BranchMarkerNode, StepNode, StepRetry
-from journeysdk.state import ExecutionStateEnvelope, SelectedCaseState
+from journeysdk.state import (
+    ExecutionStateEnvelope,
+    SelectedCaseState,
+    StateFingerprint,
+    StateValidityEnvelope,
+)
 
 
 def _labels(case_plan):
@@ -3338,8 +3343,9 @@ def test_execute_step_started_branches_keep_retry_counters_independent():
     ]
 
 
-def test_execute_state_rejects_plan_mismatch(tmp_path):
+def test_execute_state_invalidates_plan_mismatch(tmp_path):
     state_file = tmp_path / "journey.state"
+    events: list[str] = []
 
     def interrupt():
         raise KeyboardInterrupt()
@@ -3351,14 +3357,17 @@ def test_execute_state_rejects_plan_mismatch(tmp_path):
         journey_sdk.execute(initial_journey, state=state_file)
 
     def stable():
+        events.append("stable")
         return True
 
     def initial_journey():
         journey_sdk.step(stable)
         journey_sdk.step(stable)
 
-    with pytest.raises(ExecutionStateMismatchError):
-        journey_sdk.execute(initial_journey, state=state_file)
+    report = journey_sdk.execute(initial_journey, state=state_file)
+
+    assert _record_labels(report.case_reports[0]) == ["stable", "stable"]
+    assert events == ["stable", "stable"]
 
 
 def test_execute_state_rejects_corrupt_state_file(tmp_path):
@@ -3415,7 +3424,8 @@ def test_execute_state_sanitizes_completed_step_record_results(tmp_path):
 
     payload = json.loads(state_file.read_text(encoding="utf-8"))
     assert payload["format"] == "journey.execution_state"
-    assert payload["version"] == 11
+    assert payload["version"] == 12
+    assert payload["validity"]["fingerprints"]
     encoded_result = payload["completed_case_reports"][0]["records"][0]["result"]
     assert encoded_result["encoding"] == "pickle-base64"
     assert pickle.loads(base64.b64decode(encoded_result["data"].encode("ascii"))) is None
@@ -3515,12 +3525,45 @@ def test_execute_state_rejects_old_state_format_version(tmp_path):
             None,
             None,
         ),
+        validity=StateValidityEnvelope(
+            fingerprints=(StateFingerprint("state_format", "4"),),
+        ),
         selected_cases=selected_cases,
         current_case_index=0,
         completed_case_reports=[],
         active_case=None,
     )
-    state_file.write_bytes(pickle.dumps(envelope))
+    state_file.write_text(
+        json.dumps(
+            {
+                "format": "journey.execution_state",
+                "version": 4,
+                "journey_id": envelope.journey_id,
+                "function_ref": envelope.function_ref,
+                "step": envelope.step,
+                "develop_step": envelope.develop_step,
+                "plan_signature": envelope.plan_signature,
+                "validity": {
+                    "fingerprints": [
+                        {"key": item.key, "value": item.value}
+                        for item in envelope.validity.fingerprints
+                    ]
+                },
+                "selected_cases": [
+                    {
+                        "case_id": item.case_id,
+                        "stop_after_index": item.stop_after_index,
+                    }
+                    for item in selected_cases
+                ],
+                "current_case_index": 0,
+                "completed_case_reports": [],
+                "active_case": None,
+                "branch_anchor_snapshots": {},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     with pytest.raises(ExecutionStateMismatchError) as exc_info:
         journey_sdk.execute(journey, state=state_file)

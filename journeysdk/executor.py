@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import importlib.metadata
 import json
 import re
 import shutil
+import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -50,6 +53,8 @@ from .state import (
     PausedStepState,
     RuntimeSnapshotState,
     SelectedCaseState,
+    StateFingerprint,
+    StateValidityEnvelope,
     StepBindingState,
     artifact_root_for_state,
     default_execution_state_path,
@@ -306,6 +311,13 @@ class _DevelopStateRefresh:
 
 
 @dataclass(frozen=True)
+class _StateInvalidationReason:
+    key: str
+    expected: str | None
+    actual: str | None
+
+
+@dataclass(frozen=True)
 class _SelectedCase:
     case_plan: CasePlan
     stop_after_index: int | None
@@ -539,6 +551,18 @@ class _ExecutionObserver:
         return
 
     def on_develop_state_restart(self, *, case_id: str) -> None:
+        return
+
+    def on_state_validity(
+        self,
+        *,
+        boundary_id: str,
+        status: str,
+        reason: str | None,
+        expected: str | None,
+        actual: str | None,
+        action: str,
+    ) -> None:
         return
 
 
@@ -902,6 +926,49 @@ class _LoggingExecutionObserver(_ExecutionObserver):
             case=case_id,
         )
 
+    def on_state_validity(
+        self,
+        *,
+        boundary_id: str,
+        status: str,
+        reason: str | None,
+        expected: str | None,
+        actual: str | None,
+        action: str,
+    ) -> None:
+        if status == "fresh":
+            pretty = pretty_line("State: fresh run", indent=2, style="context")
+            message = "State: fresh run"
+        elif status == "replayed":
+            pretty = pretty_line(
+                f"State: reused boundary {boundary_id}", indent=2, style="context"
+            )
+            message = f"State: reused boundary {boundary_id}"
+        else:
+            reason_text = reason or "state changed"
+            pretty = pretty_line(
+                f"State: invalidated boundary {boundary_id}; "
+                f"Reason: {reason_text}; Action: {action}",
+                indent=2,
+                style="warning",
+            )
+            message = (
+                f"State: invalidated boundary {boundary_id}; "
+                f"Reason: {reason_text}; Action: {action}"
+            )
+
+        self._logger.info(
+            "state_validity",
+            message,
+            pretty=pretty,
+            boundary_id=boundary_id,
+            status=status,
+            reason=reason,
+            expected=expected,
+            actual=actual,
+            action=action,
+        )
+
 
 def _copy_binding(binding: StepBindingState) -> StepBindingState:
     return StepBindingState(
@@ -1133,7 +1200,8 @@ class _StateController:
         step: str | None,
         develop_step: str | None,
         selected_cases: list[_SelectedCase],
-        allow_stale_develop_pause: bool = False,
+        validity: StateValidityEnvelope,
+        observer: _ExecutionObserver,
         reset_completed_state: bool = False,
     ) -> None:
         self.path = storage.display_path
@@ -1143,7 +1211,8 @@ class _StateController:
         self.step = step
         self.develop_step = develop_step
         self.selected_cases = list(selected_cases)
-        self._allow_stale_develop_pause = allow_stale_develop_pause
+        self.validity = validity
+        self._observer = observer
         self.artifact_root = storage.artifact_root
         self._artifact_root_is_temporary = storage.artifact_root_is_temporary
         self._persistent_artifact_root = storage.persistent_artifact_root
@@ -1153,6 +1222,7 @@ class _StateController:
             step,
             develop_step,
         )
+        self._loaded_state_invalid_reason: _StateInvalidationReason | None = None
 
         loaded: ExecutionStateEnvelope | None = None
         if self._run_path is not None:
@@ -1172,15 +1242,25 @@ class _StateController:
                 step=step,
                 develop_step=develop_step,
                 plan_signature=self.plan_signature,
+                validity=self.validity,
                 selected_cases=_selected_case_refs(self.selected_cases),
                 current_case_index=0,
                 completed_case_reports=[],
                 active_case=None,
             )
+            observer.on_state_validity(
+                boundary_id="journey",
+                status="fresh",
+                reason=None,
+                expected=None,
+                actual=None,
+                action="executing from the beginning",
+            )
         else:
             self._validate_loaded_state(loaded)
 
         self._state = loaded
+        self._state.validity = self.validity
 
     @property
     def completed_case_reports(self) -> list[CaseExecutionReport]:
@@ -1302,13 +1382,120 @@ class _StateController:
                 f"The journey state file '{self.path}' points at case '{active_case.case_id}', "
                 f"but this run expects case '{case_id}'."
             )
+        if self._loaded_state_invalid_reason is not None:
+            return self._active_case_after_invalidation(
+                case_index=case_index,
+                active_case=active_case,
+                reason=self._loaded_state_invalid_reason,
+            )
+        self._observer.on_state_validity(
+            boundary_id=case_id,
+            status="replayed",
+            reason=None,
+            expected=None,
+            actual=None,
+            action=f"resuming from step index {active_case.replay_from_index}",
+        )
         return active_case
 
-    def branch_anchor_snapshot_for(self, anchor_key: str) -> RuntimeSnapshotState | None:
+    def branch_anchor_snapshot_for(
+        self,
+        anchor_key: str,
+        *,
+        case_plan: CasePlan,
+    ) -> RuntimeSnapshotState | None:
         snapshot = self._state.branch_anchor_snapshots.get(anchor_key)
         if snapshot is None:
             return None
+        if self._loaded_state_invalid_reason is not None:
+            if not _reason_allows_prefix_reuse(self._loaded_state_invalid_reason):
+                self._observer.on_state_validity(
+                    boundary_id=anchor_key,
+                    status="invalidated",
+                    reason=self._loaded_state_invalid_reason.key,
+                    expected=self._loaded_state_invalid_reason.expected,
+                    actual=self._loaded_state_invalid_reason.actual,
+                    action="rerunning from the case start",
+                )
+                return None
+            boundary_index = _snapshot_boundary_index(snapshot)
+            if not _snapshot_matches_prefix(snapshot, case_plan, boundary_index):
+                self._observer.on_state_validity(
+                    boundary_id=anchor_key,
+                    status="invalidated",
+                    reason=self._loaded_state_invalid_reason.key,
+                    expected=self._loaded_state_invalid_reason.expected,
+                    actual=self._loaded_state_invalid_reason.actual,
+                    action="rerunning from the case start",
+                )
+                return None
+        self._observer.on_state_validity(
+            boundary_id=anchor_key,
+            status="replayed",
+            reason=None,
+            expected=None,
+            actual=None,
+            action="using saved branch anchor",
+        )
         return _copy_runtime_snapshot(snapshot)
+
+    def _active_case_after_invalidation(
+        self,
+        *,
+        case_index: int,
+        active_case: ActiveCaseState,
+        reason: _StateInvalidationReason,
+    ) -> ActiveCaseState | None:
+        if not _reason_allows_prefix_reuse(reason):
+            self._invalidate_entire_state(
+                self._state,
+                boundary_id=active_case.case_id,
+                reason=reason,
+            )
+            return None
+
+        case_plan = self.selected_cases[case_index].case_plan
+        boundary_index = _longest_matching_snapshot_prefix(
+            active_case.snapshot,
+            case_plan,
+        )
+        if boundary_index <= 0:
+            self._invalidate_entire_state(
+                self._state,
+                boundary_id=active_case.case_id,
+                reason=reason,
+            )
+            return None
+
+        trimmed = replace(
+            active_case,
+            snapshot=_trim_snapshot_to_prefix(
+                active_case.snapshot,
+                case_plan,
+                boundary_index,
+            ),
+            replay_from_index=boundary_index,
+            dirty_node_id=None,
+            paused_step=(
+                active_case.paused_step
+                if active_case.paused_step is not None
+                and active_case.paused_step.node_index < boundary_index
+                else None
+            ),
+        )
+        self._state.active_case = trimmed
+        self._state.plan_signature = self.plan_signature
+        self._state.validity = self.validity
+        self._write_state()
+        self._observer.on_state_validity(
+            boundary_id=active_case.case_id,
+            status="invalidated",
+            reason=reason.key,
+            expected=reason.expected,
+            actual=reason.actual,
+            action=f"rerunning from step index {boundary_index}",
+        )
+        return trimmed
 
     def begin_case(
         self,
@@ -1365,6 +1552,29 @@ class _StateController:
             return
         save_execution_state(self._run_path, self._state)
 
+    def _invalidate_entire_state(
+        self,
+        state: ExecutionStateEnvelope,
+        *,
+        boundary_id: str,
+        reason: _StateInvalidationReason,
+    ) -> None:
+        state.plan_signature = self.plan_signature
+        state.validity = self.validity
+        state.selected_cases = _selected_case_refs(self.selected_cases)
+        state.current_case_index = 0
+        state.completed_case_reports = []
+        state.active_case = None
+        state.branch_anchor_snapshots = {}
+        self._observer.on_state_validity(
+            boundary_id=boundary_id,
+            status="invalidated",
+            reason=reason.key,
+            expected=reason.expected,
+            actual=reason.actual,
+            action="executing from the beginning",
+        )
+
     def _validate_loaded_state(self, state: ExecutionStateEnvelope) -> None:
         expected_cases = _selected_case_refs(self.selected_cases)
         expected_anchor_keys = {
@@ -1407,25 +1617,26 @@ class _StateController:
                 f"{state.develop_step!r}, not {self.develop_step!r}.",
                 hint=hint,
             )
-        if (
-            self._allow_stale_develop_pause
-            and state.active_case is not None
-            and state.active_case.paused_step is not None
-            and (
-                state.plan_signature != self.plan_signature
-                or state.selected_cases != expected_cases
+        validity_reason = _validity_mismatch(state.validity, self.validity)
+        if state.plan_signature != self.plan_signature and validity_reason is None:
+            validity_reason = _StateInvalidationReason(
+                key="plan_shape",
+                expected=state.plan_signature,
+                actual=self.plan_signature,
             )
-        ):
-            self._validate_stale_develop_pause(state)
-            return
-        if state.plan_signature != self.plan_signature:
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' no longer matches the current journey plan."
-            )
+        if validity_reason is not None:
+            self._loaded_state_invalid_reason = validity_reason
         if state.selected_cases != expected_cases:
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' no longer matches the selected case order."
+            self._invalidate_entire_state(
+                state,
+                boundary_id="journey",
+                reason=_StateInvalidationReason(
+                    key="selected_cases",
+                    expected=_stable_json(state.selected_cases),
+                    actual=_stable_json(expected_cases),
+                ),
             )
+            return
         if not 0 <= state.current_case_index <= len(self.selected_cases):
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' has invalid case index {state.current_case_index}."
@@ -1462,6 +1673,12 @@ class _StateController:
             if state.current_case_index != len(state.completed_case_reports):
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' is missing the active case snapshot."
+                )
+            if self._loaded_state_invalid_reason is not None:
+                self._invalidate_entire_state(
+                    state,
+                    boundary_id="journey",
+                    reason=self._loaded_state_invalid_reason,
                 )
             return
 
@@ -1549,37 +1766,6 @@ class _StateController:
                 raise ExecutionStateMismatchError(
                     f"The journey state file '{self.path}' has invalid attempt state for step '{node_id}'."
                 )
-
-    def _validate_stale_develop_pause(self, state: ExecutionStateEnvelope) -> None:
-        if state.active_case is None or state.active_case.paused_step is None:
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' is not paused on a develop-step prompt."
-            )
-        if state.current_case_index < 0:
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' has invalid case index {state.current_case_index}."
-            )
-        if state.current_case_index != len(state.completed_case_reports):
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' has inconsistent active-case progress."
-            )
-        paused_step = state.active_case.paused_step
-        if (
-            isinstance(paused_step.node_index, bool)
-            or not isinstance(paused_step.node_index, int)
-            or paused_step.node_index < 0
-        ):
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' has invalid paused-step index."
-            )
-        if isinstance(paused_step.attempt, bool) or not isinstance(paused_step.attempt, int):
-            raise ExecutionStateMismatchError(
-                f"The journey state file '{self.path}' has invalid paused-step attempt data."
-            )
-        self._validate_runtime_snapshot(
-            state.active_case.snapshot,
-            label=f"active case '{state.active_case.case_id}'",
-        )
 
     def _validate_runtime_snapshot(
         self,
@@ -3508,6 +3694,146 @@ def _plan_signature(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _stable_json(value: object) -> str:
+    return json.dumps(_stable_value(value), sort_keys=True, separators=(",", ":"))
+
+
+def _hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _hash_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _package_version() -> str:
+    try:
+        return importlib.metadata.version("journey-sdk")
+    except importlib.metadata.PackageNotFoundError:
+        return "editable"
+
+
+def _state_validity_envelope(
+    journey_fn: JourneyEntrypoint,
+    *,
+    plan: JourneyPlan,
+    selected_cases: list[_SelectedCase],
+    step: str | None,
+    develop_step: str | None,
+) -> StateValidityEnvelope:
+    source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
+    source_root = Path(source_file).resolve().parent
+    plan_signature = _plan_signature(plan, selected_cases, step, develop_step)
+    fingerprints: list[StateFingerprint] = [
+        StateFingerprint("journey_id", plan.journey_id),
+        StateFingerprint("function_ref", plan.function_ref),
+        StateFingerprint("step", step or ""),
+        StateFingerprint("develop_step", develop_step or ""),
+        StateFingerprint(
+            "selected_cases",
+            _hash_text(_stable_json(_selected_case_refs(selected_cases))),
+        ),
+        StateFingerprint("plan_shape", plan_signature),
+        StateFingerprint("state_format", str(STATE_FORMAT_VERSION)),
+        StateFingerprint("journey_sdk_version", _package_version()),
+        StateFingerprint(
+            "python",
+            f"{sys.version_info.major}.{sys.version_info.minor}",
+        ),
+    ]
+    fingerprints.extend(_workspace_fingerprints(source_root))
+    return StateValidityEnvelope(fingerprints=tuple(sorted(fingerprints, key=lambda item: item.key)))
+
+
+def _workspace_fingerprints(source_root: Path) -> list[StateFingerprint]:
+    fingerprints: list[StateFingerprint] = []
+    for name in (
+        "uv.lock",
+        "pyproject.toml",
+        "requirements.txt",
+        "poetry.lock",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    ):
+        path = _find_upwards(source_root, name)
+        digest = _hash_file(path) if path is not None else None
+        if digest is not None:
+            fingerprints.append(StateFingerprint(f"file:{name}", digest))
+    fingerprints.extend(_git_fingerprints(source_root))
+    return fingerprints
+
+
+def _find_upwards(start: Path, name: str) -> Path | None:
+    current = start.resolve()
+    for candidate_root in (current, *current.parents):
+        candidate = candidate_root / name
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _git_fingerprints(source_root: Path) -> list[StateFingerprint]:
+    git_root = _run_git(source_root, "rev-parse", "--show-toplevel")
+    if git_root is None:
+        return []
+    commit = _run_git(Path(git_root), "rev-parse", "HEAD")
+    status = _run_git(Path(git_root), "status", "--porcelain=v1")
+    fingerprints: list[StateFingerprint] = []
+    if commit is not None:
+        fingerprints.append(StateFingerprint("git:commit", commit))
+    if status is not None:
+        fingerprints.append(StateFingerprint("git:dirty", _hash_text(status)))
+    return fingerprints
+
+
+def _run_git(cwd: Path, *args: str) -> str | None:
+    if getattr(subprocess.run, "__module__", "subprocess") != "subprocess":
+        return None
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _validity_mismatch(
+    expected: StateValidityEnvelope,
+    actual: StateValidityEnvelope,
+) -> _StateInvalidationReason | None:
+    expected_map = {item.key: item.value for item in expected.fingerprints}
+    actual_map = {item.key: item.value for item in actual.fingerprints}
+    for key in sorted(set(expected_map) | set(actual_map)):
+        if expected_map.get(key) != actual_map.get(key):
+            return _StateInvalidationReason(
+                key=key,
+                expected=expected_map.get(key),
+                actual=actual_map.get(key),
+            )
+    return None
+
+
+def _reason_allows_prefix_reuse(reason: _StateInvalidationReason) -> bool:
+    return reason.key == "plan_shape"
+
+
 def _find_paused_step_index(
     case_plan: CasePlan,
     paused_step: PausedStepState,
@@ -3617,6 +3943,23 @@ def _snapshot_matches_prefix(
     return True
 
 
+def _snapshot_boundary_index(snapshot: RuntimeSnapshotState) -> int:
+    if not snapshot.record_indices:
+        return 0
+    return max(snapshot.record_indices) + 1
+
+
+def _longest_matching_snapshot_prefix(
+    snapshot: RuntimeSnapshotState,
+    case_plan: CasePlan,
+) -> int:
+    upper_bound = min(_snapshot_boundary_index(snapshot), len(case_plan.nodes))
+    for boundary_index in range(upper_bound, -1, -1):
+        if _snapshot_matches_prefix(snapshot, case_plan, boundary_index):
+            return boundary_index
+    return 0
+
+
 def _trim_snapshot_to_prefix(
     snapshot: RuntimeSnapshotState,
     case_plan: CasePlan,
@@ -3668,6 +4011,14 @@ def _restart_develop_state(
     delete_execution_state(path)
     artifact_root, _ = artifact_root_for_state(path)
     delete_artifact_root(artifact_root)
+    observer.on_state_validity(
+        boundary_id=case_id,
+        status="invalidated",
+        reason="plan_shape",
+        expected=None,
+        actual=None,
+        action="executing from the beginning",
+    )
     observer.on_develop_state_restart(case_id=case_id)
     return _DevelopStateRefresh(restarted_case_id=case_id)
 
@@ -3679,6 +4030,7 @@ def _refresh_develop_state_for_plan(
     step: str | None,
     develop_step: str | None,
     selected_cases: list[_SelectedCase],
+    validity: StateValidityEnvelope,
     pause_action: str | None,
     observer: _ExecutionObserver,
 ) -> _DevelopStateRefresh:
@@ -3778,7 +4130,16 @@ def _refresh_develop_state_for_plan(
         active_case.replay_from_index = replay_boundary.start_index
         active_case.dirty_node_id = None
 
+    observer.on_state_validity(
+        boundary_id=active_case.case_id,
+        status="invalidated",
+        reason="plan_shape",
+        expected=state.plan_signature,
+        actual=new_signature,
+        action=f"rerunning from step index {active_case.replay_from_index}",
+    )
     state.plan_signature = new_signature
+    state.validity = validity
     state.develop_step = develop_step
     state.selected_cases = expected_cases
     save_execution_state(path, state)
@@ -3858,12 +4219,20 @@ def _execute_plan(
         develop_step=develop_step,
         state=state_storage.run_path,
     )
+    validity = _state_validity_envelope(
+        journey_fn,
+        plan=plan,
+        selected_cases=selected_cases,
+        step=step,
+        develop_step=develop_step,
+    )
     develop_refresh = _refresh_develop_state_for_plan(
         state_storage.run_path,
         journey_plan=plan,
         step=step,
         develop_step=develop_step,
         selected_cases=selected_cases,
+        validity=validity,
         pause_action=pause_action,
         observer=execution_observer,
     )
@@ -3876,9 +4245,8 @@ def _execute_plan(
         step=step,
         develop_step=develop_step,
         selected_cases=selected_cases,
-        allow_stale_develop_pause=(
-            develop_step is not None and effective_pause_action is None
-        ),
+        validity=validity,
+        observer=execution_observer,
         reset_completed_state=using_default_state,
     )
     resolved_prompt_memory_root = _resolve_prompt_memory_root(
@@ -3908,7 +4276,10 @@ def _execute_plan(
             )
             start_anchor_key = _branch_start_anchor_key_for(selected_case.case_plan)
             branch_anchor_seed = (
-                state_controller.branch_anchor_snapshot_for(start_anchor_key)
+                state_controller.branch_anchor_snapshot_for(
+                    start_anchor_key,
+                    case_plan=selected_case.case_plan,
+                )
                 if rehydration_enabled
                 and restored_state is None
                 and selected_case.stop_after_index is None

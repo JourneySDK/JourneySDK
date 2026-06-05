@@ -1138,6 +1138,92 @@ def test_execute_output_jsonl_keeps_stdout_parseable(
     assert any(event["event"] == "step_success" for event in _jsonl_events(captured.out))
 
 
+def test_execute_output_jsonl_reports_state_invalidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    flow_file = tmp_path / "flow.py"
+    events_file = tmp_path / "events.log"
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare_v1")
+            return True
+
+        def target():
+            _append("target")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(target)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    first_exit = main(["--file", "flow.py", "--develop-step", "target"])
+    capsys.readouterr()
+    assert first_exit == 0
+
+    _write(
+        flow_file,
+        f"""
+        import journeysdk as journey
+        from pathlib import Path
+
+        EVENTS = Path({str(events_file)!r})
+
+        def _append(message: str):
+            with EVENTS.open("a", encoding="utf-8") as handle:
+                handle.write(message + "\\n")
+
+        def prepare():
+            _append("prepare_v2")
+            return True
+
+        def target():
+            _append("target")
+            return True
+
+        @journey.journey
+        def flow():
+            journey.step(prepare)
+            journey.step(target)
+        """,
+    )
+
+    second_exit = main(["--file", "flow.py", "--develop-step", "target", "--output", "jsonl"])
+    events = _jsonl_events(capsys.readouterr().out)
+    validity_events = [
+        event for event in events if event["event"] == "state_validity"
+    ]
+
+    assert second_exit == 0
+    assert any(
+        event["status"] == "invalidated"
+        and event["reason"] == "plan_shape"
+        for event in validity_events
+    )
+    assert _event_lines(events_file) == [
+        "prepare_v1",
+        "target",
+        "prepare_v2",
+        "target",
+    ]
+
+
 def test_execute_file_and_journey_filters_limit_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3080,7 +3166,7 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     assert state_file.exists()
 
 
-def test_execute_migrates_legacy_default_state_file(
+def test_execute_ignores_legacy_default_state_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -3138,7 +3224,7 @@ def test_execute_migrates_legacy_default_state_file(
     capsys.readouterr()
 
     assert second_exit == 0
-    assert not legacy_state_file.exists()
+    assert legacy_state_file.exists()
     assert state_file.exists()
     assert _event_lines(events_file) == [
         "prepare",

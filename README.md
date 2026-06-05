@@ -18,7 +18,8 @@ instructions.
 - **One Python journey for meaningful user paths**: author shared setup once and use `branch()` for alternate paths
   instead of duplicating checkout, onboarding, billing, or lifecycle tests.
 - **Fast replay from durable boundaries**: make each step earn its checkpoint, then use `branch(start_from=...)`,
-  retries, and state so late user-flow steps can be developed without rerunning every expensive setup action.
+  retries, and state so late user-flow steps can be developed without rerunning every expensive setup action. Journey
+  labels state as fresh, replayed, or invalidated so cached checkpoints are visible instead of implicit.
 - **Cross-system verification without a new DSL**: drive the browser, start Docker Compose apps, wait for hosted email
   or webhook callbacks, and keep app-specific checks in ordinary Python helpers.
 

@@ -89,6 +89,11 @@ def retry_with_external_state() -> None:
 Journey stores step results before the replay boundary only when they must be skipped or restored later. Values at or
 after the replay boundary are rerun instead of restored.
 
+Saved state is automatically checked before it is reused. If Journey detects that the selected plan, step source,
+runtime, or workspace inputs no longer match the state file, it reports `State: invalidated ...` and reruns from the
+nearest safe boundary. Replayed state is useful for development speed and interruption recovery; run with `--no-state`
+when you need fresh-path evidence for review, merge, or release.
+
 ### Retry the Current Step
 
 ```bash

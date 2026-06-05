@@ -21,10 +21,20 @@ from .models import (
 )
 from .rehydration import StoredValue
 
-STATE_FORMAT_VERSION = 11
+STATE_FORMAT_VERSION = 12
 DEFAULT_STATE_FILENAME = "state.json"
 DEFAULT_STATE_DIR = ".journey"
-LEGACY_DEFAULT_STATE_FILENAME = ".state"
+
+
+@dataclass(frozen=True)
+class StateFingerprint:
+    key: str
+    value: str
+
+
+@dataclass(frozen=True)
+class StateValidityEnvelope:
+    fingerprints: tuple[StateFingerprint, ...]
 
 
 @dataclass
@@ -82,6 +92,7 @@ class ExecutionStateEnvelope:
     step: str | None
     develop_step: str | None
     plan_signature: str
+    validity: StateValidityEnvelope
     selected_cases: list[SelectedCaseState]
     current_case_index: int
     completed_case_reports: list[CaseExecutionReport]
@@ -135,7 +146,6 @@ def prepare_execution_state_storage(
 
     path = Path(path)
     if update_enabled:
-        _migrate_legacy_default_state(path)
         artifact_root, temporary = artifact_root_for_state(path)
         return ExecutionStateStorage(
             display_path=path,
@@ -164,21 +174,6 @@ def prepare_execution_state_storage(
     )
 
 
-def _migrate_legacy_default_state(path: Path) -> None:
-    if path.name != DEFAULT_STATE_FILENAME or path.parent.name != DEFAULT_STATE_DIR:
-        return
-
-    legacy_path = path.parent.parent / LEGACY_DEFAULT_STATE_FILENAME
-    if legacy_path.exists() and not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(legacy_path, path)
-
-    legacy_artifacts, _ = artifact_root_for_state(legacy_path)
-    artifact_root, _ = artifact_root_for_state(path)
-    if legacy_artifacts.exists() and not artifact_root.exists():
-        shutil.move(str(legacy_artifacts), str(artifact_root))
-
-
 def delete_artifact_root(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
@@ -198,21 +193,10 @@ def load_execution_state(path: Path) -> ExecutionStateEnvelope | None:
     try:
         payload = json.loads(raw.decode("utf-8"))
         loaded = _decode_execution_state(payload)
-    except Exception as json_exc:
-        try:
-            loaded = pickle.loads(raw)
-        except (
-            EOFError,
-            pickle.PickleError,
-            AttributeError,
-            ValueError,
-            TypeError,
-            ImportError,
-            OSError,
-        ) as pickle_exc:
-            raise CorruptExecutionStateError(
-                f"Could not read the journey state file '{path}': {json_exc}"
-            ) from pickle_exc
+    except Exception as exc:
+        raise CorruptExecutionStateError(
+            f"Could not read the journey state file '{path}': {exc}"
+        ) from exc
 
     if not isinstance(loaded, ExecutionStateEnvelope):
         raise CorruptExecutionStateError(
@@ -271,6 +255,7 @@ def _encode_execution_state(state: ExecutionStateEnvelope) -> dict[str, object]:
         "step": state.step,
         "develop_step": state.develop_step,
         "plan_signature": state.plan_signature,
+        "validity": _encode_validity(state.validity),
         "selected_cases": [
             _encode_selected_case(item) for item in state.selected_cases
         ],
@@ -300,6 +285,7 @@ def _decode_execution_state(payload: object) -> ExecutionStateEnvelope:
         step=_optional_str(payload.get("step"), "step"),
         develop_step=_optional_str(payload.get("develop_step"), "develop_step"),
         plan_signature=_require_str(payload, "plan_signature"),
+        validity=_decode_validity(payload.get("validity")),
         selected_cases=[
             _decode_selected_case(item)
             for item in _require_list(payload.get("selected_cases"), "selected_cases")
@@ -324,6 +310,33 @@ def _decode_execution_state(payload: object) -> ExecutionStateEnvelope:
                 "branch_anchor_snapshots",
             ).items()
         },
+    )
+
+
+def _encode_validity(envelope: StateValidityEnvelope) -> dict[str, object]:
+    return {
+        "fingerprints": [
+            {"key": item.key, "value": item.value}
+            for item in envelope.fingerprints
+        ],
+    }
+
+
+def _decode_validity(payload: object) -> StateValidityEnvelope:
+    data = _require_dict(payload, "validity")
+    return StateValidityEnvelope(
+        fingerprints=tuple(
+            _decode_fingerprint(item)
+            for item in _require_list(data.get("fingerprints"), "validity.fingerprints")
+        ),
+    )
+
+
+def _decode_fingerprint(payload: object) -> StateFingerprint:
+    data = _require_dict(payload, "validity fingerprint")
+    return StateFingerprint(
+        key=_require_str(data, "key"),
+        value=_require_str(data, "value"),
     )
 
 

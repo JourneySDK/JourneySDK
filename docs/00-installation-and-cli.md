@@ -88,6 +88,11 @@ With persistent state, Ctrl-C has two levels:
   explicit `branch(start_from=...)` or positive `retry=...` boundary. If there is no explicit boundary, the case starts
   again from the beginning.
 
+Journey checks saved state before reuse. Output labels the state decision as `fresh`, `replayed`, or `invalidated`;
+invalidated state is rerun from the nearest safe boundary instead of being trusted silently. State replay is meant for
+development loops and interruption recovery. Use a fresh `--no-state` target-step or full journey run before treating
+the result as release evidence.
+
 With `--no-state`, Ctrl-C stops the run immediately and Journey cannot resume it. Use `--no-state-update` when a run
 should read existing state but leave the state file unchanged.
 

@@ -119,6 +119,9 @@ journey --file journeys/<feature>_journey.py --develop-step target_label
 ```
 
 4. Rerun the same `--develop-step` command after edits to retry the paused step with Journey's default persistent state.
+   Read `state_validity` events in JSONL output or the `State:` lines in pretty output:
+   `fresh` means no checkpoint was reused, `replayed` means a valid checkpoint was reused, and `invalidated` means
+   Journey reran from the nearest safe boundary.
 5. Broaden verification before finishing:
 
 ```bash
@@ -126,8 +129,8 @@ journey --file journeys/<feature>_journey.py --step target_label --no-state
 journey --file journeys/<feature>_journey.py --no-state
 ```
 
-Use `--no-state` for this broader verification when you are switching away from a paused `--develop-step` loop; the
-paused state belongs to that target-step retry loop.
+Use `--no-state` for this broader verification when you are switching away from a paused `--develop-step` loop; replayed
+state is for fast development, while final confidence should come from a fresh target-step or full journey run.
 
 6. Use JSON Lines output when another tool or script needs to parse results:
 
@@ -138,6 +141,7 @@ journey --file journeys/<feature>_journey.py --step target_label --output jsonl
 - Avoid `--interactive` for non-human agent runs; noninteractive `--develop-step` is designed for coding agents.
 - Use `--no-memory` only when AI prompt memory must be ignored for a run.
 - Use `--no-state` only for one-off runs that should not resume.
+- Do not ask the user to delete Journey state after normal edits; Journey invalidates stale state automatically.
 - Do not pass `None` or placeholder objects into constructors; resolve concrete dependencies first.
 
 ## Verification Standard

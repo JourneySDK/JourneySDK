@@ -685,6 +685,43 @@ class _LiveTextReporter(_ExecutionObserver):
             case=case_id,
         )
 
+    def on_state_validity(
+        self,
+        *,
+        boundary_id: str,
+        status: str,
+        reason: str | None,
+        expected: str | None,
+        actual: str | None,
+        action: str,
+    ) -> None:
+        if status == "fresh":
+            message = "State: fresh run"
+            pretty = pretty_line(message, indent=2, style="context")
+        elif status == "replayed":
+            message = f"State: reused boundary {boundary_id}"
+            pretty = pretty_line(message, indent=2, style="context")
+        else:
+            reason_text = reason or "state changed"
+            message = (
+                f"State: invalidated boundary {boundary_id}; "
+                f"Reason: {reason_text}; Action: {action}"
+            )
+            pretty = pretty_line(message, indent=2, style="warning")
+        self._logger.info(
+            "state_validity",
+            message,
+            pretty=pretty,
+            file=self._display,
+            journey=self._journey_name,
+            boundary_id=boundary_id,
+            status=status,
+            reason=reason,
+            expected=expected,
+            actual=actual,
+            action=action,
+        )
+
 
 def _error_from_exception(
     exc: Exception,

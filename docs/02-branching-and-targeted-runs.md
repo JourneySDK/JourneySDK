@@ -160,9 +160,13 @@ care about. Rerun the same command to retry the paused step after editing code, 
 state file to continue. Develop-step retry and continue replay from the paused step's nearest explicit replay boundary;
 when no explicit boundary exists, the selected case starts again from the beginning. Add `--interactive` when you want
 Journey to keep the process open and prompt after each paused step. Journey reloads and recompiles the selected journey
-file before each retry or continue, so edits are picked up immediately. When you are done with the focused loop and want
-broader verification, run the final `--step` or full journey with `--no-state` so the paused develop-step state is not
-reused for a different selection.
+file before each retry or continue, so edits are picked up immediately.
+
+State decisions are explicit in the output. `fresh` means no saved checkpoint was reused, `replayed` means Journey
+reused a valid boundary, and `invalidated` means Journey detected stale state and reran from the nearest safe boundary.
+Normal journey edits should not require manually deleting `.journey/state.json`. When you are done with the focused
+loop and want broader verification, run the final `--step` or full journey with `--no-state` so release evidence comes
+from a fresh path instead of a replayed development checkpoint.
 
 For coding agents, this becomes the default reconciliation loop:
 
@@ -174,7 +178,8 @@ journey --file journeys/<feature>_journey.py --no-state
 ```
 
 The agent should report the exact commands it ran, the target step or journey that passed, and any browser recordings,
-touchpoint payloads, or other artifacts that prove the end-to-end behavior.
+touchpoint payloads, or other artifacts that prove the end-to-end behavior. When using `--output jsonl`, the agent
+should read `state_validity` events before relying on replayed evidence.
 
 ## Rehydrate Later Cases from a Step Anchor
 
