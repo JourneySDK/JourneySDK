@@ -162,11 +162,10 @@ when no explicit boundary exists, the selected case starts again from the beginn
 Journey to keep the process open and prompt after each paused step. Journey reloads and recompiles the selected journey
 file before each retry or continue, so edits are picked up immediately.
 
-State decisions are explicit in the output. `fresh` means no saved checkpoint was reused, `replayed` means Journey
-reused a valid boundary, and `invalidated` means Journey detected stale state and reran from the nearest safe boundary.
-Normal journey edits should not require manually deleting `.journey/state.json`. When you are done with the focused
-loop and want broader verification, run the final `--step` or full journey with `--no-state` so release evidence comes
-from a fresh path instead of a replayed development checkpoint.
+When you are done with the focused loop and want broader verification, run the final `--step` or full journey with
+`--no-state` so release evidence comes from a fresh path instead of a replayed development checkpoint. See
+[Retries And Resume](03-retries-and-resume.md) for the state model and the `fresh`, `replayed`, and `invalidated`
+status lines.
 
 For coding agents, this becomes the default reconciliation loop:
 

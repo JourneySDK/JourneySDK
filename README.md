@@ -18,8 +18,8 @@ instructions.
 - **One Python journey for meaningful user paths**: author shared setup once and use `branch()` for alternate paths
   instead of duplicating checkout, onboarding, billing, or lifecycle tests.
 - **Fast replay from durable boundaries**: make each step earn its checkpoint, then use `branch(start_from=...)`,
-  retries, and state so late user-flow steps can be developed without rerunning every expensive setup action. Journey
-  labels state as fresh, replayed, or invalidated so cached checkpoints are visible instead of implicit.
+  retries, and state so late user-flow steps can be developed without rerunning every expensive setup action. See
+  [Retries and Resume](docs/03-retries-and-resume.md) for how Journey marks state as fresh, replayed, or invalidated.
 - **Cross-system verification without a new DSL**: drive the browser, start Docker Compose apps, wait for hosted email
   or webhook callbacks, and keep app-specific checks in ordinary Python helpers.
 
@@ -69,7 +69,7 @@ running one file, selecting one journey, and JSON Lines output for tools.
 - [Branching and Targeted Runs](docs/02-branching-and-targeted-runs.md): canonical guidance for adding journey specs,
   choosing coarse durable step boundaries, using `branch(start_from=...)`, and iterating with `--step` and
   `--develop-step`.
-- [Retries and Resume](docs/03-retries-and-resume.md): retry boundaries, interrupted runs, default state, and resume.
+- [Retries and Resume](docs/03-retries-and-resume.md): state management, retry boundaries, interrupted runs, and resume.
 - [Browser and Local Touchpoints](docs/04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
   browser prompt tutorials.
 - [Journey Cloud Touchpoints](docs/05-journey-cloud-integrations.md): hosted webhook and email examples.

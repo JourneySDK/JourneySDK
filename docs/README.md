@@ -11,7 +11,7 @@ otherwise.
    Lines output.
 3. [Branching And Targeted Runs](02-branching-and-targeted-runs.md): adding journey specs, choosing coarse durable step
    and branch boundaries, `branch(start_from=...)`, `--plan-only`, `--step`, and `--develop-step`.
-4. [Retries And Resume](03-retries-and-resume.md): retry loops, replay boundaries, default state, and resumable runs.
+4. [Retries And Resume](03-retries-and-resume.md): state management, retry loops, replay boundaries, and resumable runs.
 5. [Browser And Local Touchpoints](04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
    browser prompt tutorials.
 6. [Journey Cloud Touchpoints](05-journey-cloud-integrations.md): hosted webhook and email examples.

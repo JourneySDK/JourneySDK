@@ -3,10 +3,58 @@
 Not every failure means the journey is wrong. Sometimes the system under test is still catching up. Sometimes a long
 run needs to stop cleanly and resume from saved state.
 
-This chapter covers both cases:
+This chapter covers three patterns:
 
+- how Journey saves, reuses, and invalidates state
 - retries when a step needs to poll or replay from an earlier step boundary
 - default state when a run is interrupted and you want to resume from the nearest explicit replay boundary later
+
+## How Journey State Works
+
+Journey state is a development tool for fast retry, replay, and interruption recovery. It is not a replacement for a
+fresh full-path run before review, merge, or release.
+
+The model is:
+
+1. Journey saves progress at durable boundaries: targeted steps, retry boundaries, branch anchors, and interrupted
+   step boundaries.
+2. The state file stores the saved values plus a validity envelope for the journey plan, step source, runtime, and
+   workspace inputs.
+3. On the next run, Journey compares that envelope with the current journey.
+4. If the state is still valid, Journey replays from the nearest safe boundary instead of repeating earlier setup.
+5. If the state is stale, Journey reports the invalidation and reruns from the nearest safe boundary instead of trusting
+   the old checkpoint.
+
+State output uses three words:
+
+| Status | Meaning |
+| --- | --- |
+| `fresh` | No saved state was reused. |
+| `replayed` | Journey reused a valid saved boundary. |
+| `invalidated` | Journey detected stale state and reran from a safe boundary. |
+
+Pretty output shows the decision inline:
+
+```console
+State: reused boundary case_1
+State: invalidated boundary case_1; Reason: plan_shape; Action: rerunning from step index 1
+```
+
+JSON Lines output gives agents the same decision as a structured event:
+
+```json
+{"event":"state_validity","status":"invalidated","boundary_id":"case_1","reason":"plan_shape","action":"rerunning from step index 1"}
+```
+
+Use the modes this way:
+
+| Command shape | Use it for | State behavior |
+| --- | --- | --- |
+| `--develop-step <label>` | Fast edit loop for one target step. | Reads and writes state. |
+| `--step <label>` | Targeted verification of the case that reaches one step. | May replay valid state unless combined with `--no-state`. |
+| `--no-state` | Fresh-path confidence before review, merge, or release. | Does not read or write reusable state. |
+| `--no-state-update` | Inspect or replay existing state without changing it. | Reads state but leaves the file unchanged. |
+| `--output jsonl` | Agent-readable execution evidence. | Emits `state_validity` events. |
 
 ## Three Retry Shapes
 
@@ -88,11 +136,6 @@ def retry_with_external_state() -> None:
 
 Journey stores step results before the replay boundary only when they must be skipped or restored later. Values at or
 after the replay boundary are rerun instead of restored.
-
-Saved state is automatically checked before it is reused. If Journey detects that the selected plan, step source,
-runtime, or workspace inputs no longer match the state file, it reports `State: invalidated ...` and reruns from the
-nearest safe boundary. Replayed state is useful for development speed and interruption recovery; run with `--no-state`
-when you need fresh-path evidence for review, merge, or release.
 
 ### Retry the Current Step
 

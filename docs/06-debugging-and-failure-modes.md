@@ -110,6 +110,10 @@ A good local debugging sequence usually looks like this:
 3. If the failure is timing-related, use the retry patterns from [03 Retries and Resume](03-retries-and-resume.md).
 4. If the first failure is enough and you want shorter feedback loops, add `--fail-fast`.
 
+If output includes `State: invalidated ...`, Journey found a stale saved checkpoint and reran from a safe boundary. That
+is expected after changes to the journey plan, step source, runtime, or workspace inputs. Use `--no-state` when you want
+fresh-path evidence instead of development replay.
+
 ## What To Notice
 
 - Journey failures are step-oriented. You do not have to guess which part of the flow broke.
