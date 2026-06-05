@@ -49,6 +49,11 @@ instruction file.
 The canonical source files are `journeysdk/touchpoint_docs/*.md` and
 `journeysdk/agent_templates/instructions.md`.
 
+When changing SDK behavior, CLI flags, touchpoints, journey authoring guidance, or assistant workflows, keep this docs
+tree aligned with [the public README](../README.md), [AGENTS.md](../AGENTS.md),
+[CONTRIBUTING.md](../CONTRIBUTING.md), packaged touchpoint docs, and the canonical agent template so generated
+assistant instructions and skills match the written docs.
+
 ## Runnable Source Map
 
 - `docs/first_journey/first_journey.py`

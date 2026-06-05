@@ -118,6 +118,11 @@ Printing is the default. Install mode writes the selected assistant's default pr
 existing file unless `--force-agent-instructions` is passed. The shared source for these instructions is
 `journeysdk/agent_templates/instructions.md`.
 
+When SDK behavior, CLI flags, touchpoints, journey authoring guidance, or assistant workflows change, review and align
+[docs](docs/README.md), [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md),
+`journeysdk/touchpoint_docs/*.md`, and `journeysdk/agent_templates/instructions.md` so README guidance and rendered
+assistant instructions stay in sync.
+
 ## Develop Locally
 
 ```bash

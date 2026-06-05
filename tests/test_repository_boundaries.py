@@ -119,10 +119,29 @@ def test_agent_instruction_rendering_wraps_shared_body() -> None:
     assert cursor_body == body
 
 
+def test_agent_instruction_template_mentions_documentation_alignment() -> None:
+    body = (
+        resources.files("journeysdk.agent_templates")
+        .joinpath("instructions.md")
+        .read_text(encoding="utf-8")
+    )
+
+    required_phrases = (
+        "Keep Documentation Aligned",
+        "packaged agent instructions",
+        "assistant skill output",
+        "If no docs or instruction updates are needed",
+    )
+
+    for phrase in required_phrases:
+        assert phrase in body
+
+
 def test_local_markdown_links_in_public_doc_entrypoints_resolve() -> None:
     entrypoints = (
         _public_root() / "README.md",
         _public_root() / "AGENTS.md",
+        _public_root() / "CONTRIBUTING.md",
         _public_root() / "docs" / "README.md",
         _public_root() / "docs" / "04-browser-and-local-integrations.md",
     )

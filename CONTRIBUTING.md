@@ -55,6 +55,13 @@ That script:
 - runs a one-off `uv tool run --from <wheel> journey --help` plus
   `journey --agent-instructions codex` and `journey --agent-bootstrap codex`
 
+## Documentation Alignment
+
+Every SDK change should include a docs and instruction review for the surfaces that describe the touched behavior:
+`docs/`, `README.md`, `AGENTS.md`, this `CONTRIBUTING.md`, `journeysdk/touchpoint_docs/*.md`, and
+`journeysdk/agent_templates/instructions.md`. Keep the packaged agent template aligned with generated Codex, Claude
+skill, Cursor, and generic assistant output. If no doc update is needed, note that the relevant surfaces were reviewed.
+
 ## Public Typing
 
 Public SDK and official touchpoint APIs should avoid `Any`. Prefer named aliases or protocols for
