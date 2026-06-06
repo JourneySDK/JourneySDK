@@ -153,8 +153,10 @@ journey --agent-bootstrap cursor
 journey --agent-bootstrap generic
 ```
 
-The bootstrap output includes assistant-specific Journey guidance, the canonical targeted verification loop, copy-paste
-commands, and packaged touchpoint references. It is print-only and does not write files.
+The bootstrap output includes the shared assistant-specific Journey guidance from the packaged instruction template,
+then appends packaged touchpoint references. The targeted verification loop and log-browsing commands live in that
+shared instruction body so bootstrap output and installed assistant files stay in sync. It is print-only and does not
+write files.
 
 Use assistant-specific instructions when a project-level agent file should be installed or printed by itself:
 

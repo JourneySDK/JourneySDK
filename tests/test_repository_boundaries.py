@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import tomllib
 
-from journeysdk.agent_instructions import render_agent_instructions
+from journeysdk.agent_instructions import render_agent_bootstrap, render_agent_instructions
 
 
 def _public_root() -> Path:
@@ -117,6 +117,17 @@ def test_agent_instruction_rendering_wraps_shared_body() -> None:
     assert "globs:" in cursor_envelope
     assert "alwaysApply:" in cursor_envelope
     assert cursor_body == body
+
+
+def test_agent_bootstrap_appends_touchpoint_docs_to_shared_body() -> None:
+    instructions = render_agent_instructions("codex").rstrip()
+    bootstrap = render_agent_bootstrap("codex")
+    prefix = f"{instructions}\n\n---\n\n"
+
+    assert bootstrap.startswith(prefix)
+    appendix = bootstrap.removeprefix(prefix)
+    assert appendix.startswith("# Journey SDK Touchpoint Reference")
+    assert "# Journey SDK Agent Bootstrap" not in appendix
 
 
 def test_agent_instruction_template_mentions_documentation_alignment() -> None:

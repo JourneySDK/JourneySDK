@@ -104,9 +104,10 @@ journey --agent-bootstrap cursor
 journey --agent-bootstrap generic
 ```
 
-It prints target-specific assistant guidance, the canonical `--plan-only` -> `--develop-step` -> `--step --no-state`
--> full journey loop, and packaged touchpoint references. Use packaged assistant instructions when a project-level
-assistant file should be written:
+It prints the shared target-specific assistant guidance from `journeysdk/agent_templates/instructions.md`, then appends
+the packaged touchpoint references. The verification loop and log-browsing commands live in that shared instruction
+body so bootstrap output and installed assistant files stay in sync. Use packaged assistant instructions when a
+project-level assistant file should be written:
 
 ```bash
 journey --agent-instructions codex
