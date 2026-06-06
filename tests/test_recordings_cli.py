@@ -428,7 +428,7 @@ def test_logs_command_paths_touchpoint_docker_excludes_browser_paths(
 
     output = capsys.readouterr().out
     assert exit_code == 0
-    assert "log:docker:web" in output
+    assert "log:docker" in output
     assert "trace:" not in output
     assert "video:" not in output
 
@@ -497,7 +497,7 @@ def test_logs_command_list_branch_filter_narrows_counts(
     assert "case_red" not in output
 
 
-def test_logs_command_interactively_filters_by_step_and_touchpoint(
+def test_logs_command_interactively_browses_step_and_docker_logs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -536,7 +536,7 @@ def test_logs_command_interactively_filters_by_step_and_touchpoint(
         "journeysdk.cli.discover_recording_cases",
         lambda root: RecordingDiscoveryResult((case,), ()),
     )
-    prompts = iter(["1", "f", "step", "1", "f", "touchpoint", "2", "l", "q"])
+    prompts = iter(["s", "1", "l", "3", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
     exit_code = main(["logs", "--dir", str(tmp_path)])
@@ -547,7 +547,7 @@ def test_logs_command_interactively_filters_by_step_and_touchpoint(
     assert "browser target log" not in output
 
 
-def test_logs_command_interactively_filters_all_cases_by_branch_for_paths(
+def test_logs_command_interactively_browses_branch_for_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -592,7 +592,7 @@ def test_logs_command_interactively_filters_all_cases_by_branch_for_paths(
         "journeysdk.cli.discover_recording_cases",
         lambda root: RecordingDiscoveryResult((blue, red), ()),
     )
-    prompts = iter(["a", "f", "branch", "1", "p", "q"])
+    prompts = iter(["b", "1", "p", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
     exit_code = main(["logs", "--dir", str(tmp_path)])
@@ -603,7 +603,7 @@ def test_logs_command_interactively_filters_all_cases_by_branch_for_paths(
     assert str(red_log.path) not in output
 
 
-def test_logs_command_interactively_clear_filter_restores_scope(
+def test_logs_command_interactively_all_log_sources_aggregates_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -636,7 +636,7 @@ def test_logs_command_interactively_clear_filter_restores_scope(
         "journeysdk.cli.discover_recording_cases",
         lambda root: RecordingDiscoveryResult((case,), ()),
     )
-    prompts = iter(["1", "f", "touchpoint", "2", "f", "clear", "l", "q"])
+    prompts = iter(["1", "l", "a", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
     exit_code = main(["logs", "--dir", str(tmp_path)])
@@ -645,3 +645,339 @@ def test_logs_command_interactively_clear_filter_restores_scope(
     assert exit_code == 0
     assert "docker restored log" in output
     assert "browser restored log" in output
+
+
+def test_logs_command_interactively_step_scope_narrows_trace_video_and_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    first = _browser_manifest(
+        tmp_path,
+        sequence=1,
+        step_id="node_1",
+        step_label="first_step",
+        step_name="first_step",
+    )
+    second = _browser_manifest(
+        tmp_path,
+        sequence=2,
+        step_id="node_2",
+        step_label="target_step",
+        step_name="target_step",
+    )
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        manifests=(first, second),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+    trace_steps: list[tuple[str, ...]] = []
+    video_steps: list[tuple[str, ...]] = []
+
+    def fake_trace(selected):
+        trace_steps.append(tuple(manifest.step_id for manifest in selected.manifests))
+        return SimpleNamespace(path=tmp_path / "target.trace.zip", created=False)
+
+    def fake_video(selected):
+        video_steps.append(tuple(manifest.step_id for manifest in selected.manifests))
+        return SimpleNamespace(path=tmp_path / "target.webm", created=False)
+
+    monkeypatch.setattr("journeysdk.cli.ensure_execution_trace", fake_trace)
+    monkeypatch.setattr("journeysdk.cli.ensure_execution_video", fake_video)
+    monkeypatch.setattr("journeysdk.cli.open_trace_viewer", lambda path: None)
+    monkeypatch.setattr("journeysdk.cli.open_video_recording", lambda path: None)
+    prompts = iter(["s", "2", "t", "v", "p", "q"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
+
+    exit_code = main(["logs", "--dir", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert trace_steps == [("node_2",), ("node_2",)]
+    assert video_steps == [("node_2",), ("node_2",)]
+    assert "target.trace.zip" in output
+    assert "target.webm" in output
+
+
+def test_logs_command_interactively_docker_parent_aggregates_services(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    web = _log_artifact(tmp_path, sequence=1, text="web log\n", source="web")
+    worker = _log_artifact(tmp_path, sequence=2, text="worker log\n", source="worker")
+    browser = _log_artifact(
+        tmp_path,
+        sequence=3,
+        text="browser log\n",
+        touchpoint="browser",
+        source="page",
+    )
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        manifests=(),
+        log_artifacts=(web, worker, browser),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+    prompts = iter(["1", "l", "3", "q"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
+
+    exit_code = main(["logs", "--dir", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "web log" in output
+    assert "worker log" in output
+    assert "browser log" not in output
+
+
+def test_logs_command_interactively_multiple_log_sources_are_aggregated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    web = _log_artifact(tmp_path, sequence=1, text="web log\n", source="web")
+    worker = _log_artifact(tmp_path, sequence=2, text="worker log\n", source="worker")
+    browser = _log_artifact(
+        tmp_path,
+        sequence=3,
+        text="browser log\n",
+        touchpoint="browser",
+        source="page",
+    )
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        manifests=(),
+        log_artifacts=(web, worker, browser),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+    prompts = iter(["1", "l", "2,4", "q"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
+
+    exit_code = main(["logs", "--dir", str(tmp_path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "browser log" in output
+    assert "web log" in output
+    assert "worker log" not in output
+
+
+def test_logs_command_list_scopes_reports_agent_filters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    browser = _browser_manifest(
+        tmp_path,
+        sequence=1,
+        case_id="case_blue",
+        branch_env={"route": "blue"},
+        step_id="node_1",
+        step_label="target_step",
+        step_name="target_step",
+    )
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_blue",
+        branch_env={"route": "blue"},
+        manifests=(browser,),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+
+    exit_code = main(["logs", "--dir", str(tmp_path), "--list-scopes"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Log scopes" in output
+    assert "all  filter=--run run123" in output
+    assert "case case_blue  filter=--run run123 --case case_blue" in output
+    assert "filter=--run run123 --branch route=blue" in output
+    assert "filter=--run run123 --step target_step" in output
+
+
+def test_logs_command_list_log_sources_reports_agent_filters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    web = _log_artifact(tmp_path, sequence=1, text="web log\n", source="web")
+    worker = _log_artifact(tmp_path, sequence=2, text="worker log\n", source="worker")
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        manifests=(),
+        log_artifacts=(web, worker),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+
+    exit_code = main(
+        [
+            "logs",
+            "--dir",
+            str(tmp_path),
+            "--list-log-sources",
+            "--case",
+            "case_1",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Log sources" in output
+    assert "docker  filter=--case case_1 --touchpoint docker logs=2" in output
+    assert "docker:web  filter=--case case_1 --touchpoint docker --source web logs=1" in output
+    assert "docker:worker  filter=--case case_1 --touchpoint docker --source worker logs=1" in output
+
+
+def test_logs_command_noninteractive_repeated_touchpoints_aggregate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    docker = _log_artifact(tmp_path, sequence=1, text="docker log\n")
+    browser = _log_artifact(
+        tmp_path,
+        sequence=2,
+        text="browser log\n",
+        touchpoint="browser",
+        source="page",
+    )
+    http = _log_artifact(
+        tmp_path,
+        sequence=3,
+        text="http log\n",
+        touchpoint="http",
+        source="poll",
+    )
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        manifests=(),
+        log_artifacts=(docker, browser, http),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+
+    exit_code = main(
+        [
+            "logs",
+            "--dir",
+            str(tmp_path),
+            "--show",
+            "--touchpoint",
+            "docker",
+            "--touchpoint",
+            "browser",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "docker log" in output
+    assert "browser log" in output
+    assert "http log" not in output
+
+
+def test_logs_command_noninteractive_touchpoint_parent_and_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    web = _log_artifact(tmp_path, sequence=1, text="web log\n", source="web")
+    worker = _log_artifact(tmp_path, sequence=2, text="worker log\n", source="worker")
+    db = _log_artifact(tmp_path, sequence=3, text="db log\n", source="db")
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        manifests=(),
+        log_artifacts=(web, worker, db),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+
+    parent_exit = main(
+        [
+            "logs",
+            "--dir",
+            str(tmp_path),
+            "--show",
+            "--touchpoint",
+            "docker",
+        ]
+    )
+    parent_output = capsys.readouterr().out
+
+    child_exit = main(
+        [
+            "logs",
+            "--dir",
+            str(tmp_path),
+            "--show",
+            "--touchpoint",
+            "docker",
+            "--source",
+            "web",
+            "--source",
+            "worker",
+        ]
+    )
+    child_output = capsys.readouterr().out
+
+    assert parent_exit == 0
+    assert "web log" in parent_output
+    assert "worker log" in parent_output
+    assert "db log" in parent_output
+    assert child_exit == 0
+    assert "web log" in child_output
+    assert "worker log" in child_output
+    assert "db log" not in child_output

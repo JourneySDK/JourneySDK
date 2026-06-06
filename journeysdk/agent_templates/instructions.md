@@ -141,7 +141,7 @@ journey --file journeys/<feature>_journey.py --step target_label --output jsonl
 ```
 
 - Avoid `--interactive` for non-human agent runs; noninteractive `--develop-step` is designed for coding agents.
-- Use `journey logs --list`, `journey logs --paths --step <step_label> --touchpoint browser`, and `journey logs --show --case <case_id> --step <step_label> --touchpoint docker --tail 80` to inspect correlated run evidence without prompting.
+- Use `journey logs --list-scopes` and `journey logs --list-log-sources --case <case_id> --step <step_label>` before reading large logs. Then use `journey logs --paths --step <step_label> --touchpoint browser` or `journey logs --show --case <case_id> --step <step_label> --touchpoint docker --source <service> --tail 80` to inspect correlated evidence without prompting.
 - Use `--no-memory` only when AI prompt memory must be ignored for a run.
 - Use `--no-state` only for one-off runs that should not resume.
 - Do not pass `None` or placeholder objects into constructors; resolve concrete dependencies first.

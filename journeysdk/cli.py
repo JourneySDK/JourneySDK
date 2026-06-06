@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .agent_instructions import (
@@ -2014,8 +2014,8 @@ class _LogsFilter:
     run_id: str | None = None
     case_id: str | None = None
     step: str | None = None
-    touchpoint: str | None = None
-    source: str | None = None
+    touchpoints: tuple[str, ...] = ()
+    sources: tuple[str, ...] = ()
     branch_filters: tuple[tuple[str, str], ...] = ()
 
 
@@ -2024,8 +2024,8 @@ def _logs_filter_from_args(args: argparse.Namespace) -> _LogsFilter:
         run_id=args.run,
         case_id=args.case,
         step=args.step,
-        touchpoint=args.touchpoint,
-        source=args.source,
+        touchpoints=tuple(args.touchpoint or ()),
+        sources=tuple(args.source or ()),
         branch_filters=tuple(sorted(_parse_branch_filters(args.branch).items())),
     )
 
@@ -2041,10 +2041,10 @@ def _logs_filter_summary(filters: _LogsFilter) -> str:
         parts.append(f"branch={branch}")
     if filters.step is not None:
         parts.append(f"step={filters.step}")
-    if filters.touchpoint is not None:
-        parts.append(f"touchpoint={filters.touchpoint}")
-    if filters.source is not None:
-        parts.append(f"source={filters.source}")
+    if filters.touchpoints:
+        parts.append(f"touchpoint={','.join(filters.touchpoints)}")
+    if filters.sources:
+        parts.append(f"source={','.join(filters.sources)}")
     return " ".join(parts) if parts else "none"
 
 
@@ -2106,9 +2106,9 @@ def _browser_manifest_matches_filters(
         return False
     if not _step_matches(_manifest_step_values(manifest), filters):
         return False
-    if filters.touchpoint is not None and filters.touchpoint != "browser":
+    if filters.touchpoints and "browser" not in filters.touchpoints:
         return False
-    if filters.source is not None and filters.source != "page":
+    if filters.sources and "page" not in filters.sources:
         return False
     return True
 
@@ -2126,9 +2126,9 @@ def _log_artifact_matches_filters(
         return False
     if not _step_matches(_artifact_step_values(artifact), filters):
         return False
-    if filters.touchpoint is not None and getattr(artifact, "touchpoint", None) != filters.touchpoint:
+    if filters.touchpoints and getattr(artifact, "touchpoint", None) not in filters.touchpoints:
         return False
-    if filters.source is not None and getattr(artifact, "source", None) != filters.source:
+    if filters.sources and getattr(artifact, "source", None) not in filters.sources:
         return False
     return True
 
@@ -2158,7 +2158,7 @@ def _filter_case_recording(
         return _empty_case_recording(case) if keep_empty else None
     if not _branch_env_matches(case.branch_env, filters):
         return _empty_case_recording(case) if keep_empty else None
-    if filters.step is None and filters.touchpoint is None and filters.source is None:
+    if filters.step is None and not filters.touchpoints and not filters.sources:
         return case
 
     manifests = tuple(
@@ -2332,6 +2332,8 @@ def _emit_recording_cases(
         _recording_case_line(index, case, root=root)
         for index, case in enumerate(cases, start=1)
     )
+    lines.append("b. browse branches")
+    lines.append("s. browse steps")
     _CLI_LOGGER.info(
         "log_cases",
         "Journey log cases discovered",
@@ -2343,38 +2345,80 @@ def _emit_recording_cases(
 
 def _recording_selection_prompt(executions: tuple[ExecutionRecording, ...]) -> str:
     if len(executions) == 1:
-        return "Select a case number, a for all cases, or q to quit:"
+        return "Select a case number, a for all cases, b for branches, s for steps, or q to quit:"
     if len(executions) > 1:
-        return "Select a case number, an all-cases label, or q to quit:"
-    return "Select a case number, or q to quit:"
+        return "Select a case number, an all-cases label, b for branches, s for steps, or q to quit:"
+    return "Select a case number, b for branches, s for steps, or q to quit:"
 
 
-def _select_recording(
+def _execution_scope(
+    execution: ExecutionRecording,
+) -> _LogsScope:
+    return _LogsScope(
+        label=f"all cases for {execution.journey_id} run {execution.run_id}",
+        kind="all",
+        filters=_LogsFilter(run_id=execution.run_id),
+        recording=execution,
+    )
+
+
+def _case_scope(case: CaseRecording) -> _LogsScope:
+    return _LogsScope(
+        label=case.case_id,
+        kind="case",
+        filters=_LogsFilter(run_id=case.run_id, case_id=case.case_id),
+        recording=case,
+    )
+
+
+def _select_logs_scope(
     cases: tuple[CaseRecording, ...],
     *,
     executions: tuple[ExecutionRecording, ...],
     root: Path,
-) -> CaseRecording | ExecutionRecording | None:
+) -> _LogsScope | None:
     while True:
         _emit_recording_cases(cases, executions=executions, root=root)
         choice = _read_recordings_choice(_recording_selection_prompt(executions))
         if choice == "q":
             return None
+        if choice == "b":
+            selected = _select_browsed_scope(
+                "Branches",
+                _branch_scopes(executions),
+                empty_message="No branch filters found.",
+            )
+            if selected == "quit":
+                return None
+            if isinstance(selected, _LogsScope):
+                return selected
+            continue
+        if choice == "s":
+            selected = _select_browsed_scope(
+                "Steps",
+                _step_scopes(executions),
+                empty_message="No step filters found.",
+            )
+            if selected == "quit":
+                return None
+            if isinstance(selected, _LogsScope):
+                return selected
+            continue
         for index, execution in enumerate(executions, start=1):
             options = {_recording_execution_option(index, executions)}
             if len(executions) == 1:
                 options.add("all")
             if choice in options:
-                return execution
+                return _execution_scope(execution)
         if choice.isdigit():
             index = int(choice)
             if 1 <= index <= len(cases):
-                return cases[index - 1]
+                return _case_scope(cases[index - 1])
         _CLI_LOGGER.warning(
             "recording_invalid_case_selection",
             "invalid recording case selection",
             pretty=pretty_line(
-                "Choose one of the listed case numbers, all-cases labels, or q to quit.",
+                "Choose one of the listed case numbers, all-cases labels, b, s, or q.",
                 style="warning",
             ),
             selection=choice,
@@ -2459,8 +2503,10 @@ def _emit_case_artifact_paths(case: CaseRecording) -> None:
         action = "created" if artifact.created else "reused"
         lines.append(f"{label}: {artifact.path} ({action})")
         found = True
-    for artifact in case.log_inputs():
-        lines.append(f"log:{artifact.touchpoint}:{artifact.source}: {artifact.path}")
+    log_artifacts = case.log_inputs()
+    for artifact in log_artifacts:
+        label = _log_artifact_display_label(artifact, log_artifacts)
+        lines.append(f"log:{label}: {artifact.path}")
         found = True
     if not found:
         lines.append("No matching artifacts found.")
@@ -2495,8 +2541,10 @@ def _emit_execution_artifact_paths(execution: ExecutionRecording) -> None:
         action = "created" if artifact.created else "reused"
         lines.append(f"{label}: {artifact.path} ({action})")
         found = True
-    for artifact in execution.log_inputs():
-        lines.append(f"log:{artifact.touchpoint}:{artifact.source}: {artifact.path}")
+    log_artifacts = execution.log_inputs()
+    for artifact in log_artifacts:
+        label = _log_artifact_display_label(artifact, log_artifacts)
+        lines.append(f"log:{label}: {artifact.path}")
         found = True
     if not found:
         lines.append("No matching artifacts found.")
@@ -2562,76 +2610,20 @@ def _read_log_artifact_text(
     return "\n".join(lines)
 
 
-def _emit_recording_logs(
-    recording: CaseRecording | ExecutionRecording,
-    *,
-    tail: int | None = None,
-    grep: str | None = None,
-) -> None:
-    lines: list[str | object] = [
-        pretty_line(f"{_recording_action_label(recording)} logs", style="heading"),
-    ]
-    artifacts = _log_artifacts_for_recording(recording)
-    if not artifacts:
-        lines.append("No text log artifacts found.")
-    for artifact in artifacts:
-        path = getattr(artifact, "path", None)
-        label = (
-            f"{getattr(artifact, 'touchpoint', 'log')}:"
-            f"{getattr(artifact, 'source', 'source')}"
-        )
-        lines.append(pretty_line(f"{label} {path}", style="context"))
-        text = _read_log_artifact_text(artifact, tail=tail, grep=grep)
-        if text:
-            lines.append(text)
-    _CLI_LOGGER.info(
-        "log_artifact_contents",
-        "log artifact contents",
-        pretty=lines,
-    )
+@dataclass(frozen=True)
+class _LogsScope:
+    label: str
+    kind: str
+    filters: _LogsFilter
+    recording: CaseRecording | ExecutionRecording
 
 
-def _filter_value_prompt(
-    label: str,
-    values: tuple[str, ...],
-) -> str | None:
-    if not values:
-        _CLI_LOGGER.info(
-            "logs_filter_values_missing",
-            "no filter values available",
-            pretty=pretty_line(f"No {label} values found in this scope.", style="context"),
-            filter=label,
-        )
-        return None
-    lines: list[str | object] = [pretty_line(f"{label.title()} filters", style="heading")]
-    lines.extend(f"{index}. {value}" for index, value in enumerate(values, start=1))
-    _CLI_LOGGER.info(
-        "logs_filter_values",
-        "filter values",
-        pretty=lines,
-        filter=label,
-        values=list(values),
-    )
-    while True:
-        choice = _read_recordings_choice(
-            f"Select a {label} number, or back to return:"
-        )
-        if choice in {"back", "b"}:
-            return None
-        if choice.isdigit():
-            index = int(choice)
-            if 1 <= index <= len(values):
-                return values[index - 1]
-        _CLI_LOGGER.warning(
-            "logs_filter_invalid_value",
-            "invalid filter value selection",
-            pretty=pretty_line(
-                f"Choose one of the listed {label} numbers, or back.",
-                style="warning",
-            ),
-            filter=label,
-            selection=choice,
-        )
+@dataclass(frozen=True)
+class _LogSourceOption:
+    label: str
+    touchpoint: str | None
+    source: str | None
+    artifacts: tuple[object, ...]
 
 
 def _add_steps_from_case(case: CaseRecording, values: set[str]) -> None:
@@ -2653,115 +2645,358 @@ def _add_branches_from_case(case: CaseRecording, values: set[str]) -> None:
             values.update(f"{key}={value}" for key, value in branch_env.items())
 
 
-def _recording_filter_values(
+def _recording_step_values(
     recording: CaseRecording | ExecutionRecording,
-) -> dict[str, tuple[str, ...]]:
+) -> tuple[str, ...]:
     steps: set[str] = set()
-    branches: set[str] = set()
-    touchpoints: set[str] = set()
-    sources: set[str] = set()
-
     cases = recording.cases if isinstance(recording, ExecutionRecording) else (recording,)
     for case in cases:
         _add_steps_from_case(case, steps)
-        _add_branches_from_case(case, branches)
-        if case.manifests:
-            touchpoints.add("browser")
-            sources.add("page")
-        for artifact in case.log_artifacts:
-            touchpoint = getattr(artifact, "touchpoint", None)
-            source = getattr(artifact, "source", None)
-            if isinstance(touchpoint, str) and touchpoint:
-                touchpoints.add(touchpoint)
-            if isinstance(source, str) and source:
-                sources.add(source)
-
     if isinstance(recording, ExecutionRecording):
         for artifact in recording.log_artifacts:
             step = _preferred_step_value(artifact)
             if step is not None:
                 steps.add(step)
+    return tuple(sorted(steps))
+
+
+def _recording_branch_values(
+    recording: CaseRecording | ExecutionRecording,
+) -> tuple[str, ...]:
+    branches: set[str] = set()
+    cases = recording.cases if isinstance(recording, ExecutionRecording) else (recording,)
+    for case in cases:
+        _add_branches_from_case(case, branches)
+    if isinstance(recording, ExecutionRecording):
+        for artifact in recording.log_artifacts:
             branch_env = getattr(artifact, "branch_env", {})
             if isinstance(branch_env, dict):
                 branches.update(f"{key}={value}" for key, value in branch_env.items())
-            touchpoint = getattr(artifact, "touchpoint", None)
-            source = getattr(artifact, "source", None)
-            if isinstance(touchpoint, str) and touchpoint:
-                touchpoints.add(touchpoint)
-            if isinstance(source, str) and source:
-                sources.add(source)
-
-    return {
-        "step": tuple(sorted(steps)),
-        "branch": tuple(sorted(branches)),
-        "touchpoint": tuple(sorted(touchpoints)),
-        "source": tuple(sorted(sources)),
-    }
+    return tuple(sorted(branches))
 
 
-def _recording_filter_loop(
-    recording: CaseRecording | ExecutionRecording,
-    filters: _LogsFilter,
-) -> _LogsFilter:
-    values = _recording_filter_values(recording)
+def _recording_case_count(recording: CaseRecording | ExecutionRecording) -> int:
+    return recording.case_count if isinstance(recording, ExecutionRecording) else 1
+
+
+def _recording_scope_counts(recording: CaseRecording | ExecutionRecording) -> str:
+    return (
+        f"cases={_recording_case_count(recording)} "
+        f"branches={len(_recording_branch_values(recording))} "
+        f"steps={_execution_step_count(recording) if isinstance(recording, ExecutionRecording) else _case_step_count(recording)} "
+        f"traces={recording.trace_count} videos={recording.video_count} logs={recording.log_count}"
+    )
+
+
+def _scope_line(index: int, scope: _LogsScope) -> str:
+    return f"{index}. {scope.label}  {_recording_scope_counts(scope.recording)}"
+
+
+def _branch_scopes(executions: tuple[ExecutionRecording, ...]) -> tuple[_LogsScope, ...]:
+    scopes: list[_LogsScope] = []
+    for execution in executions:
+        for branch in _recording_branch_values(execution):
+            key, value = branch.split("=", 1)
+            filters = _LogsFilter(
+                run_id=execution.run_id,
+                branch_filters=((key, value),),
+            )
+            recording = _filter_execution_recording(execution, filters)
+            if recording is None:
+                continue
+            scopes.append(
+                _LogsScope(
+                    label=(
+                        f"branch {branch}  journey={execution.journey_id} "
+                        f"run={execution.run_id}"
+                    ),
+                    kind="branch",
+                    filters=filters,
+                    recording=recording,
+                )
+            )
+    return tuple(sorted(scopes, key=lambda scope: scope.label))
+
+
+def _step_scopes(executions: tuple[ExecutionRecording, ...]) -> tuple[_LogsScope, ...]:
+    scopes: list[_LogsScope] = []
+    for execution in executions:
+        for step in _recording_step_values(execution):
+            filters = _LogsFilter(run_id=execution.run_id, step=step)
+            recording = _filter_execution_recording(execution, filters)
+            if recording is None:
+                continue
+            scopes.append(
+                _LogsScope(
+                    label=(
+                        f"step {step}  journey={execution.journey_id} "
+                        f"run={execution.run_id}"
+                    ),
+                    kind="step",
+                    filters=filters,
+                    recording=recording,
+                )
+            )
+    return tuple(sorted(scopes, key=lambda scope: scope.label))
+
+
+def _emit_scope_browser(
+    title: str,
+    scopes: tuple[_LogsScope, ...],
+    *,
+    empty_message: str,
+) -> bool:
+    if not scopes:
+        _CLI_LOGGER.info(
+            "logs_scope_browser_empty",
+            "no Journey log scopes found",
+            pretty=pretty_line(empty_message, style="context"),
+            scope=title.lower(),
+        )
+        return False
+    lines: list[str | object] = [pretty_line(title, style="heading")]
+    lines.extend(_scope_line(index, scope) for index, scope in enumerate(scopes, start=1))
+    _CLI_LOGGER.info(
+        "logs_scope_browser",
+        "Journey log scopes discovered",
+        pretty=lines,
+        scope=title.lower(),
+        count=len(scopes),
+    )
+    return True
+
+
+def _select_browsed_scope(
+    title: str,
+    scopes: tuple[_LogsScope, ...],
+    *,
+    empty_message: str,
+) -> _LogsScope | str | None:
+    if not _emit_scope_browser(title, scopes, empty_message=empty_message):
+        return None
     while True:
         choice = _read_recordings_choice(
-            "Filter by step, branch, touchpoint, source; type clear or back:"
+            f"Select a {title.lower()} number, b to go back, or q to quit:"
         )
-        if choice == "clear":
-            return _LogsFilter()
-        if choice == "back":
-            return filters
-        if choice in {"step", "s"}:
-            value = _filter_value_prompt("step", values["step"])
-            return filters if value is None else replace(filters, step=value)
-        if choice in {"branch", "br"}:
-            value = _filter_value_prompt("branch", values["branch"])
-            if value is None:
-                return filters
-            key, item = value.split("=", 1)
-            return replace(filters, branch_filters=((key, item),))
-        if choice in {"touchpoint", "t"}:
-            value = _filter_value_prompt("touchpoint", values["touchpoint"])
-            return filters if value is None else replace(filters, touchpoint=value)
-        if choice in {"source", "src"}:
-            value = _filter_value_prompt("source", values["source"])
-            return filters if value is None else replace(filters, source=value)
+        if choice == "q":
+            return "quit"
+        if choice in {"b", "back"}:
+            return None
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(scopes):
+                return scopes[index - 1]
         _CLI_LOGGER.warning(
-            "logs_filter_invalid_facet",
-            "invalid filter facet selection",
+            "logs_scope_invalid_selection",
+            "invalid Journey log scope selection",
             pretty=pretty_line(
-                "Choose step, branch, touchpoint, source, clear, or back.",
+                f"Choose one of the listed {title.lower()} numbers, b, or q.",
+                style="warning",
+            ),
+            scope=title.lower(),
+            selection=choice,
+        )
+
+
+def _dedupe_log_artifacts(artifacts: tuple[object, ...]) -> tuple[object, ...]:
+    unique: dict[tuple[object, object, object], object] = {}
+    for artifact in artifacts:
+        key = (
+            getattr(artifact, "manifest_path", None),
+            getattr(artifact, "path", None),
+            getattr(artifact, "sequence", None),
+        )
+        unique[key] = artifact
+    return tuple(
+        sorted(
+            unique.values(),
+            key=lambda item: (
+                str(getattr(item, "touchpoint", "")),
+                str(getattr(item, "source", "")),
+                int(getattr(item, "sequence", 0) or 0),
+            ),
+        )
+    )
+
+
+def _log_source_options(artifacts: tuple[object, ...]) -> tuple[_LogSourceOption, ...]:
+    by_touchpoint: dict[str, list[object]] = {}
+    for artifact in artifacts:
+        touchpoint = getattr(artifact, "touchpoint", None)
+        if not isinstance(touchpoint, str) or not touchpoint:
+            touchpoint = "log"
+        by_touchpoint.setdefault(touchpoint, []).append(artifact)
+
+    options: list[_LogSourceOption] = []
+    for touchpoint in sorted(by_touchpoint):
+        touchpoint_artifacts = _dedupe_log_artifacts(tuple(by_touchpoint[touchpoint]))
+        options.append(
+            _LogSourceOption(
+                label=touchpoint,
+                touchpoint=touchpoint,
+                source=None,
+                artifacts=touchpoint_artifacts,
+            )
+        )
+        by_source: dict[str, list[object]] = {}
+        for artifact in touchpoint_artifacts:
+            source = getattr(artifact, "source", None)
+            if isinstance(source, str) and source:
+                by_source.setdefault(source, []).append(artifact)
+        for source in sorted(by_source):
+            options.append(
+                _LogSourceOption(
+                    label=f"{touchpoint}:{source}",
+                    touchpoint=touchpoint,
+                    source=source,
+                    artifacts=_dedupe_log_artifacts(tuple(by_source[source])),
+                )
+            )
+    return tuple(options)
+
+
+def _log_artifact_display_label(
+    artifact: object,
+    artifacts: tuple[object, ...],
+) -> str:
+    touchpoint = str(getattr(artifact, "touchpoint", "log") or "log")
+    source = str(getattr(artifact, "source", "") or "")
+    sources = {
+        str(getattr(item, "source", "") or "")
+        for item in artifacts
+        if getattr(item, "touchpoint", None) == touchpoint
+        and getattr(item, "source", None)
+    }
+    if source and len(sources) > 1:
+        return f"{touchpoint}:{source}"
+    return touchpoint
+
+
+def _emit_log_artifacts(
+    label: str,
+    artifacts: tuple[object, ...],
+    *,
+    tail: int | None = None,
+    grep: str | None = None,
+) -> None:
+    selected = _dedupe_log_artifacts(artifacts)
+    lines: list[str | object] = [
+        pretty_line(f"{label} logs", style="heading"),
+    ]
+    if not selected:
+        lines.append("No text log artifacts found.")
+    for artifact in selected:
+        path = getattr(artifact, "path", None)
+        artifact_label = _log_artifact_display_label(artifact, selected)
+        lines.append(pretty_line(f"{artifact_label} {path}", style="context"))
+        text = _read_log_artifact_text(artifact, tail=tail, grep=grep)
+        if text:
+            lines.append(text)
+    _CLI_LOGGER.info(
+        "log_artifact_contents",
+        "log artifact contents",
+        pretty=lines,
+    )
+
+
+def _emit_recording_logs(
+    recording: CaseRecording | ExecutionRecording,
+    *,
+    tail: int | None = None,
+    grep: str | None = None,
+) -> None:
+    _emit_log_artifacts(
+        _recording_action_label(recording),
+        recording.log_inputs(),
+        tail=tail,
+        grep=grep,
+    )
+
+
+def _emit_log_source_browser(
+    label: str,
+    artifacts: tuple[object, ...],
+    options: tuple[_LogSourceOption, ...],
+) -> None:
+    lines: list[str | object] = [pretty_line(f"{label} log sources", style="heading")]
+    lines.append(f"a. all logs  logs={len(artifacts)}")
+    lines.extend(
+        f"{index}. {option.label}  logs={len(option.artifacts)}"
+        for index, option in enumerate(options, start=1)
+    )
+    _CLI_LOGGER.info(
+        "logs_source_browser",
+        "Journey log sources discovered",
+        pretty=lines,
+        sources=len(options),
+    )
+
+
+def _parse_log_source_selection(choice: str, max_index: int) -> tuple[int, ...] | None:
+    parts = [part for part in re.split(r"[\s,]+", choice.strip()) if part]
+    if not parts:
+        return None
+    indexes: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            return None
+        index = int(part)
+        if not 1 <= index <= max_index:
+            return None
+        indexes.append(index)
+    return tuple(dict.fromkeys(indexes))
+
+
+def _log_source_loop(scope: _LogsScope) -> str:
+    artifacts = scope.recording.log_inputs()
+    if not artifacts:
+        _emit_log_artifacts(scope.label, ())
+        return "back"
+    options = _log_source_options(artifacts)
+    while True:
+        _emit_log_source_browser(scope.label, artifacts, options)
+        choice = _read_recordings_choice(
+            "Select log source numbers, comma-separated numbers, a for all, b to go back, or q to quit:"
+        )
+        if choice == "q":
+            return "quit"
+        if choice in {"b", "back"}:
+            return "back"
+        if choice in {"a", "all"}:
+            _emit_log_artifacts(scope.label, artifacts)
+            return "back"
+        indexes = _parse_log_source_selection(choice, len(options))
+        if indexes is not None:
+            selected_options = tuple(options[index - 1] for index in indexes)
+            selected_artifacts = _dedupe_log_artifacts(
+                tuple(
+                    artifact
+                    for option in selected_options
+                    for artifact in option.artifacts
+                )
+            )
+            selected_label = ", ".join(option.label for option in selected_options)
+            _emit_log_artifacts(selected_label, selected_artifacts)
+            return "back"
+        _CLI_LOGGER.warning(
+            "logs_source_invalid_selection",
+            "invalid Journey log source selection",
+            pretty=pretty_line(
+                "Choose a, one or more listed numbers, b, or q.",
                 style="warning",
             ),
             selection=choice,
         )
 
 
-def _scoped_recording_for_action(
-    recording: CaseRecording | ExecutionRecording,
-    filters: _LogsFilter,
-) -> CaseRecording | ExecutionRecording:
-    scoped = _filter_recording(recording, filters, keep_empty=True)
-    if scoped is None:
-        if isinstance(recording, ExecutionRecording):
-            return _empty_execution_recording(recording)
-        return _empty_case_recording(recording)
-    return scoped
-
-
-def _recording_action_loop(recording: CaseRecording | ExecutionRecording) -> str:
-    label = _recording_action_label(recording)
-    filters = _LogsFilter()
+def _logs_scope_action_loop(scope: _LogsScope) -> str:
     while True:
-        scoped = _scoped_recording_for_action(recording, filters)
-        filter_summary = _logs_filter_summary(filters)
         choice = _read_recordings_choice(
-            f"{label} filters={filter_summary}: [t] open trace, [v] open video, [l] show logs, [p] print paths, [f] filter, [b] back, [q] quit:"
+            f"{scope.label}: [t] open trace, [v] open video, [l] show logs, [p] print paths, [b] back, [q] quit:"
         )
         if choice == "t":
             try:
-                _open_recording_trace(scoped)
+                _open_recording_trace(scope.recording)
             except RecordingError as exc:
                 _CLI_LOGGER.warning(
                     "recording_trace_open_failure",
@@ -2771,7 +3006,7 @@ def _recording_action_loop(recording: CaseRecording | ExecutionRecording) -> str
                 )
         elif choice == "v":
             try:
-                _open_recording_video(scoped)
+                _open_recording_video(scope.recording)
             except RecordingError as exc:
                 _CLI_LOGGER.warning(
                     "recording_video_open_failure",
@@ -2780,11 +3015,11 @@ def _recording_action_loop(recording: CaseRecording | ExecutionRecording) -> str
                     error=str(exc),
                 )
         elif choice == "l":
-            _emit_recording_logs(scoped)
+            outcome = _log_source_loop(scope)
+            if outcome == "quit":
+                return "quit"
         elif choice == "p":
-            _emit_recording_artifact_paths(scoped)
-        elif choice == "f":
-            filters = _recording_filter_loop(recording, filters)
+            _emit_recording_artifact_paths(scope.recording)
         elif choice == "b":
             return "back"
         elif choice == "q":
@@ -2793,7 +3028,7 @@ def _recording_action_loop(recording: CaseRecording | ExecutionRecording) -> str
             _CLI_LOGGER.warning(
                 "recording_invalid_action",
                 "invalid recording action",
-                pretty=pretty_line("Choose t, v, l, p, f, b, or q.", style="warning"),
+                pretty=pretty_line("Choose t, v, l, p, b, or q.", style="warning"),
                 selection=choice,
             )
 
@@ -2832,6 +3067,119 @@ def _filter_log_executions(
     )
 
 
+def _filter_cli_parts(filters: _LogsFilter) -> tuple[str, ...]:
+    parts: list[str] = []
+    if filters.run_id is not None:
+        parts.extend(("--run", filters.run_id))
+    if filters.case_id is not None:
+        parts.extend(("--case", filters.case_id))
+    for key, value in filters.branch_filters:
+        parts.extend(("--branch", f"{key}={value}"))
+    if filters.step is not None:
+        parts.extend(("--step", filters.step))
+    for touchpoint in filters.touchpoints:
+        parts.extend(("--touchpoint", touchpoint))
+    for source in filters.sources:
+        parts.extend(("--source", source))
+    return tuple(parts)
+
+
+def _format_filter_cli(filters: _LogsFilter) -> str:
+    parts = _filter_cli_parts(filters)
+    if not parts:
+        return "<none>"
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def _emit_log_scopes(
+    cases: tuple[CaseRecording, ...],
+    *,
+    executions: tuple[ExecutionRecording, ...],
+) -> None:
+    lines: list[str | object] = [pretty_line("Log scopes", style="heading")]
+    for execution in executions:
+        scope = _execution_scope(execution)
+        lines.append(
+            f"all  filter={_format_filter_cli(scope.filters)} "
+            f"{_recording_scope_counts(scope.recording)}"
+        )
+    for case in cases:
+        scope = _case_scope(case)
+        lines.append(
+            f"case {case.case_id}  filter={_format_filter_cli(scope.filters)} "
+            f"{_recording_scope_counts(scope.recording)}"
+        )
+    for scope in _branch_scopes(executions):
+        lines.append(
+            f"{scope.kind} {scope.label}  filter={_format_filter_cli(scope.filters)} "
+            f"{_recording_scope_counts(scope.recording)}"
+        )
+    for scope in _step_scopes(executions):
+        lines.append(
+            f"{scope.kind} {scope.label}  filter={_format_filter_cli(scope.filters)} "
+            f"{_recording_scope_counts(scope.recording)}"
+        )
+    _CLI_LOGGER.info(
+        "logs_scopes",
+        "Journey log scopes",
+        pretty=lines,
+    )
+
+
+def _log_artifacts_for_recordings(
+    recordings: tuple[CaseRecording | ExecutionRecording, ...],
+) -> tuple[object, ...]:
+    return _dedupe_log_artifacts(
+        tuple(
+            artifact
+            for recording in recordings
+            for artifact in recording.log_inputs()
+        )
+    )
+
+
+def _emit_log_source_listing(
+    recordings: tuple[CaseRecording | ExecutionRecording, ...],
+    *,
+    base_filters: _LogsFilter,
+) -> None:
+    artifacts = _log_artifacts_for_recordings(recordings)
+    options = _log_source_options(artifacts)
+    lines: list[str | object] = [pretty_line("Log sources", style="heading")]
+    lines.append(
+        f"all  filter={_format_filter_cli(base_filters)} logs={len(artifacts)}"
+    )
+    for option in options:
+        filters = base_filters
+        if option.touchpoint is not None:
+            filters = _LogsFilter(
+                run_id=filters.run_id,
+                case_id=filters.case_id,
+                step=filters.step,
+                touchpoints=(option.touchpoint,),
+                sources=filters.sources,
+                branch_filters=filters.branch_filters,
+            )
+        if option.source is not None:
+            filters = _LogsFilter(
+                run_id=filters.run_id,
+                case_id=filters.case_id,
+                step=filters.step,
+                touchpoints=filters.touchpoints,
+                sources=(option.source,),
+                branch_filters=filters.branch_filters,
+            )
+        lines.append(
+            f"{option.label}  filter={_format_filter_cli(filters)} "
+            f"logs={len(option.artifacts)}"
+        )
+    _CLI_LOGGER.info(
+        "logs_sources",
+        "Journey log sources",
+        pretty=lines,
+    )
+
+
 def _noninteractive_recording_selection(
     filtered_cases: tuple[CaseRecording, ...],
     filtered_executions: tuple[ExecutionRecording, ...],
@@ -2856,6 +3204,17 @@ def _cmd_logs_noninteractive(
     filters = _logs_filter_from_args(args)
     filtered_cases = _filter_log_cases(cases, filters)
     filtered_executions = _filter_log_executions(executions, filters)
+    if args.list_scopes:
+        _emit_log_scopes(filtered_cases, executions=filtered_executions)
+        return 0
+    selected = _noninteractive_recording_selection(
+        filtered_cases,
+        filtered_executions,
+        filters,
+    )
+    if args.list_log_sources:
+        _emit_log_source_listing(selected, base_filters=filters)
+        return 0
     if args.list:
         _emit_recording_cases(
             filtered_cases,
@@ -2863,11 +3222,6 @@ def _cmd_logs_noninteractive(
             root=root,
         )
         return 0
-    selected = _noninteractive_recording_selection(
-        filtered_cases,
-        filtered_executions,
-        filters,
-    )
     if args.paths:
         for recording in selected:
             _emit_recording_artifact_paths(recording)
@@ -2902,7 +3256,7 @@ def _cmd_recordings(args: argparse.Namespace) -> int:
         )
         return 1
 
-    if args.list or args.show or args.paths:
+    if args.list or args.show or args.paths or args.list_scopes or args.list_log_sources:
         return _cmd_logs_noninteractive(
             args,
             cases=result.cases,
@@ -2911,14 +3265,14 @@ def _cmd_recordings(args: argparse.Namespace) -> int:
         )
 
     while True:
-        recording = _select_recording(
+        scope = _select_logs_scope(
             result.cases,
             executions=executions,
             root=root,
         )
-        if recording is None:
+        if scope is None:
             return 0
-        outcome = _recording_action_loop(recording)
+        outcome = _logs_scope_action_loop(scope)
         if outcome == "quit":
             return 0
 
@@ -2948,11 +3302,29 @@ def build_logs_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print matching trace, video, and log artifact paths without prompting",
     )
+    parser.add_argument(
+        "--list-scopes",
+        action="store_true",
+        help="List browseable all/case/branch/step scopes without prompting",
+    )
+    parser.add_argument(
+        "--list-log-sources",
+        action="store_true",
+        help="List log touchpoints and source filters without prompting",
+    )
     parser.add_argument("--run", help="Filter by run id")
     parser.add_argument("--case", help="Filter by case id")
     parser.add_argument("--step", help="Filter artifacts by step id, label, or name")
-    parser.add_argument("--touchpoint", help="Filter artifacts by touchpoint")
-    parser.add_argument("--source", help="Filter artifacts by source")
+    parser.add_argument(
+        "--touchpoint",
+        action="append",
+        help="Filter artifacts by touchpoint; may be repeated",
+    )
+    parser.add_argument(
+        "--source",
+        action="append",
+        help="Filter log artifacts by touchpoint-defined source; may be repeated",
+    )
     parser.add_argument(
         "--branch",
         action="append",

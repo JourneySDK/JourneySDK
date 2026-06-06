@@ -107,7 +107,7 @@ A good local debugging sequence usually looks like this:
 
 1. Run the full file once.
 2. If one step or one branch is the real problem, switch to `--step` or `--develop-step` from [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
-3. Inspect correlated artifacts with `journey logs --list`, `journey logs --paths --step <step_label> --touchpoint browser`, or `journey logs --show --case <case_id> --step <step_label> --touchpoint docker`.
+3. Inspect correlated artifacts with `journey logs --list-scopes`, `journey logs --list-log-sources --case <case_id> --step <step_label>`, `journey logs --paths --step <step_label> --touchpoint browser`, or `journey logs --show --case <case_id> --step <step_label> --touchpoint docker`.
 4. If the failure is timing-related, use the retry patterns from [03 Retries and Resume](03-retries-and-resume.md).
 5. If the first failure is enough and you want shorter feedback loops, add `--fail-fast`.
 

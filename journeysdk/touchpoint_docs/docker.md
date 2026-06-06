@@ -62,8 +62,9 @@ Journey captures `docker compose logs --timestamps` per service under `.journey/
 project at case exit with `docker compose down --remove-orphans`. Volumes are preserved by default. Snapshot payloads
 live under `.journey` with other Journey state.
 
-Use `journey logs --show --case <case_id> --step start_services --touchpoint docker` to inspect persisted Compose
-output after a failure, or add `--source <service>` to focus on one service.
+Use `journey logs --list-log-sources --case <case_id> --step start_services` to discover Docker service filters. Use
+`journey logs --show --case <case_id> --step start_services --touchpoint docker` to inspect all persisted Compose
+output after a failure, or add one or more `--source <service>` flags to aggregate selected services.
 
 ## Limits
 

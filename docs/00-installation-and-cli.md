@@ -104,13 +104,19 @@ debugging artifacts. Use `--no-browser-recording` when browser console/network l
 Playwright trace/video capture should be skipped. Journey clears existing logs at the start of a run so `journey logs`
 shows the current run's cases.
 
-After a run, use `journey logs` from the project root to list recorded cases interactively. The command can merge the
-whole execution or one case into a Playwright-compatible trace archive, open it in Trace Viewer, merge and open the
-matching WebM recording, print raw text logs, or print artifact paths. After selecting a case or all-cases entry, choose
-`f` to narrow the scope by step, branch, touchpoint, or source before opening traces, showing logs, or printing paths.
-For agent loops, use noninteractive artifact filters such as
-`journey logs --show --case case_1 --step start_services --touchpoint docker --grep error --tail 80` or
-`journey logs --paths --step report_issue --touchpoint browser`.
+After a run, use `journey logs` from the project root to browse recorded evidence interactively. Choose all cases, one
+case, or browse branch and step scopes; then open a merged Playwright trace, open a merged WebM recording, print raw
+text logs, or print artifact paths. The log browser lists touchpoints and touchpoint-defined sources such as Docker
+Compose service names, and selecting a parent touchpoint aggregates all child logs.
+
+For agent loops, discover filters before reading large logs:
+
+```bash
+journey logs --list-scopes
+journey logs --list-log-sources --case case_1 --step start_services
+journey logs --show --case case_1 --step start_services --touchpoint docker --source web --source worker --tail 80
+journey logs --paths --step report_issue --touchpoint browser
+```
 
 ## Local Development Installs
 

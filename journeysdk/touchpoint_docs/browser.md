@@ -42,10 +42,9 @@ console messages, page errors, failed requests, and response status metadata. Us
 trace/video capture should be skipped while keeping other logs. Use `journey --no-logs` only when no local run evidence
 should be written. Journey clears existing logs at the start of a run so the log list reflects the current run.
 
-Use `journey logs` from the project root to browse completed cases. Pick a case, then choose whether to open a merged
-Playwright trace, open a merged WebM recording, show text logs, print generated artifact paths, filter the selected
-scope, go back to the case list, or quit. Choose the all-cases entry to open or print one unified trace/video for the
-whole execution.
+Use `journey logs` from the project root to browse completed evidence. Pick all cases, one case, a branch scope, or a
+step scope, then choose whether to open a merged Playwright trace, open a merged WebM recording, show text logs, print
+generated artifact paths, go back to the scope list, or quit. Step scopes narrow trace/video artifacts to that step.
 
 ```bash
 journey logs
@@ -56,24 +55,27 @@ Logs
 a. all cases  journey=signup_journey run=8bc31a94e2f1 cases=2 steps=7 traces=7 videos=7 logs=9 started=2026-05-28T12:00:01Z dir=.journey/logs
 1. case_1  journey=signup_journey run=8bc31a94e2f1 branches={} steps=3 traces=3 videos=3 logs=4 started=2026-05-28T12:00:01Z dir=.journey/logs
 2. case_2  journey=signup_journey run=8bc31a94e2f1 branches={plan=paid} steps=4 traces=4 videos=4 logs=5 started=2026-05-28T12:01:12Z dir=.journey/logs
-Select a case number, a for all cases, or q to quit:
+b. browse branches
+s. browse steps
+Select a case number, a for all cases, b for branches, s for steps, or q to quit:
 ```
 
-After selecting a case or the all-cases entry:
+After selecting a case, all-cases entry, branch, or step:
 
 ```console
-case_1 filters=none: [t] open trace, [v] open video, [l] show logs, [p] print paths, [f] filter, [b] back, [q] quit:
-Filter by step, branch, touchpoint, source; type clear or back:
+case_1: [t] open trace, [v] open video, [l] show logs, [p] print paths, [b] back, [q] quit:
 ```
 
 Choose `t` to merge the selected case or execution traces into one `.trace.zip` and open it with Playwright Trace
 Viewer. Choose `v` to merge videos into one `.webm` and open it with the OS video viewer. Choose `l` to print text log
-artifacts. Choose `p` when you only need the generated artifact paths for sharing or later inspection. Choose `f`, then
-select a step and `touchpoint=browser`, when you only want browser evidence for one step.
+artifacts. The log browser lists all touchpoints plus child sources when a touchpoint provides them. Choose `p` when you
+only need the generated artifact paths for sharing or later inspection.
 
-For coding-agent loops, prefer noninteractive filters:
+For coding-agent loops, discover scopes and log sources before reading large logs:
 
 ```bash
+journey logs --list-scopes
+journey logs --list-log-sources --case case_1 --step sign_in
 journey logs --show --case case_1 --step sign_in --touchpoint browser --tail 80
 journey logs --paths --step report_issue --touchpoint browser
 journey logs --paths --run 8bc31a94e2f1
