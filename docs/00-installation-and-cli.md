@@ -57,20 +57,6 @@ uv add journey-sdk
 uv run journey --help
 ```
 
-## Debug A Plan Without Running
-
-Use `--debug-plan` when you are debugging Journey planning itself: discovering journeys, compiling branch cases,
-validating a requested target label, and exiting before any step code executes:
-
-```bash
-uv run journey --file journeys/checkout_journey.py --debug-plan
-uv run journey --file journeys/checkout_journey.py --develop-step submit_order --debug-plan
-```
-
-This shows generated step labels and branch cases without starting Docker services, opening browsers, sending emails,
-or mutating app state. It is a planning diagnostic only; it is not part of the normal fix loop and does not prove a
-Journey file is fixed because no app step has run.
-
 ## Ctrl-C And Resumable Runs
 
 Journey persists execution state by default when you want a long run to survive interruption:
