@@ -170,6 +170,37 @@ def test_agent_instruction_template_fetches_references_through_cli() -> None:
         assert phrase not in body
 
 
+def test_agent_instruction_template_requires_executable_fix_loop() -> None:
+    body = (
+        resources.files("journeysdk.agent_templates")
+        .joinpath("instructions.md")
+        .read_text(encoding="utf-8")
+    )
+
+    required_phrases = (
+        "do not stop after `--plan-only`, static review, or a plausible code edit",
+        "Run the failing Journey command or the full journey once",
+        "use the first failing step as the source of truth",
+        "the CLI's `Retry failed step:` command",
+        "`--plan-only` validates discovery, labels, and planning only",
+        "It is not proof that a Journey file is fixed",
+        "current URL/title for browser failures",
+        "the last rejected browser action",
+        "correlated `.journey/logs` artifacts",
+        "Rerun the same `--develop-step` command after every edit",
+        "If `page.prompt(...)` reaches max steps",
+        "treat that as a deterministic step implementation failure",
+    )
+
+    for phrase in required_phrases:
+        assert phrase in body
+
+    for target in ("codex", "claude", "cursor", "generic"):
+        rendered = render_agent_instructions(target)
+        for phrase in required_phrases:
+            assert phrase in rendered
+
+
 def test_local_markdown_links_in_public_doc_entrypoints_resolve() -> None:
     entrypoints = (
         _public_root() / "README.md",

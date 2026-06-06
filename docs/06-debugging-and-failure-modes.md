@@ -105,11 +105,18 @@ Each failed run gives you three layers of information:
 
 A good local debugging sequence usually looks like this:
 
-1. Run the full file once.
-2. If one step or one branch is the real problem, switch to `--step` or `--develop-step` from [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
+1. Run the failing command or the full file once. `--plan-only` can confirm labels and cases, but it cannot prove the
+   failure is fixed because no step executes.
+2. Use the first failed step as the source of truth. If the CLI prints `Retry failed step: ...`, use that command as
+   the focused `--develop-step` loop from [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
 3. Inspect correlated artifacts with `journey logs --list-scopes`, `journey logs --list-log-sources --case <case_id> --step <step_label>`, `journey logs --paths --step <step_label> --touchpoint browser`, or `journey logs --show --case <case_id> --step <step_label> --touchpoint docker`.
-4. If the failure is timing-related, use the retry patterns from [03 Retries and Resume](03-retries-and-resume.md).
-5. If the first failure is enough and you want shorter feedback loops, add `--fail-fast`.
+4. For browser prompt failures, inspect the current URL/title, the last accepted or rejected action, screenshots,
+   trace/video paths, and the app route or selector code before editing. A `page.prompt(...)` max-step failure usually
+   means the step or prompt is underspecified for the actual page state.
+5. Rerun the same `--develop-step` command after each edit until it passes, then broaden to `--step ... --no-state` or
+   the full journey when feasible.
+6. If the failure is timing-related, use the retry patterns from [03 Retries and Resume](03-retries-and-resume.md).
+7. If the first failure is enough and you want shorter feedback loops, add `--fail-fast`.
 
 If output includes `State: invalidated ...`, Journey found a stale saved checkpoint and reran from a safe boundary. That
 is expected after changes to the journey plan, step source, runtime, or workspace inputs. Use `--no-state` when you want

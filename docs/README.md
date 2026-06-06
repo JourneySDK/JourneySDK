@@ -51,6 +51,8 @@ journey agent generic --install
 Give the one-line prompt to the assistant and let it run `journey agent <target>` itself. Use the default print mode
 when an agent needs the complete verification loop plus touchpoint references in one response.
 Use `journey agent <target> --install` when the project should receive a persistent assistant instruction file or skill.
+The printed loop treats `--plan-only` as a planning map only; agents fixing a failure should run the failed journey or
+the focused `--develop-step` retry until executable evidence passes.
 
 The canonical source files are `journeysdk/touchpoint_docs/*.md` and
 `journeysdk/agent_templates/instructions.md`.

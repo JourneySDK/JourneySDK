@@ -176,9 +176,12 @@ journey --file journeys/<feature>_journey.py --step <target_step> --no-state
 journey --file journeys/<feature>_journey.py --no-state
 ```
 
-The agent should report the exact commands it ran, the target step or journey that passed, and any `journey logs`
-traces, videos, touchpoint payloads, or text logs that prove the end-to-end behavior. When using `--output jsonl`, the agent
-should read `state_validity` events before relying on replayed evidence.
+The first command is only the map. When an agent is fixing a failed journey, it should run the failing command or full
+journey once, use the first failed step and the CLI's `Retry failed step:` command as the focused loop, and rerun that
+same `--develop-step` command after every edit until it passes. The agent should report the exact commands it ran, the
+target step or journey that passed, and any `journey logs` traces, videos, touchpoint payloads, or text logs that prove
+the end-to-end behavior. When using `--output jsonl`, the agent should read `state_validity` events before relying on
+replayed evidence.
 
 ## Rehydrate Later Cases from a Step Anchor
 

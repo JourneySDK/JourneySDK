@@ -48,7 +48,8 @@ journey agent codex
 The command is print-only by default. It gives the agent the installed Journey instructions, the targeted verification
 loop, and the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or
 polling helpers. To make the guidance persistent for future prompts, run `journey agent codex --install` once from the
-project root.
+project root. When debugging a journey, the agent should run the failing journey or the focused `--develop-step` retry;
+`--plan-only` is only a planning map, not proof of a fix.
 
 ## The Smallest Useful Journey
 

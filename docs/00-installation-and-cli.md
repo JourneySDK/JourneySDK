@@ -69,7 +69,7 @@ uv run journey --file journeys/checkout_journey.py --develop-step submit_order -
 
 This is the safest first command for coding agents working in a large app. It shows the step labels and branch cases
 available for targeted execution without starting Docker services, opening browsers, sending emails, or mutating app
-state.
+state. It is planning evidence only; it does not prove a Journey file is fixed because no app step has run.
 
 ## Ctrl-C And Resumable Runs
 
@@ -164,6 +164,11 @@ The default output includes the shared assistant-specific Journey guidance from 
 appends packaged touchpoint references. The targeted verification loop, touchpoint discovery, and log-browsing commands
 live in that shared instruction body so the user prompt can stay short. The default command is print-only and does not
 write files.
+
+When an agent is asked to fix a failing Journey file, it should run the failing command or full journey once, use the
+first failed step and any `Retry failed step:` command as the focused `--develop-step` loop, inspect correlated
+`.journey/logs` evidence, and rerun until executable Journey evidence passes. `--plan-only` is only the first map of
+labels and cases, not a completion signal.
 
 Install assistant-specific guidance when a project-level agent file or skill should be available persistently:
 

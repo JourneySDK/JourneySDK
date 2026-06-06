@@ -16,6 +16,7 @@ affected journey or step.
 
 - If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey agent <target>` yourself.
 - Proceed autonomously: inspect the project, find or create the relevant journey spec, fetch touchpoint references with the Journey CLI as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
+- When asked to fix a Journey file, do not stop after `--plan-only`, static review, or a plausible code edit. Run the failing Journey command or the full journey once, use the first failing step as the source of truth, then iterate with the CLI's `Retry failed step:` command or the narrowest equivalent `--develop-step` command until it passes.
 
 ## Fetch More Journey Guidance
 
@@ -109,7 +110,7 @@ def changedetection_core_journey() -> None:
 - Prefer official touchpoint helpers over hand-written `urlopen`, `time.sleep`, Docker port plumbing, raw selectors, or custom polling.
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles only when later steps need touchpoint state.
-- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, keep logs enabled unless sensitive data requires `--no-logs`, and use `--no-browser-recording` only to skip trace/video capture.
+- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, keep logs enabled unless sensitive data requires `--no-logs`, and use `--no-browser-recording` only to skip trace/video capture. If `page.prompt(...)` reaches max steps, loops on the wrong page, or wanders after a rejected action, treat that as a deterministic step implementation failure: inspect the app route, selectors, current URL/title, and browser artifacts, then make the step or prompt more precise before rerunning.
 - Email: use `step(get_email_inbox())`, `step(send_email(...))`, and `step(wait_for_email(...), inbox, retry=..., retry_delay=...)`; set `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL`.
 - Webhook: use `step(get_webhook_endpoint(path=...))`, pass `endpoint.url` to the app under test, then use `step(wait_for_webhook_request(path=...), endpoint, retry=..., retry_delay=...)`.
 - Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, and use later coarse `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
@@ -124,14 +125,18 @@ def changedetection_core_journey() -> None:
 journey --file journeys/<feature>_journey.py --plan-only
 ```
 
-3. Use the narrowest useful Journey command while editing:
+`--plan-only` validates discovery, labels, and planning only. It is not proof that a Journey file is fixed because no browser, Docker, HTTP, email, webhook, or app step has run.
+
+3. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
+
+4. Use the narrowest useful Journey command while editing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --develop-step target_label
 ```
 
-4. Rerun the same `--develop-step` command after edits to retry the paused step with Journey's default persistent state.
-5. Broaden verification before finishing:
+5. Rerun the same `--develop-step` command after every edit to retry the paused step with Journey's default persistent state. Keep iterating until the target step passes.
+6. Broaden verification before finishing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label --no-state
@@ -143,10 +148,10 @@ State checklist:
 - Read `state_validity` events in JSONL output or the `State:` lines in pretty output.
 - Treat `replayed` state as development-loop evidence, not final release evidence.
 - Treat `invalidated` as normal after journey, source, runtime, or workspace changes; Journey reran from a safe boundary.
-- Use `--no-state` for the final target-step or full journey confidence run.
+- Use `--no-state` for the final target-step or full journey confidence run whenever feasible.
 - Do not ask the user to delete Journey state after normal edits; Journey invalidates stale state automatically.
 
-6. Use JSON Lines output when another tool or script needs to parse results:
+7. Use JSON Lines output when another tool or script needs to parse results:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label --output jsonl

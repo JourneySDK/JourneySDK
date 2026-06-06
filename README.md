@@ -13,8 +13,8 @@ instructions.
 
 ## Why Journey
 
-- **Built for coding-agent loops**: agents can inspect generated cases with `--plan-only`, run one target step with
-  `--develop-step`, retry it after edits, then broaden to `--step` or the full journey before finishing.
+- **Built for coding-agent loops**: agents can inspect generated cases with `--plan-only`, run the failing step with
+  `--develop-step`, retry it after edits until it passes, then broaden to `--step` or the full journey before finishing.
 - **One Python journey for meaningful user paths**: author shared setup once and use `branch()` for alternate paths
   instead of duplicating checkout, onboarding, billing, or lifecycle tests.
 - **Fast replay from durable boundaries**: make each step earn its checkpoint, then use `branch(start_from=...)`,
@@ -55,8 +55,9 @@ Give your coding assistant one line:
 ```
 
 Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run that command,
-read the full SDK guidance, discover touchpoint docs as needed, add or extend the smallest useful journey spec, iterate
-with targeted Journey commands, and report the exact commands and evidence it used.
+read the full SDK guidance, discover touchpoint docs as needed, add or extend the smallest useful journey spec, run the
+failing journey or focused step, iterate with targeted Journey commands until executable evidence passes, and report the
+exact commands and evidence it used.
 
 To avoid adding that line to every prompt, install persistent guidance once from the project root:
 
@@ -116,7 +117,9 @@ journey agent generic
 
 `journey agent <target>` is print-only by default. It prints the shared target-specific assistant guidance from
 `journeysdk/agent_templates/instructions.md`, then appends the packaged touchpoint references. The verification loop and
-log-browsing commands live in that shared instruction body so the user prompt can stay short. Use `--install` when a
+log-browsing commands live in that shared instruction body so the user prompt can stay short. The guidance treats
+`--plan-only` as a planning map, not proof of a fix, and directs agents to rerun the failed step or journey before
+finishing. Use `--install` when a
 project-level assistant file or skill should be written:
 
 ```bash
