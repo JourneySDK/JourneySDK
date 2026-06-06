@@ -13,8 +13,8 @@ instructions.
 
 ## Why Journey
 
-- **Built for coding-agent loops**: agents can inspect generated cases with `--plan-only`, run the failing step with
-  `--develop-step`, retry it after edits until it passes, then broaden to `--step` or the full journey before finishing.
+- **Built for coding-agent loops**: agents run the failing journey or focused step, retry it with `--develop-step`
+  after edits until it passes, then broaden to `--step` or the full journey before finishing.
 - **One Python journey for meaningful user paths**: author shared setup once and use `branch()` for alternate paths
   instead of duplicating checkout, onboarding, billing, or lifecycle tests.
 - **Fast replay from durable boundaries**: make each step earn its checkpoint, then use `branch(start_from=...)`,
@@ -117,9 +117,9 @@ journey agent generic
 
 `journey agent <target>` is print-only by default. It prints the shared target-specific assistant guidance from
 `journeysdk/agent_templates/instructions.md`, then appends the packaged touchpoint references. The verification loop and
-log-browsing commands live in that shared instruction body so the user prompt can stay short. The guidance treats
-`--plan-only` as a planning map, not proof of a fix, and directs agents to rerun the failed step or journey before
-finishing. Use `--install` when a
+log-browsing commands live in that shared instruction body so the user prompt can stay short. The guidance directs
+agents to run the failed step or journey and keep rerunning executable Journey commands until the fix is proven. Use
+`--install` when a
 project-level assistant file or skill should be written:
 
 ```bash

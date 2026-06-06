@@ -105,8 +105,9 @@ Each failed run gives you three layers of information:
 
 A good local debugging sequence usually looks like this:
 
-1. Run the failing command or the full file once. `--plan-only` can confirm labels and cases, but it cannot prove the
-   failure is fixed because no step executes.
+1. Run the failing command or the full file once. If you are debugging generated cases or target labels rather than a
+   runtime failure, `--debug-plan` can print the compiled plan without executing steps, but it cannot prove the failure
+   is fixed.
 2. Use the first failed step as the source of truth. If the CLI prints `Retry failed step: ...`, use that command as
    the focused `--develop-step` loop from [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
 3. Inspect correlated artifacts with `journey logs --list-scopes`, `journey logs --list-log-sources --case <case_id> --step <step_label>`, `journey logs --paths --step <step_label> --touchpoint browser`, or `journey logs --show --case <case_id> --step <step_label> --touchpoint docker`.

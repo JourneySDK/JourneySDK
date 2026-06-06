@@ -57,19 +57,19 @@ uv add journey-sdk
 uv run journey --help
 ```
 
-## Inspect A Plan Without Running
+## Debug A Plan Without Running
 
-Use `--plan-only` when you want to discover journeys, compile branch cases, validate a requested target label, and exit
-before any step code executes:
+Use `--debug-plan` when you are debugging Journey planning itself: discovering journeys, compiling branch cases,
+validating a requested target label, and exiting before any step code executes:
 
 ```bash
-uv run journey --file journeys/checkout_journey.py --plan-only
-uv run journey --file journeys/checkout_journey.py --develop-step submit_order --plan-only
+uv run journey --file journeys/checkout_journey.py --debug-plan
+uv run journey --file journeys/checkout_journey.py --develop-step submit_order --debug-plan
 ```
 
-This is the safest first command for coding agents working in a large app. It shows the step labels and branch cases
-available for targeted execution without starting Docker services, opening browsers, sending emails, or mutating app
-state. It is planning evidence only; it does not prove a Journey file is fixed because no app step has run.
+This shows generated step labels and branch cases without starting Docker services, opening browsers, sending emails,
+or mutating app state. It is a planning diagnostic only; it is not part of the normal fix loop and does not prove a
+Journey file is fixed because no app step has run.
 
 ## Ctrl-C And Resumable Runs
 
@@ -167,8 +167,7 @@ write files.
 
 When an agent is asked to fix a failing Journey file, it should run the failing command or full journey once, use the
 first failed step and any `Retry failed step:` command as the focused `--develop-step` loop, inspect correlated
-`.journey/logs` evidence, and rerun until executable Journey evidence passes. `--plan-only` is only the first map of
-labels and cases, not a completion signal.
+`.journey/logs` evidence, and rerun until executable Journey evidence passes.
 
 Install assistant-specific guidance when a project-level agent file or skill should be available persistently:
 

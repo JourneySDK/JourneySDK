@@ -9,14 +9,14 @@ affected journey or step.
 - Always use Journey SDK when a change should be verified against a real user journey, treating it like an end-to-end test for that flow.
 - When implementing new features, extend existing journey specs or add new ones so the new user behavior is covered.
 - Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
-- Use it for fast partial verification: inspect the compiled plan without execution, run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
+- Use it for fast partial verification: run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
 - If you need the complete Journey guidance packet and have not already received it, run `journey agent <target>` where `<target>` is `codex`, `claude`, `cursor`, or `generic`.
 
 ## Working From A One-Line Prompt
 
 - If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey agent <target>` yourself.
 - Proceed autonomously: inspect the project, find or create the relevant journey spec, fetch touchpoint references with the Journey CLI as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
-- When asked to fix a Journey file, do not stop after `--plan-only`, static review, or a plausible code edit. Run the failing Journey command or the full journey once, use the first failing step as the source of truth, then iterate with the CLI's `Retry failed step:` command or the narrowest equivalent `--develop-step` command until it passes.
+- When asked to fix a Journey file, do not stop after static review or a plausible code edit. Run the failing Journey command or the full journey once, use the first failing step as the source of truth, then iterate with the CLI's `Retry failed step:` command or the narrowest equivalent `--develop-step` command until it passes.
 
 ## Fetch More Journey Guidance
 
@@ -119,24 +119,16 @@ def changedetection_core_journey() -> None:
 ## Quick Verification Loop
 
 1. Run from the project that owns the journey.
-2. Inspect the compiled cases before starting a heavy flow:
+2. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
 
-```bash
-journey --file journeys/<feature>_journey.py --plan-only
-```
-
-`--plan-only` validates discovery, labels, and planning only. It is not proof that a Journey file is fixed because no browser, Docker, HTTP, email, webhook, or app step has run.
-
-3. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
-
-4. Use the narrowest useful Journey command while editing:
+3. Use the narrowest useful Journey command while editing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --develop-step target_label
 ```
 
-5. Rerun the same `--develop-step` command after every edit to retry the paused step with Journey's default persistent state. Keep iterating until the target step passes.
-6. Broaden verification before finishing:
+4. Rerun the same `--develop-step` command after every edit to retry the paused step with Journey's default persistent state. Keep iterating until the target step passes.
+5. Broaden verification before finishing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label --no-state
@@ -151,7 +143,7 @@ State checklist:
 - Use `--no-state` for the final target-step or full journey confidence run whenever feasible.
 - Do not ask the user to delete Journey state after normal edits; Journey invalidates stale state automatically.
 
-7. Use JSON Lines output when another tool or script needs to parse results:
+6. Use JSON Lines output when another tool or script needs to parse results:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label --output jsonl

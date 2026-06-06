@@ -178,12 +178,10 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
     )
 
     required_phrases = (
-        "do not stop after `--plan-only`, static review, or a plausible code edit",
+        "do not stop after static review or a plausible code edit",
         "Run the failing Journey command or the full journey once",
         "use the first failing step as the source of truth",
         "the CLI's `Retry failed step:` command",
-        "`--plan-only` validates discovery, labels, and planning only",
-        "It is not proof that a Journey file is fixed",
         "current URL/title for browser failures",
         "the last rejected browser action",
         "correlated `.journey/logs` artifacts",
@@ -194,11 +192,15 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
 
     for phrase in required_phrases:
         assert phrase in body
+    assert "--plan-only" not in body
+    assert "--debug-plan" not in body
 
     for target in ("codex", "claude", "cursor", "generic"):
         rendered = render_agent_instructions(target)
         for phrase in required_phrases:
             assert phrase in rendered
+        assert "--plan-only" not in rendered
+        assert "--debug-plan" not in rendered
 
 
 def test_local_markdown_links_in_public_doc_entrypoints_resolve() -> None:

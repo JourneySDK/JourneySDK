@@ -10,7 +10,7 @@ otherwise.
 2. [Getting Started](01-getting-started.md): the first Journey spec, running one file, selecting one journey, and JSON
    Lines output.
 3. [Branching And Targeted Runs](02-branching-and-targeted-runs.md): adding journey specs, choosing coarse durable step
-   and branch boundaries, `branch(start_from=...)`, `--plan-only`, `--step`, and `--develop-step`.
+   and branch boundaries, `branch(start_from=...)`, `--step`, and `--develop-step`.
 4. [Retries And Resume](03-retries-and-resume.md): state management, retry loops, replay boundaries, and resumable runs.
 5. [Browser And Local Touchpoints](04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
    browser prompt tutorials.
@@ -51,8 +51,8 @@ journey agent generic --install
 Give the one-line prompt to the assistant and let it run `journey agent <target>` itself. Use the default print mode
 when an agent needs the complete verification loop plus touchpoint references in one response.
 Use `journey agent <target> --install` when the project should receive a persistent assistant instruction file or skill.
-The printed loop treats `--plan-only` as a planning map only; agents fixing a failure should run the failed journey or
-the focused `--develop-step` retry until executable evidence passes.
+Agents fixing a failure should run the failed journey or the focused `--develop-step` retry until executable evidence
+passes.
 
 The canonical source files are `journeysdk/touchpoint_docs/*.md` and
 `journeysdk/agent_templates/instructions.md`.

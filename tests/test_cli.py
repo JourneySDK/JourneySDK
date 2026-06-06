@@ -206,7 +206,9 @@ def _write_develop_lifecycle_flow(
     )
 
 
-def test_parser_accepts_new_flags_and_rejects_removed_forms():
+def test_parser_accepts_new_flags_and_rejects_removed_forms(
+    capsys: pytest.CaptureFixture[str],
+):
     parser = build_parser()
 
     execute_args = parser.parse_args(
@@ -227,7 +229,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
             "--no-memory",
             "--no-memory-update",
             "--no-browser-recording",
-            "--plan-only",
+            "--debug-plan",
         ]
     )
     assert execute_args.file == "journeys.py"
@@ -241,7 +243,13 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.no_memory is True
     assert execute_args.no_memory_update is True
     assert execute_args.no_browser_recording is True
-    assert execute_args.plan_only is True
+    assert execute_args.debug_plan is True
+
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["--plan-only"])
+    assert exc_info.value.code == 2
+    removed_output = capsys.readouterr().out
+    assert "unrecognized arguments: --plan-only" in removed_output
 
     agent_parser = build_agent_parser()
     agent_args = agent_parser.parse_args(["codex"])
@@ -656,7 +664,7 @@ def test_execute_interactive_requires_develop_step(
     assert captured.err == ""
 
 
-def test_execute_plan_only_compiles_without_running_steps(
+def test_execute_debug_plan_compiles_without_running_steps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -681,19 +689,19 @@ def test_execute_plan_only_compiles_without_running_steps(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--plan-only"])
+    exit_code = main(["--file", "flow.py", "--debug-plan"])
 
     captured = capsys.readouterr()
     output = captured.out
     assert exit_code == 0
     assert "Plan" in output
     assert "run_target" in output
-    assert "Plan-only mode: execution skipped." in output
+    assert "Debug-plan mode: execution skipped." in output
     assert "Execution" not in output
     assert not events_file.exists()
 
 
-def test_execute_plan_only_validates_requested_step_without_running(
+def test_execute_debug_plan_validates_requested_step_without_running(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -718,25 +726,25 @@ def test_execute_plan_only_validates_requested_step_without_running(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--plan-only", "--step", "missing"])
+    exit_code = main(["--file", "flow.py", "--debug-plan", "--step", "missing"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "Step label 'missing' was not found in the selected journey." in output
-    assert "Plan-only mode: execution skipped." in output
+    assert "Debug-plan mode: execution skipped." in output
     assert "Execution" not in output
     assert not events_file.exists()
 
 
-def test_execute_plan_only_rejects_interactive_mode(
+def test_execute_debug_plan_rejects_interactive_mode(
     capsys: pytest.CaptureFixture[str],
 ):
     with pytest.raises(SystemExit) as exc_info:
-        main(["--plan-only", "--develop-step", "target", "--interactive"])
+        main(["--debug-plan", "--develop-step", "target", "--interactive"])
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "--interactive cannot be used with --plan-only" in captured.out
+    assert "--interactive cannot be used with --debug-plan" in captured.out
     assert captured.err == ""
 
 

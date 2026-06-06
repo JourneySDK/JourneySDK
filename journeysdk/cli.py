@@ -1772,15 +1772,19 @@ def _emit_execute_output(
     )
 
 
-def _emit_plan_only_output(
+def _emit_debug_plan_output(
     root: Path,
     compiled: list[_CompiledJourney],
     errors: list[_CommandError],
 ) -> None:
     _CLI_LOGGER.info(
-        "plan_only_complete",
-        "plan-only mode completed without execution",
-        pretty=pretty_line("Plan-only mode: execution skipped.", indent=2, style="muted"),
+        "debug_plan_complete",
+        "debug-plan mode completed without execution",
+        pretty=pretty_line(
+            "Debug-plan mode: execution skipped.",
+            indent=2,
+            style="muted",
+        ),
         root=str(root),
         journeys=len(compiled),
         failures=len(errors),
@@ -1847,8 +1851,8 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         error = _error_from_exception(exc, phase="plan")
         root = Path.cwd().resolve()
         _emit_plan_output(root, [], [error])
-        if args.plan_only:
-            _emit_plan_only_output(root, [], [error])
+        if args.debug_plan:
+            _emit_debug_plan_output(root, [], [error])
             return 1
         _emit_execution_section()
         _emit_execute_output(
@@ -1870,15 +1874,15 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     )
     errors.extend(compile_errors)
 
-    if args.plan_only and compiled and not (args.fail_fast and errors):
+    if args.debug_plan and compiled and not (args.fail_fast and errors):
         target_step = args.develop_step or args.step
         if target_step is not None:
             _, target_errors = _select_targeted_journey(compiled, step=target_step)
             errors.extend(target_errors)
 
     _emit_plan_output(root, compiled, errors)
-    if args.plan_only:
-        _emit_plan_only_output(root, compiled, errors)
+    if args.debug_plan:
+        _emit_debug_plan_output(root, compiled, errors)
         return 0 if not errors else 1
 
     _emit_execution_section()
@@ -3416,9 +3420,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prompt to continue or retry after each --develop-step pause",
     )
     parser.add_argument(
-        "--plan-only",
+        "--debug-plan",
         action="store_true",
-        help="Discover and compile journeys, print the plan, and exit without executing steps",
+        help="Debug journey planning by printing compiled cases and exiting without executing steps",
     )
     parser.add_argument(
         "--no-state",
@@ -3560,8 +3564,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(args.log_level, output_format=args.output)
     if args.touchpoint_docs is not None:
         return _cmd_touchpoint_docs(args)
-    if args.plan_only and args.interactive:
-        parser.error("--interactive cannot be used with --plan-only")
+    if args.debug_plan and args.interactive:
+        parser.error("--interactive cannot be used with --debug-plan")
     if args.interactive and getattr(args, "develop_step", None) is None:
         parser.error("--interactive requires --develop-step")
     return _cmd_execute(args)
