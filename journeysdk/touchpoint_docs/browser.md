@@ -35,6 +35,12 @@ def create_watch(session):
 Use selectors when they are stable and concise. Use `page.prompt(..., memory=...)` for bounded UI tasks when it keeps
 the helper smaller and easier to maintain. Keep prompts specific and include the success condition.
 
+Prompt-generated Python snippets run with the active Playwright `page`, known `pages`, `timeout_ms`, `switch_page(...)`,
+and a conservative set of safe builtins such as `print`, `len`, `str`, `sorted`, `isinstance`, and common exception
+classes. `print(...)` output is captured for the next prompt turn instead of written directly to stdout. Imports, file
+I/O, dynamic execution, and broad introspection helpers such as `__import__`, `open`, `eval`, `exec`, `compile`,
+`globals`, `locals`, `dir`, `getattr`, and `setattr` are intentionally unavailable.
+
 ## Browser Logs
 
 By default, `open_page(...)` writes browser evidence under `.journey/logs/`: a Playwright trace, a WebM video, browser

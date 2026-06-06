@@ -3969,6 +3969,117 @@ def test_journey_browser_prompt_retries_invalid_python(monkeypatch):
     assert "SyntaxError:" in second_prompt_text
 
 
+def test_journey_browser_prompt_allows_safe_builtins_and_captures_print(
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Dashboard",
+        url="http://example.test/dashboard",
+        context=context,
+        events=events,
+        visible_texts={"Ready"},
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        [
+            _run_code(
+                "\n".join(
+                    [
+                        "values = sorted([3, 1, 2])",
+                        'print("count=", len(values), " values=", values, sep="")',
+                        "try:",
+                        '    raise ValueError("expected")',
+                        "except Exception as exc:",
+                        '    print("caught ", str(exc), sep="")',
+                        "assert isinstance(values, list)",
+                        "assert values == [1, 2, 3]",
+                    ]
+                )
+            ),
+            "Diagnostics collected.",
+        ],
+        structured_responses=[
+            _finalization("Diagnostics collected."),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt("inspect state", model="openai:gpt-4.1-mini") == "Diagnostics collected."
+    log_output = capsys.readouterr().out
+
+    second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
+    assert "Captured print output" in second_prompt_text
+    assert "count=3 values=[1, 2, 3]" in second_prompt_text
+    assert "caught expected" in second_prompt_text
+    assert "count=3 values=[1, 2, 3]" not in log_output
+    assert "caught expected" not in log_output
+
+
+@pytest.mark.parametrize(
+    ("code", "blocked_name"),
+    [
+        ('__import__("os")', "__import__"),
+        ('open("secret.txt")', "open"),
+    ],
+)
+def test_journey_browser_prompt_rejects_blocked_python_builtins(
+    monkeypatch,
+    code: str,
+    blocked_name: str,
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Dashboard",
+        url="http://example.test/dashboard",
+        context=context,
+        events=events,
+        visible_texts={"Ready"},
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        [_run_code(code), "Recovered."],
+        structured_responses=[
+            _finalization("Recovered."),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt("inspect state", model="openai:gpt-4.1-mini") == "Recovered."
+
+    second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
+    assert '"status":"rejected"' in second_prompt_text
+    assert "NameError:" in second_prompt_text
+    assert blocked_name in second_prompt_text
+
+
+def test_journey_browser_prompt_python_environment_prompts_document_allowlist():
+    for prompt_text in (
+        journey_browser_prompt._PROMPT_SYSTEM_MESSAGE,
+        journey_browser_prompt._PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE,
+    ):
+        assert "safe builtins" in prompt_text
+        assert "print, len, str" in prompt_text
+        assert "isinstance" in prompt_text
+        assert "Exception" in prompt_text
+        assert "__import__" in prompt_text
+        assert "open, eval, exec, compile" in prompt_text
+    assert "Do not include diagnostic-only print" in (
+        journey_browser_prompt._PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE
+    )
+
+
 def test_journey_browser_prompt_rejects_json_as_python_failure(monkeypatch):
     events: list[object] = []
     context = _FakePromptContext()

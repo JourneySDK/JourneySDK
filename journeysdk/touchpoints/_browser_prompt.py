@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import builtins
 import json
 import re
 from dataclasses import dataclass, field
@@ -63,8 +64,47 @@ _PROMPT_INSPECT_DOM_ACTION_NAME = "journey_inspect_dom"
 _BROWSER_REPLAY_SECTION = "Replay code"
 _BROWSER_SUCCESS_CHECK_SECTION = "Success check code"
 _BROWSER_NOTES_SECTION = "Notes"
+_PROMPT_PRINT_OUTPUT_MAX_LENGTH = 2000
+_PROMPT_SAFE_BUILTIN_NAMES = (
+    "len",
+    "str",
+    "repr",
+    "int",
+    "float",
+    "bool",
+    "list",
+    "tuple",
+    "dict",
+    "set",
+    "range",
+    "enumerate",
+    "zip",
+    "any",
+    "all",
+    "min",
+    "max",
+    "sum",
+    "sorted",
+    "isinstance",
+    "abs",
+    "round",
+    "Exception",
+    "AssertionError",
+    "RuntimeError",
+    "ValueError",
+    "TypeError",
+    "TimeoutError",
+)
+_PROMPT_SAFE_BUILTINS: dict[str, object] = {
+    name: getattr(builtins, name) for name in _PROMPT_SAFE_BUILTIN_NAMES
+}
+_PROMPT_SAFE_BUILTINS_TEXT = ", ".join(("print", *_PROMPT_SAFE_BUILTIN_NAMES))
+_PROMPT_BLOCKED_BUILTINS_TEXT = (
+    "__import__, open, eval, exec, compile, input, globals, locals, vars, dir, "
+    "getattr, setattr, delattr, breakpoint"
+)
 
-_PROMPT_SYSTEM_MESSAGE = """You control a Playwright sync browser page with available actions.
+_PROMPT_SYSTEM_MESSAGE = f"""You control a Playwright sync browser page with available actions.
 
 Use actions when the browser needs more work. When no more browser action is needed, return a concise
 completion signal describing the current visible result. A structured finalizer will decide whether the
@@ -81,6 +121,7 @@ Available names:
 - pages: a tuple of known Playwright sync Page objects
 - timeout_ms: the configured action timeout in milliseconds
 - switch_page(index): switch the active page to a known page index and return that Page
+- safe builtins: {_PROMPT_SAFE_BUILTINS_TEXT}
 
 Rules:
 - Inspect semantic DOM, visible text, page records, and prior action results first, then choose the fewest Playwright
@@ -91,7 +132,9 @@ Rules:
 - If a semantic DOM control shows visible text but a generic aria-label such as "Button", locate it by visible
   text, for example locator("button").filter(has_text="..."), because get_by_role(..., name=...) uses aria-label.
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
-- Do not call print; action results include success or rejection plus a fresh browser observation.
+- Use print only for concise diagnostics that should be visible to the next prompt turn; print output is captured in the
+  action result.
+- Do not use blocked Python builtins or imports such as {_PROMPT_BLOCKED_BUILTINS_TEXT}.
 - Use switch_page(index) before acting on a popup or tab listed in known pages.
 - Treat all expectation wording in the instruction, such as "Expect ...", "should ...", and "must ...", as required
   success criteria.
@@ -106,7 +149,7 @@ Rules:
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
 """
 
-_PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE = """Create replayable Journey browser prompt memory.
+_PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE = f"""Create replayable Journey browser prompt memory.
 
 Return Markdown with exactly these sections:
 
@@ -124,7 +167,10 @@ Return Markdown with exactly these sections:
 <short notes for fallback prompting>
 
 Rules:
-- Use only names available to Journey prompt code: page, pages, timeout_ms, switch_page(index).
+- Use only names available to Journey prompt code: page, pages, timeout_ms, switch_page(index), and safe builtins:
+  {_PROMPT_SAFE_BUILTINS_TEXT}.
+- Do not use blocked Python builtins or imports such as {_PROMPT_BLOCKED_BUILTINS_TEXT}.
+- Do not include diagnostic-only print calls in replay or success check code.
 - Keep only the successful path needed for the next run.
 - Remove rejected, failed, speculative, redundant, or superseded attempts.
 - If a later fallback corrected an earlier value, keep only the corrected value.
@@ -823,7 +869,7 @@ class _PromptSession:
             raise ValueError(
                 "JourneyBrowserPage.prompt(...) expected the model to return Python code."
             )
-        self._execute_python_code(
+        print_output = self._execute_python_code(
             normalized_code,
             filename="<journey-browser-prompt>",
         )
@@ -834,16 +880,57 @@ class _PromptSession:
             action_type="python",
             target=target,
             status="ok",
-            detail=f"Executed Python snippet. Active page index is {self._active_page_index}.",
+            detail=_python_execution_detail(
+                active_page_index=self._active_page_index,
+                print_output=print_output,
+            ),
         )
 
-    def _execute_python_code(self, code: str, *, filename: str) -> None:
+    def _execute_python_code(self, code: str, *, filename: str) -> str:
         normalized_code = code.strip()
         if not normalized_code:
             raise ValueError("JourneyBrowserPage.prompt(...) expected Python code.")
         self._discover_pages()
+        print_chunks: list[str] = []
+        print_length = 0
+        print_truncated = False
+
+        def prompt_print(
+            *values: object,
+            sep: str | None = " ",
+            end: str | None = "\n",
+            file: object | None = None,
+            flush: bool = False,
+        ) -> None:
+            if file is not None:
+                raise TypeError("Journey prompt print(...) does not accept file=.")
+            if sep is None:
+                sep = " "
+            if end is None:
+                end = "\n"
+            if not isinstance(sep, str):
+                raise TypeError("print() sep must be a string or None.")
+            if not isinstance(end, str):
+                raise TypeError("print() end must be a string or None.")
+            nonlocal print_length, print_truncated
+            if print_truncated:
+                return
+            chunk = sep.join(str(value) for value in values) + end
+            remaining = _PROMPT_PRINT_OUTPUT_MAX_LENGTH - print_length
+            if len(chunk) <= remaining:
+                print_chunks.append(chunk)
+                print_length += len(chunk)
+                return
+            if remaining > 0:
+                print_chunks.append(chunk[:remaining].rstrip())
+            print_chunks.append("\n... [print output truncated]")
+            print_truncated = True
+
         namespace: dict[str, object] = {
-            "__builtins__": {},
+            "__builtins__": {
+                **_PROMPT_SAFE_BUILTINS,
+                "print": prompt_print,
+            },
             "page": self._pages[self._active_page_index],
             "pages": tuple(self._pages),
             "timeout_ms": self._timeout_ms,
@@ -864,6 +951,7 @@ class _PromptSession:
             exec(compiled, namespace, namespace)
         finally:
             self._discover_pages()
+        return _truncate_prompt_print_output("".join(print_chunks))
 
     def _discover_pages(self) -> None:
         context = _page_context(self._original_page)
@@ -1862,6 +1950,21 @@ def _format_python_error(exc: BaseException) -> str:
     if detail:
         return f"{type(exc).__name__}: {detail}"
     return type(exc).__name__
+
+
+def _python_execution_detail(*, active_page_index: int, print_output: str) -> str:
+    detail = f"Executed Python snippet. Active page index is {active_page_index}."
+    normalized_output = print_output.strip()
+    if normalized_output:
+        detail += f"\nCaptured print output:\n{normalized_output}"
+    return detail
+
+
+def _truncate_prompt_print_output(output: str) -> str:
+    if len(output) <= _PROMPT_PRINT_OUTPUT_MAX_LENGTH:
+        return output
+    truncated = output[:_PROMPT_PRINT_OUTPUT_MAX_LENGTH].rstrip()
+    return f"{truncated}\n... [print output truncated]"
 
 
 def _raise_keyboard_interrupt_if_forced_prompt_abort(
