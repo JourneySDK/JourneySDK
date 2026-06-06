@@ -144,7 +144,14 @@ For the full contributor workflow, including package smoke tests and manual publ
 
 ## AI Agent Instructions
 
-AI coding agents can ask the installed CLI for a complete bootstrap packet:
+The easiest way to start an agentic Journey loop is one prompt:
+
+```text
+Use Journey SDK for this task: <describe the user flow>. Run journey --agent-bootstrap codex first.
+```
+
+Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run the installed CLI
+for a complete bootstrap packet:
 
 ```bash
 journey --agent-bootstrap codex
@@ -154,9 +161,9 @@ journey --agent-bootstrap generic
 ```
 
 The bootstrap output includes the shared assistant-specific Journey guidance from the packaged instruction template,
-then appends packaged touchpoint references. The targeted verification loop and log-browsing commands live in that
-shared instruction body so bootstrap output and installed assistant files stay in sync. It is print-only and does not
-write files.
+then appends packaged touchpoint references. The targeted verification loop, touchpoint discovery, and log-browsing
+commands live in that shared instruction body so the user prompt can stay short. It is print-only and does not write
+files.
 
 Use assistant-specific instructions when a project-level agent file should be installed or printed by itself:
 

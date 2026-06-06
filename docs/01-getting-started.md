@@ -32,15 +32,22 @@ the service produced the expected side effect.
 
 ## Agent Bootstrap
 
-When Codex, Claude Code, Cursor, or another coding agent is about to add or debug journeys, start with the bootstrap
-packet:
+When Codex, Claude Code, Cursor, or another coding agent is about to add or debug journeys, give it one line:
+
+```text
+Use Journey SDK for this task: <describe the user flow>. Run journey --agent-bootstrap codex first.
+```
+
+Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run the bootstrap
+command itself:
 
 ```bash
 journey --agent-bootstrap codex
 ```
 
-That one command gives the agent the installed Journey instructions, the targeted verification loop, and the packaged
-touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or polling helpers.
+The command is print-only. It gives the agent the installed Journey instructions, the targeted verification loop, and
+the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or polling
+helpers.
 
 ## The Smallest Useful Journey
 

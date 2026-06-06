@@ -10,11 +10,23 @@ affected journey or step.
 - When implementing new features, extend existing journey specs or add new ones so the new user behavior is covered.
 - Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
 - Use it for fast partial verification: inspect the compiled plan without execution, run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
-- If you need the complete Journey guidance packet, run `journey --agent-bootstrap <target>` where `<target>` is `codex`, `claude`, `cursor`, or `generic`.
+- If you need the complete Journey guidance packet and have not already received it, run `journey --agent-bootstrap <target>` where `<target>` is `codex`, `claude`, `cursor`, or `generic`.
+
+## Working From A One-Line Prompt
+
+- If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey --agent-bootstrap <target>` yourself.
+- Proceed autonomously: inspect the project, find or create the relevant journey spec, consult packaged touchpoint docs as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
+
+## Get More Journey Guidance
+
+- When working in the Journey SDK checkout, use `docs/README.md` as the map for subsequent instructions: installation and CLI, getting started, branching and targeted runs, retries and resume, browser/local touchpoints, cloud touchpoints, and debugging.
+- In any project with the installed CLI, run `journey --touchpoint-docs all` to discover all packaged touchpoint references before choosing helpers.
+- For focused touchpoint guidance, run `journey --touchpoint-docs browser`, `journey --touchpoint-docs docker`, `journey --touchpoint-docs email`, `journey --touchpoint-docs webhook`, or `journey --touchpoint-docs http`.
+- Do not ask the user for Journey docs that can be discovered from the local checkout or printed by the installed CLI.
 
 ## Add Journey Specs
 
-- Inspect existing journey files and project docs before adding a new spec.
+- Inspect existing journey files, project docs, test conventions, and local helper APIs before adding a new spec.
 - Follow the project's existing journey location and naming convention when one exists.
 - If there is no convention, add new specs under `journeys/<feature>_journey.py`.
 - Keep journey specs close to the behavior they verify, but do not add public/private cross-repo dependencies.

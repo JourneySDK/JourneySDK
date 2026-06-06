@@ -48,21 +48,18 @@ installs, browser setup, and local package smoke testing.
 
 ## Quick Start
 
-Import the primitives you use and write a top-level `@journey` function:
+Give your coding assistant one line:
 
-```python
-from journeysdk import journey, step
+```text
+Use Journey SDK for this task: <describe the user flow>. Run journey --agent-bootstrap codex first.
 ```
 
-Give a coding agent the complete Journey loop from the installed CLI:
+Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run that command,
+read the full SDK guidance, discover touchpoint docs as needed, add or extend the smallest useful journey spec, iterate
+with targeted Journey commands, and report the exact commands and evidence it used.
 
-```bash
-journey --agent-bootstrap codex
-journey --agent-bootstrap claude
-```
-
-The canonical first-run guide is [Getting Started](docs/01-getting-started.md). It covers the smallest useful journey,
-running one file, selecting one journey, and JSON Lines output for tools.
+If you are authoring a journey by hand, use [Getting Started](docs/01-getting-started.md). It covers imports,
+top-level `@journey` functions, running one file, selecting one journey, and JSON Lines output for tools.
 
 ## Authoring Guides
 
@@ -95,7 +92,8 @@ Those references are sourced from `journeysdk/touchpoint_docs/*.md` in this repo
 
 ## AI Agent Support
 
-Use the bootstrap packet when an AI coding agent needs the whole Journey loop in one command:
+For a new agentic loop, give the assistant the one-line quickstart prompt above. The assistant should run the bootstrap
+command itself:
 
 ```bash
 journey --agent-bootstrap codex
@@ -104,10 +102,10 @@ journey --agent-bootstrap cursor
 journey --agent-bootstrap generic
 ```
 
-It prints the shared target-specific assistant guidance from `journeysdk/agent_templates/instructions.md`, then appends
-the packaged touchpoint references. The verification loop and log-browsing commands live in that shared instruction
-body so bootstrap output and installed assistant files stay in sync. Use packaged assistant instructions when a
-project-level assistant file should be written:
+`--agent-bootstrap` is print-only. It prints the shared target-specific assistant guidance from
+`journeysdk/agent_templates/instructions.md`, then appends the packaged touchpoint references. The verification loop and
+log-browsing commands live in that shared instruction body so the user prompt can stay short. Use packaged assistant
+instructions when a project-level assistant file should be written:
 
 ```bash
 journey --agent-instructions codex
