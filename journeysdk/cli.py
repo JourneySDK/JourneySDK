@@ -34,6 +34,7 @@ from .executor import (
     _ExecutionObserver,
     _PausedExecution,
     _execute_plan,
+    _prompt_memory_root_for_state_path,
     _resolve_browser_recording_root,
     _use_step_interrupt_controller,
 )
@@ -1093,6 +1094,12 @@ def _default_state_path_for_target(
     return default_execution_state_path(selected.file_path)
 
 
+def _prompt_memory_root_for_target(
+    selected: _CompiledJourney,
+) -> Path:
+    return _prompt_memory_root_for_state_path(_default_state_path_for_target(selected))
+
+
 def _selected_develop_match(
     plan: JourneyPlan,
     develop_step: str,
@@ -1208,7 +1215,7 @@ def _execute_all_targets(
                 clean_browser_recordings=clean_browser_recordings,
                 no_logs=no_logs,
                 clean_logs=clean_browser_recordings,
-                prompt_memory_root=root,
+                prompt_memory_root=_prompt_memory_root_for_target(item),
             )
         except Exception as exc:
             _CLI_LOGGER.error(
@@ -1302,7 +1309,7 @@ def _execute_target_step(
             no_memory_update=no_memory_update,
             no_browser_recording=no_browser_recording,
             no_logs=no_logs,
-            prompt_memory_root=root,
+            prompt_memory_root=_prompt_memory_root_for_target(selected),
         )
     except Exception as exc:
         _CLI_LOGGER.error(
@@ -1466,7 +1473,7 @@ def _execute_target_pause(
                 clean_browser_recordings=clean_browser_recordings,
                 no_logs=no_logs,
                 clean_logs=clean_browser_recordings,
-                prompt_memory_root=root,
+                prompt_memory_root=_prompt_memory_root_for_target(selected),
             )
             if isinstance(outcome, _PausedExecution):
                 outcome.close_pending_exits()
@@ -1519,7 +1526,7 @@ def _execute_target_pause(
                 clean_browser_recordings=clean_browser_recordings,
                 no_logs=no_logs,
                 clean_logs=clean_browser_recordings,
-                prompt_memory_root=root,
+                prompt_memory_root=_prompt_memory_root_for_target(selected),
             )
             clean_browser_recordings = False
             if isinstance(outcome, _PausedExecution):

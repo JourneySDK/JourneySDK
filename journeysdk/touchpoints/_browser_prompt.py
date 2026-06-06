@@ -65,6 +65,7 @@ _BROWSER_REPLAY_SECTION = "Replay code"
 _BROWSER_SUCCESS_CHECK_SECTION = "Success check code"
 _BROWSER_NOTES_SECTION = "Notes"
 _PROMPT_PRINT_OUTPUT_MAX_LENGTH = 2000
+_PROMPT_WAIT_FOR_TIMEOUT_MAX_MS = 5000
 _PROMPT_SAFE_BUILTIN_NAMES = (
     "len",
     "str",
@@ -103,6 +104,52 @@ _PROMPT_BLOCKED_BUILTINS_TEXT = (
     "__import__, open, eval, exec, compile, input, globals, locals, vars, dir, "
     "getattr, setattr, delattr, breakpoint"
 )
+_PROMPT_AVAILABLE_NAMES = {
+    "page",
+    "pages",
+    "timeout_ms",
+    "switch_page",
+    "print",
+    *_PROMPT_SAFE_BUILTIN_NAMES,
+}
+_PROMPT_BLOCKED_NAMES = {
+    "__import__",
+    "open",
+    "eval",
+    "exec",
+    "compile",
+    "input",
+    "globals",
+    "locals",
+    "vars",
+    "dir",
+    "getattr",
+    "setattr",
+    "delattr",
+    "breakpoint",
+}
+_PROMPT_TIMEOUT_METHOD_NAMES = {
+    "click",
+    "dblclick",
+    "fill",
+    "press",
+    "type",
+    "check",
+    "uncheck",
+    "select_option",
+    "hover",
+    "wait_for",
+    "wait_for_url",
+    "wait_for_selector",
+    "wait_for_load_state",
+    "goto",
+    "reload",
+    "is_visible",
+    "text_content",
+    "inner_text",
+    "input_value",
+    "bounding_box",
+}
 
 _PROMPT_SYSTEM_MESSAGE = f"""You control a Playwright sync browser page with available actions.
 
@@ -134,7 +181,10 @@ Rules:
 - Pass timeout=timeout_ms to actions and waits that accept a timeout.
 - Use print only for concise diagnostics that should be visible to the next prompt turn; print output is captured in the
   action result.
-- Do not use blocked Python builtins or imports such as {_PROMPT_BLOCKED_BUILTINS_TEXT}.
+- Use only sync Playwright APIs. Do not use async/await, imports, time.sleep, or blocked Python builtins such as
+  {_PROMPT_BLOCKED_BUILTINS_TEXT}.
+- Do not call Playwright actions or waits without timeout=timeout_ms. Avoid hard sleeps; if absolutely necessary,
+  page.wait_for_timeout(...) must be at most {_PROMPT_WAIT_FOR_TIMEOUT_MAX_MS} milliseconds.
 - Use switch_page(index) before acting on a popup or tab listed in known pages.
 - Treat all expectation wording in the instruction, such as "Expect ...", "should ...", and "must ...", as required
   success criteria.
@@ -144,6 +194,8 @@ Rules:
 - If the previous step was rejected, correct the action arguments or Python and try again.
 - If prompt memory is provided, use it as a hint from prior successful runs,
   but trust the current semantic DOM, visible text, DOM inspections, and requested screenshots over stale memory.
+- If replayed prompt memory failed, it may have partially changed the page. Treat the current page state as
+  authoritative; do not restart, log out, or copy failed replay code unless the current DOM/URL/text requires it.
 - The completion signal should be factual and based on semantic DOM, visible text, DOM inspections, requested screenshots, known
   pages, and executed steps.
 - Do not mention implementation details, hidden reasoning, or unavailable metadata.
@@ -169,12 +221,16 @@ Return Markdown with exactly these sections:
 Rules:
 - Use only names available to Journey prompt code: page, pages, timeout_ms, switch_page(index), and safe builtins:
   {_PROMPT_SAFE_BUILTINS_TEXT}.
-- Do not use blocked Python builtins or imports such as {_PROMPT_BLOCKED_BUILTINS_TEXT}.
+- Use sync Playwright APIs only. Do not use async/await, imports, time.sleep, modules such as re, or blocked Python
+  builtins such as {_PROMPT_BLOCKED_BUILTINS_TEXT}.
 - Do not include diagnostic-only print calls in replay or success check code.
+- Do not include hard sleeps longer than {_PROMPT_WAIT_FOR_TIMEOUT_MAX_MS} milliseconds. Prefer condition waits.
 - Keep only the successful path needed for the next run.
 - Remove rejected, failed, speculative, redundant, or superseded attempts.
 - If a later fallback corrected an earlier value, keep only the corrected value.
-- Success check code must assert all required success criteria from the instruction, including "Expect ..." clauses.
+- Success check code must assert only the explicit success criteria from the instruction and requested output, including
+  "Expect ..." clauses. Do not add incidental page chrome or exact generated response text unless the instruction
+  required it.
 - Prefer robust Playwright locators and pass timeout=timeout_ms to waits/actions.
 - Do not include screenshots, semantic DOM, raw DOM, hidden reasoning, or prose outside the requested sections.
 """
@@ -890,6 +946,7 @@ class _PromptSession:
         normalized_code = code.strip()
         if not normalized_code:
             raise ValueError("JourneyBrowserPage.prompt(...) expected Python code.")
+        _validate_prompt_python_code(normalized_code)
         self._discover_pages()
         print_chunks: list[str] = []
         print_length = 0
@@ -1082,6 +1139,8 @@ def _compact_log_value(value: object, *, max_length: int = 240) -> str:
 def _parse_memory_draft(text: str) -> PromptMemoryDraft:
     replay_code = _memory_draft_code_section(text, "Replay code")
     success_check_code = _memory_draft_code_section(text, "Success check code")
+    _validate_prompt_python_code(replay_code, owner="Replay code")
+    _validate_prompt_python_code(success_check_code, owner="Success check code")
     notes = _memory_draft_text_section(text, "Notes")
     return PromptMemoryDraft(
         sections=_browser_memory_sections(
@@ -1935,6 +1994,153 @@ def _strip_code_fences(text: str) -> str:
     if lines and lines[-1].startswith("```"):
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+def _validate_prompt_python_code(
+    code: str,
+    *,
+    owner: str = "Journey prompt Python snippet",
+) -> None:
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as exc:
+        raise RuntimeError(f"{owner} is not valid Python: {exc}") from exc
+    _reject_unsupported_prompt_nodes(tree, owner=owner)
+    bound_names = _prompt_bound_names(tree)
+    allowed_names = _PROMPT_AVAILABLE_NAMES | bound_names
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in _PROMPT_BLOCKED_NAMES:
+                raise RuntimeError(
+                    f"{owner} uses blocked Python name {node.id!r}."
+                )
+            if node.id.startswith("__") and node.id.endswith("__"):
+                raise RuntimeError(
+                    f"{owner} uses unsupported Python internals name {node.id!r}."
+                )
+            if node.id not in allowed_names:
+                raise RuntimeError(
+                    f"{owner} uses unsupported Python name {node.id!r}. "
+                    "Use only page, pages, timeout_ms, switch_page(index), "
+                    "local variables, and the documented safe builtins."
+                )
+        elif isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                raise RuntimeError(
+                    f"{owner} uses unsupported Python internals attribute "
+                    f"{node.attr!r}."
+                )
+        elif isinstance(node, ast.Call):
+            _validate_prompt_call(node, owner=owner)
+
+
+def _reject_unsupported_prompt_nodes(ast_tree: ast.AST, *, owner: str) -> None:
+    for node in ast.walk(ast_tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            raise RuntimeError(
+                f"{owner} uses imports, which are not available in Journey prompt code."
+            )
+        if isinstance(node, ast.Await):
+            raise RuntimeError(
+                f"{owner} uses async/await, but Journey prompt code uses sync Playwright APIs."
+            )
+        if isinstance(node, ast.AsyncFunctionDef):
+            raise RuntimeError(
+                f"{owner} defines an async function, but Journey prompt code is sync."
+            )
+        if isinstance(node, (ast.AsyncFor, ast.AsyncWith)):
+            raise RuntimeError(
+                f"{owner} uses async syntax, but Journey prompt code is sync."
+            )
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            raise RuntimeError(
+                f"{owner} uses unsupported global/nonlocal declarations."
+            )
+
+
+def _prompt_bound_names(ast_tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(ast_tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name is not None:
+            names.add(node.name)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+    return names
+
+
+def _validate_prompt_call(call: ast.Call, *, owner: str) -> None:
+    method_name = call.func.attr if isinstance(call.func, ast.Attribute) else None
+    if method_name in {"press", "type"} and _is_page_keyboard_target(call.func):
+        return
+    if method_name == "wait_for_timeout":
+        _validate_wait_for_timeout_call(call, owner=owner)
+        return
+    if method_name in _PROMPT_TIMEOUT_METHOD_NAMES:
+        timeout_value = _call_keyword_value(call, "timeout")
+        if timeout_value is None:
+            raise RuntimeError(
+                f"{owner} calls Playwright {method_name}(...) without "
+                "timeout=timeout_ms. Pass timeout=timeout_ms to avoid long "
+                "default waits."
+            )
+        if not (isinstance(timeout_value, ast.Name) and timeout_value.id == "timeout_ms"):
+            raise RuntimeError(
+                f"{owner} calls Playwright {method_name}(...) with an unsupported "
+                "timeout value. Pass timeout=timeout_ms."
+        )
+
+
+def _is_page_keyboard_target(func: ast.AST) -> bool:
+    if not isinstance(func, ast.Attribute):
+        return False
+    target = func.value
+    return (
+        isinstance(target, ast.Attribute)
+        and target.attr == "keyboard"
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "page"
+    )
+
+
+def _validate_wait_for_timeout_call(call: ast.Call, *, owner: str) -> None:
+    if not call.args:
+        raise RuntimeError(f"{owner} calls wait_for_timeout(...) without a duration.")
+    duration = _static_int_value(call.args[0])
+    if duration is None:
+        raise RuntimeError(
+            f"{owner} calls wait_for_timeout(...) with a dynamic duration. "
+            "Prefer condition waits."
+        )
+    if duration > _PROMPT_WAIT_FOR_TIMEOUT_MAX_MS:
+        raise RuntimeError(
+            f"{owner} calls wait_for_timeout({duration}), which exceeds the "
+            f"{_PROMPT_WAIT_FOR_TIMEOUT_MAX_MS}ms prompt-code limit. Prefer "
+            "condition waits."
+        )
+
+
+def _call_keyword_value(call: ast.Call, name: str) -> ast.AST | None:
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    return None
+
+
+def _static_int_value(node: ast.AST) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
+        return -node.operand.value
+    return None
 
 
 def _first_code_line(code: str) -> str:

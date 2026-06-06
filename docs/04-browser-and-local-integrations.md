@@ -160,8 +160,9 @@ Run the prompt journey:
 uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py
 ```
 
-Use `journey --touchpoint-docs browser` for prompt memory, model configuration, selector-vs-prompt guidance, and
-structured output details.
+Prompt memories are stored as `<memory>.memory.md` files next to the journey's `.journey` directory. Use
+`journey --touchpoint-docs browser` for prompt memory, model configuration, selector-vs-prompt guidance, and structured
+output details.
 
 ## What To Notice
 

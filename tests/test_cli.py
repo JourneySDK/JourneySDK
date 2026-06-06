@@ -545,7 +545,7 @@ def test_execute_forwards_no_memory_update_flag(
     assert captured_flags == [True]
 
 
-def test_execute_uses_command_root_for_nested_prompt_memory(
+def test_execute_uses_journey_state_parent_for_nested_prompt_memory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -568,7 +568,7 @@ def test_execute_uses_command_root_for_nested_prompt_memory(
     exit_code = main(["--file", "pkg/flow.py", "--log-level", "off"])
 
     assert exit_code == 0
-    assert captured_roots == [tmp_path.resolve()]
+    assert captured_roots == [tmp_path.resolve() / "pkg"]
 
 
 @pytest.mark.parametrize(
@@ -578,7 +578,7 @@ def test_execute_uses_command_root_for_nested_prompt_memory(
         ["--develop-step", "target"],
     ],
 )
-def test_targeted_execute_uses_command_root_for_nested_prompt_memory(
+def test_targeted_execute_uses_journey_state_parent_for_nested_prompt_memory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     target_args: list[str],
@@ -602,7 +602,7 @@ def test_targeted_execute_uses_command_root_for_nested_prompt_memory(
     exit_code = main(["--file", "pkg/flow.py", *target_args, "--log-level", "off"])
 
     assert exit_code == 0
-    assert captured_roots == [tmp_path.resolve()]
+    assert captured_roots == [tmp_path.resolve() / "pkg"]
 
 
 def test_execute_forwards_no_browser_recording_flag(

@@ -3430,6 +3430,159 @@ def test_journey_browser_prompt_falls_back_when_memory_replay_fails(
 
 
 @pytest.mark.parametrize(
+    ("replay_code", "expected_detail"),
+    [
+        ("await page.locator('#submit').click(timeout=timeout_ms)", "async/await"),
+        ("import time\npage.wait_for_timeout(1)", "uses imports"),
+        ("re.compile('^Archive$')", "unsupported Python name 're'"),
+        ("page.locator('#submit').click()", "timeout=timeout_ms"),
+        ("page.wait_for_timeout(60000)", "exceeds the 5000ms"),
+    ],
+)
+def test_journey_browser_prompt_skips_invalid_memory_before_replay(
+    monkeypatch,
+    tmp_path: Path,
+    replay_code: str,
+    expected_detail: str,
+):
+    monkeypatch.chdir(tmp_path)
+    write_prompt_memory_entry(
+        _prompt_memory_path(tmp_path, "sign-in"),
+        PromptMemoryEntry(
+            component="browser",
+            instruction="sign in",
+            observation_signature='{"title":"Login","url":"http://example.test/login"}',
+            sections=(
+                PromptMemorySection(
+                    heading="Replay code",
+                    body=replay_code,
+                    language="python",
+                ),
+                PromptMemorySection(
+                    heading="Success check code",
+                    body="assert True",
+                    language="python",
+                ),
+            ),
+            final_output="Signed in from memory.",
+        ),
+    )
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        elements=[_prompt_element("#submit", name="Submit")],
+        click_handlers={
+            "#submit": lambda: (_ for _ in ()).throw(
+                AssertionError("invalid memory should not click")
+            )
+        },
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        ["Recovered after invalid memory."],
+        structured_responses=[
+            _finalization("Recovered after invalid memory."),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt(
+        "sign in",
+        model="openai:gpt-4.1-mini",
+        memory="sign-in",
+    ) == "Recovered after invalid memory."
+
+    prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    assert "Replay failed before fallback:" in prompt_text
+    assert expected_detail in prompt_text
+    assert not any(
+        event[0] == "prompt_click" for event in events if isinstance(event, tuple)
+    )
+
+
+def test_journey_browser_prompt_rebuilds_observation_after_failed_memory_replay(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.chdir(tmp_path)
+    write_prompt_memory_entry(
+        _prompt_memory_path(tmp_path, "sign-in"),
+        PromptMemoryEntry(
+            component="browser",
+            instruction="sign in",
+            observation_signature='{"title":"Login","url":"http://example.test/login"}',
+            sections=(
+                PromptMemorySection(
+                    heading="Replay code",
+                    body='page.locator("#continue").click(timeout=timeout_ms)',
+                    language="python",
+                ),
+                PromptMemorySection(
+                    heading="Success check code",
+                    body='raise AssertionError("stale dashboard label")',
+                    language="python",
+                ),
+            ),
+            final_output="Signed in from memory.",
+        ),
+    )
+    events: list[object] = []
+    context = _FakePromptContext()
+
+    def continue_to_dashboard() -> None:
+        page._fake_url = "http://example.test/dashboard"
+        page._fake_prompt_title = "Dashboard"
+        page._fake_prompt_visible_texts = {"Dashboard Ready"}
+        page._fake_prompt_elements = [_prompt_element("#done", name="Done")]
+        page._fake_prompt_html = _prompt_html(
+            title="Dashboard",
+            elements=page._fake_prompt_elements,
+            visible_texts=page._fake_prompt_visible_texts,
+        )
+
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        elements=[_prompt_element("#continue", name="Continue")],
+        click_handlers={"#continue": continue_to_dashboard},
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        ["Recovered from live page."],
+        structured_responses=[
+            _finalization("Recovered from live page."),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt(
+        "sign in",
+        model="openai:gpt-4.1-mini",
+        memory="sign-in",
+    ) == "Recovered from live page."
+
+    prompt_text = model.calls[0]["messages"][1]["content"][0]["text"]
+    assert "Replay failed before fallback:" in prompt_text
+    assert "Dashboard Ready" in prompt_text
+    assert "http://example.test/dashboard" in prompt_text
+    assert ("prompt_click", "Login", "#continue", 5000) in events
+
+
+@pytest.mark.parametrize(
     ("sections", "expected_detail"),
     [
         (
@@ -3562,11 +3715,12 @@ def test_journey_browser_prompt_does_not_reuse_legacy_memory_shape(
     assert "#legacy" not in prompt_text
 
 
-def test_journey_browser_prompt_execute_uses_cwd_as_memory_root(
+def test_journey_browser_prompt_execute_uses_state_dir_parent_as_memory_root(
     monkeypatch,
     tmp_path: Path,
 ):
     monkeypatch.chdir(tmp_path)
+    state_path = tmp_path / "flows" / ".journey" / "state.json"
     events: list[object] = []
     context = _FakePromptContext()
     page = _make_prompt_page(
@@ -3622,14 +3776,14 @@ def test_journey_browser_prompt_execute_uses_cwd_as_memory_root(
     )
 
     def run_prompt() -> str | dict[str, object]:
-        return page.prompt("finish", model="openai:gpt-4.1-mini", memory="cwd-root")
+        return page.prompt("finish", model="openai:gpt-4.1-mini", memory="state-root")
 
     def memory_journey() -> None:
         journey_sdk.step(run_prompt)
 
-    journey_sdk.execute(memory_journey)
+    journey_sdk.execute(memory_journey, state=state_path, no_logs=True)
 
-    assert write_paths == [tmp_path.resolve() / "cwd-root.memory.md"]
+    assert write_paths == [tmp_path.resolve() / "flows" / "state-root.memory.md"]
 
 
 def test_journey_browser_prompt_respects_execute_no_memory(monkeypatch):
@@ -3966,7 +4120,7 @@ def test_journey_browser_prompt_retries_invalid_python(monkeypatch):
     second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
     assert '"target":"page.locator(\\"#sign-in\\""' in second_prompt_text
     assert '"status":"rejected"' in second_prompt_text
-    assert "SyntaxError:" in second_prompt_text
+    assert "not valid Python" in second_prompt_text
 
 
 def test_journey_browser_prompt_allows_safe_builtins_and_captures_print(
@@ -4060,8 +4214,118 @@ def test_journey_browser_prompt_rejects_blocked_python_builtins(
 
     second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
     assert '"status":"rejected"' in second_prompt_text
-    assert "NameError:" in second_prompt_text
+    assert "blocked Python name" in second_prompt_text
     assert blocked_name in second_prompt_text
+
+
+def test_journey_browser_prompt_rejects_missing_timeout_before_playwright_default(
+    monkeypatch,
+):
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+        elements=[_prompt_element("#submit", name="Submit")],
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        [
+            _run_code('page.locator("#submit").click()'),
+            "Recovered after rejected action.",
+        ],
+        structured_responses=[
+            _finalization("Recovered after rejected action."),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt(
+        "click submit",
+        model="openai:gpt-4.1-mini",
+    ) == "Recovered after rejected action."
+
+    second_prompt_text = model.calls[1]["messages"][-1]["content"][0]["text"]
+    assert '"status":"rejected"' in second_prompt_text
+    assert "timeout=timeout_ms" in second_prompt_text
+    assert not any(
+        event[0] == "prompt_click" for event in events if isinstance(event, tuple)
+    )
+
+
+@pytest.mark.parametrize(
+    ("memory_code", "expected_detail"),
+    [
+        ("await page.locator('#submit').click(timeout=timeout_ms)", "async/await"),
+        ("import time\npage.wait_for_timeout(1)", "uses imports"),
+        ("re.compile('^Archive$')", "unsupported Python name 're'"),
+        ("page.locator('#submit').click()", "timeout=timeout_ms"),
+        ("page.wait_for_timeout(60000)", "exceeds the 5000ms"),
+    ],
+)
+def test_journey_browser_prompt_skips_invalid_compiled_memory(
+    monkeypatch,
+    tmp_path: Path,
+    memory_code: str,
+    expected_detail: str,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+    events: list[object] = []
+    context = _FakePromptContext()
+    page = _make_prompt_page(
+        title="Login",
+        url="http://example.test/login",
+        context=context,
+        events=events,
+    )
+    context.pages.append(page)
+    model = _FakeLangChainPromptModel(
+        [
+            "Done.",
+            "\n".join(
+                [
+                    "## Replay code",
+                    "```python",
+                    memory_code,
+                    "```",
+                    "",
+                    "## Success check code",
+                    "```python",
+                    "assert True",
+                    "```",
+                    "",
+                    "## Notes",
+                    "Invalid memory should not be saved.",
+                ]
+            ),
+        ],
+        structured_responses=[
+            _finalization("Done."),
+        ],
+    )
+    monkeypatch.setattr(
+        journey_browser_prompt,
+        "_load_langchain_model",
+        lambda model_name: model,
+    )
+
+    assert page.prompt(
+        "finish",
+        model="openai:gpt-4.1-mini",
+        memory="invalid-compile",
+    ) == "Done."
+
+    assert not _prompt_memory_path(tmp_path, "invalid-compile").exists()
+    log_output = capsys.readouterr().out
+    assert "memory compile" in log_output
+    assert expected_detail in log_output
 
 
 def test_journey_browser_prompt_python_environment_prompts_document_allowlist():
@@ -4075,9 +4339,16 @@ def test_journey_browser_prompt_python_environment_prompts_document_allowlist():
         assert "Exception" in prompt_text
         assert "__import__" in prompt_text
         assert "open, eval, exec, compile" in prompt_text
+        assert "sync Playwright" in prompt_text
+        assert "async/await" in prompt_text
+        assert "timeout=timeout_ms" in prompt_text
     assert "Do not include diagnostic-only print" in (
         journey_browser_prompt._PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE
     )
+    assert "hard sleeps longer than" in (
+        journey_browser_prompt._PROMPT_MEMORY_COMPILER_SYSTEM_MESSAGE
+    )
+    assert "current page state as" in journey_browser_prompt._PROMPT_SYSTEM_MESSAGE
 
 
 def test_journey_browser_prompt_rejects_json_as_python_failure(monkeypatch):

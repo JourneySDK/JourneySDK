@@ -4357,10 +4357,21 @@ def _resolve_prompt_memory_root(
     _journey_fn: JourneyEntrypoint,
     *,
     prompt_memory_root: str | Path | None,
+    state_path: Path | None,
 ) -> Path:
     if prompt_memory_root is not None:
-        return Path(prompt_memory_root)
+        return Path(prompt_memory_root).resolve()
+    if state_path is not None:
+        return _prompt_memory_root_for_state_path(state_path)
     return Path.cwd().resolve()
+
+
+def _prompt_memory_root_for_state_path(state_path: str | Path) -> Path:
+    path = Path(state_path).resolve()
+    state_dir = path.parent
+    if state_dir.name == DEFAULT_STATE_DIR:
+        return state_dir.parent
+    return state_dir
 
 
 def _resolve_browser_recording_root(
@@ -4483,6 +4494,7 @@ def _execute_plan(
         resolved_prompt_memory_root = _resolve_prompt_memory_root(
             journey_fn,
             prompt_memory_root=prompt_memory_root,
+            state_path=state_path if state_path is not None else default_state_path,
         )
         browser_recording_controller = _BrowserRecordingController(
             enabled=not no_browser_recording and not no_logs,

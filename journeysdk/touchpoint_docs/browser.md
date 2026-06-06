@@ -39,7 +39,13 @@ Prompt-generated Python snippets run with the active Playwright `page`, known `p
 and a conservative set of safe builtins such as `print`, `len`, `str`, `sorted`, `isinstance`, and common exception
 classes. `print(...)` output is captured for the next prompt turn instead of written directly to stdout. Imports, file
 I/O, dynamic execution, and broad introspection helpers such as `__import__`, `open`, `eval`, `exec`, `compile`,
-`globals`, `locals`, `dir`, `getattr`, and `setattr` are intentionally unavailable.
+`globals`, `locals`, `dir`, `getattr`, and `setattr` are intentionally unavailable. Snippets must use sync Playwright
+APIs, pass `timeout=timeout_ms` to timeout-aware actions and waits, and avoid long hard sleeps. Invalid prompt memory is
+skipped before replay when possible; if replay code runs and then fails, fallback prompting continues from the current
+live page state.
+
+Prompt memory files are named `<memory>.memory.md` and stored next to the journey's `.journey` directory. For example,
+`journeys/sign_in.py` uses `journeys/.journey/state.json` and stores `journeys/sign-in.memory.md`.
 
 ## Browser Logs
 

@@ -442,6 +442,8 @@ class PromptEngineSession:
         replay_result = self._try_replay_memory(memory_entry)
         if replay_result is not None:
             return replay_result.final_output
+        if self._memory_replay_error is not None:
+            observation = self._build_observation()
         self._prompt_model = self._load_model(self._model)
         agent = self._create_agent(
             self._prompt_model,
