@@ -16,6 +16,7 @@ from journeysdk.cli import (
     _CliStepInterruptController,
     _active_environment_python,
     _read_pause_choice,
+    build_agent_parser,
     build_parser,
     main,
 )
@@ -242,27 +243,16 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert execute_args.no_browser_recording is True
     assert execute_args.plan_only is True
 
-    agent_args = parser.parse_args(["--agent-instructions", "codex"])
-    assert agent_args.agent_instructions == "codex"
-    assert agent_args.agent_bootstrap is None
-    assert agent_args.install_agent_instructions is False
-    assert agent_args.force_agent_instructions is False
+    agent_parser = build_agent_parser()
+    agent_args = agent_parser.parse_args(["codex"])
+    assert agent_args.target == "codex"
+    assert agent_args.install is False
+    assert agent_args.force is False
 
-    bootstrap_args = parser.parse_args(["--agent-bootstrap", "codex"])
-    assert bootstrap_args.agent_bootstrap == "codex"
-    assert bootstrap_args.agent_instructions is None
-
-    install_args = parser.parse_args(
-        [
-            "--agent-instructions",
-            "claude",
-            "--install-agent-instructions",
-            "--force-agent-instructions",
-        ]
-    )
-    assert install_args.agent_instructions == "claude"
-    assert install_args.install_agent_instructions is True
-    assert install_args.force_agent_instructions is True
+    install_args = agent_parser.parse_args(["claude", "--install", "--force"])
+    assert install_args.target == "claude"
+    assert install_args.install is True
+    assert install_args.force is True
 
     alias_args = parser.parse_args(["--level", "warning"])
     assert alias_args.log_level == "warning"
@@ -297,11 +287,13 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     with pytest.raises(SystemExit):
         parser.parse_args(["--json"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["--agent-instructions", "vim"])
+        parser.parse_args(["--agent-instructions", "codex"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["--agent-bootstrap", "vim"])
+        parser.parse_args(["--agent-bootstrap", "codex"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--touchpoint-docs", "ftp"])
+    with pytest.raises(SystemExit):
+        agent_parser.parse_args(["vim"])
     removed_flag = "--" + "state"
     with pytest.raises(SystemExit):
         parser.parse_args([removed_flag, "run.json"])
@@ -311,28 +303,28 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms():
     assert parser.parse_args(["--output", "jsonl"]).output == "jsonl"
 
 
-def test_agent_instructions_prints_raw_template_without_discovery(
+def test_agent_prints_complete_packet_without_discovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    rendered = "sentinel agent instructions\n"
+    rendered = "sentinel agent bootstrap\n"
 
     def fail_discovery(*args: object, **kwargs: object) -> None:
-        raise AssertionError("agent instructions should not discover journeys")
+        raise AssertionError("agent command should not discover journeys")
 
-    def fake_render_agent_instructions(target: str) -> str:
+    def fake_render_agent_bootstrap(target: str) -> str:
         assert target == "codex"
         return rendered
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("journeysdk.cli.discover_journeys", fail_discovery)
     monkeypatch.setattr(
-        "journeysdk.cli.render_agent_instructions",
-        fake_render_agent_instructions,
+        "journeysdk.cli.render_agent_bootstrap",
+        fake_render_agent_bootstrap,
     )
 
-    exit_code = main(["--agent-instructions", "codex"])
+    exit_code = main(["agent", "codex"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -369,35 +361,6 @@ def test_touchpoint_docs_prints_reference_without_discovery(
     assert captured.out == rendered
 
 
-def test_agent_bootstrap_prints_complete_packet_without_discovery(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-):
-    rendered = "sentinel agent bootstrap\n"
-
-    def fail_discovery(*args: object, **kwargs: object) -> None:
-        raise AssertionError("agent bootstrap should not discover journeys")
-
-    def fake_render_agent_bootstrap(target: str) -> str:
-        assert target == "codex"
-        return rendered
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.cli.discover_journeys", fail_discovery)
-    monkeypatch.setattr(
-        "journeysdk.cli.render_agent_bootstrap",
-        fake_render_agent_bootstrap,
-    )
-
-    exit_code = main(["--agent-bootstrap", "codex"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    assert captured.out == rendered
-
-
 def test_touchpoint_docs_all_prints_index_and_references(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -422,7 +385,7 @@ def test_touchpoint_docs_all_prints_index_and_references(
     assert captured.out == rendered
 
 
-def test_agent_instructions_install_writes_default_project_path(
+def test_agent_install_writes_default_project_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -439,7 +402,7 @@ def test_agent_instructions_install_writes_default_project_path(
         fake_render_agent_instructions,
     )
 
-    exit_code = main(["--agent-instructions", "cursor", "--install-agent-instructions"])
+    exit_code = main(["agent", "cursor", "--install"])
 
     captured = capsys.readouterr()
     target = tmp_path / ".cursor" / "rules" / "journey-developer.mdc"
@@ -448,7 +411,7 @@ def test_agent_instructions_install_writes_default_project_path(
     assert "Installed agent instructions:" in captured.out
 
 
-def test_agent_instructions_install_refuses_existing_file_without_force(
+def test_agent_install_refuses_existing_file_without_force(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -457,15 +420,15 @@ def test_agent_instructions_install_refuses_existing_file_without_force(
     target.write_text("keep me\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    exit_code = main(["--agent-instructions", "generic", "--install-agent-instructions"])
+    exit_code = main(["agent", "generic", "--install"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
     assert target.read_text(encoding="utf-8") == "keep me\n"
-    assert "--force-agent-instructions" in captured.out
+    assert "--force" in captured.out
 
 
-def test_agent_instructions_install_force_replaces_existing_file(
+def test_agent_install_force_replaces_existing_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -483,58 +446,36 @@ def test_agent_instructions_install_force_replaces_existing_file(
         fake_render_agent_instructions,
     )
 
-    exit_code = main(
-        [
-            "--agent-instructions",
-            "generic",
-            "--install-agent-instructions",
-            "--force-agent-instructions",
-        ]
-    )
+    exit_code = main(["agent", "generic", "--install", "--force"])
 
     assert exit_code == 0
     assert target.read_text(encoding="utf-8") == rendered
 
 
-def test_agent_instruction_install_flags_require_agent_instruction_target(
+def test_agent_force_requires_install(
     capsys: pytest.CaptureFixture[str],
 ):
-    with pytest.raises(SystemExit) as install_exc:
-        main(["--install-agent-instructions"])
-
-    assert install_exc.value.code == 2
-    assert "--install-agent-instructions requires --agent-instructions" in capsys.readouterr().out
-
     with pytest.raises(SystemExit) as force_exc:
-        main(["--force-agent-instructions"])
+        main(["agent", "generic", "--force"])
 
     assert force_exc.value.code == 2
-    assert (
-        "--force-agent-instructions requires --install-agent-instructions"
-        in capsys.readouterr().out
-    )
+    assert "--force requires --install" in capsys.readouterr().out
 
 
-def test_agent_bootstrap_rejects_ambiguous_print_and_install_combinations(
-    capsys: pytest.CaptureFixture[str],
-):
-    with pytest.raises(SystemExit) as instructions_exc:
-        main(["--agent-bootstrap", "codex", "--agent-instructions", "codex"])
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["--agent-instructions", "codex"],
+        ["--agent-bootstrap", "codex"],
+        ["--install-agent-instructions"],
+        ["--force-agent-instructions"],
+    ),
+)
+def test_removed_agent_flags_are_rejected(argv: list[str]):
+    with pytest.raises(SystemExit) as exc_info:
+        main(argv)
 
-    assert instructions_exc.value.code == 2
-    assert "--agent-bootstrap cannot be used with --agent-instructions" in capsys.readouterr().out
-
-    with pytest.raises(SystemExit) as docs_exc:
-        main(["--agent-bootstrap", "codex", "--touchpoint-docs", "all"])
-
-    assert docs_exc.value.code == 2
-    assert "--agent-bootstrap cannot be used with --touchpoint-docs" in capsys.readouterr().out
-
-    with pytest.raises(SystemExit) as install_exc:
-        main(["--agent-bootstrap", "codex", "--install-agent-instructions"])
-
-    assert install_exc.value.code == 2
-    assert "--agent-bootstrap is print-only" in capsys.readouterr().out
+    assert exc_info.value.code == 2
 
 
 def test_execute_develop_step_rejects_json_mode(

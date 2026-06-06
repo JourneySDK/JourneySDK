@@ -5,22 +5,17 @@ This repository keeps assistant guidance in one canonical packaged template:
 - `journeysdk/agent_templates/instructions.md`
 
 Before adding, changing, or running Journey specs in this repository, read that file or ask the installed CLI for the
-Codex rendering:
+Codex guidance packet:
 
 ```bash
-journey --agent-instructions codex
+journey agent codex
 ```
 
-Full agent bootstrap packet:
+For downstream projects, keep using the packaged install flow when a project-level assistant file or skill should be
+written:
 
 ```bash
-journey --agent-bootstrap codex
-```
-
-For downstream projects, keep using the packaged install flow when a project-level assistant file should be written:
-
-```bash
-journey --agent-instructions codex --install-agent-instructions
+journey agent codex --install
 ```
 
 The CLI also renders Claude, Cursor, and generic variants from the same canonical body.

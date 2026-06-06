@@ -35,19 +35,20 @@ the service produced the expected side effect.
 When Codex, Claude Code, Cursor, or another coding agent is about to add or debug journeys, give it one line:
 
 ```text
-Use Journey SDK for this task: <describe the user flow>. Run journey --agent-bootstrap codex first.
+Use Journey SDK for this task: <describe the user flow>. Run journey agent codex first.
 ```
 
-Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run the bootstrap
+Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run the guidance
 command itself:
 
 ```bash
-journey --agent-bootstrap codex
+journey agent codex
 ```
 
-The command is print-only. It gives the agent the installed Journey instructions, the targeted verification loop, and
-the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or polling
-helpers.
+The command is print-only by default. It gives the agent the installed Journey instructions, the targeted verification
+loop, and the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or
+polling helpers. To make the guidance persistent for future prompts, run `journey agent codex --install` once from the
+project root.
 
 ## The Smallest Useful Journey
 

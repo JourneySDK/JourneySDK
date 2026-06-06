@@ -147,35 +147,35 @@ For the full contributor workflow, including package smoke tests and manual publ
 The easiest way to start an agentic Journey loop is one prompt:
 
 ```text
-Use Journey SDK for this task: <describe the user flow>. Run journey --agent-bootstrap codex first.
+Use Journey SDK for this task: <describe the user flow>. Run journey agent codex first.
 ```
 
 Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run the installed CLI
-for a complete bootstrap packet:
+for a complete guidance packet:
 
 ```bash
-journey --agent-bootstrap codex
-journey --agent-bootstrap claude
-journey --agent-bootstrap cursor
-journey --agent-bootstrap generic
+journey agent codex
+journey agent claude
+journey agent cursor
+journey agent generic
 ```
 
-The bootstrap output includes the shared assistant-specific Journey guidance from the packaged instruction template,
-then appends packaged touchpoint references. The targeted verification loop, touchpoint discovery, and log-browsing
-commands live in that shared instruction body so the user prompt can stay short. It is print-only and does not write
-files.
+The default output includes the shared assistant-specific Journey guidance from the packaged instruction template, then
+appends packaged touchpoint references. The targeted verification loop, touchpoint discovery, and log-browsing commands
+live in that shared instruction body so the user prompt can stay short. The default command is print-only and does not
+write files.
 
-Use assistant-specific instructions when a project-level agent file should be installed or printed by itself:
+Install assistant-specific guidance when a project-level agent file or skill should be available persistently:
 
 ```bash
-journey --agent-instructions codex
-journey --agent-instructions claude
-journey --agent-instructions cursor
-journey --agent-instructions generic
+journey agent codex --install
+journey agent claude --install
+journey agent cursor --install
+journey agent generic --install
 ```
 
-Add `--install-agent-instructions` to write the selected guidance to its default project path. Install mode refuses to
-replace an existing file unless `--force-agent-instructions` is passed.
+Install mode writes the selected guidance to its default project path and refuses to replace an existing file unless
+`--force` is passed.
 
 Agents can also print detailed packaged touchpoint references before using official helpers:
 

@@ -51,9 +51,8 @@ That script:
 - runs `uv build`
 - installs the built wheel into a clean virtual environment and verifies `import journeysdk`
 - installs the built wheel as a temporary `uv` tool and verifies `journey --help` plus
-  `journey --agent-instructions codex` and `journey --agent-bootstrap codex`
-- runs a one-off `uv tool run --from <wheel> journey --help` plus
-  `journey --agent-instructions codex` and `journey --agent-bootstrap codex`
+  `journey agent codex`
+- runs a one-off `uv tool run --from <wheel> journey --help` plus `journey agent codex`
 
 ## Documentation Alignment
 

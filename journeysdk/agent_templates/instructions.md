@@ -10,11 +10,11 @@ affected journey or step.
 - When implementing new features, extend existing journey specs or add new ones so the new user behavior is covered.
 - Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
 - Use it for fast partial verification: inspect the compiled plan without execution, run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
-- If you need the complete Journey guidance packet and have not already received it, run `journey --agent-bootstrap <target>` where `<target>` is `codex`, `claude`, `cursor`, or `generic`.
+- If you need the complete Journey guidance packet and have not already received it, run `journey agent <target>` where `<target>` is `codex`, `claude`, `cursor`, or `generic`.
 
 ## Working From A One-Line Prompt
 
-- If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey --agent-bootstrap <target>` yourself.
+- If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey agent <target>` yourself.
 - Proceed autonomously: inspect the project, find or create the relevant journey spec, fetch touchpoint references with the Journey CLI as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
 
 ## Fetch More Journey Guidance

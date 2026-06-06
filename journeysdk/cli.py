@@ -19,7 +19,6 @@ from pathlib import Path
 from .agent_instructions import (
     install_agent_instructions,
     render_agent_bootstrap,
-    render_agent_instructions,
     supported_agent_instruction_targets,
 )
 from .discovery import DiscoveredJourney, discover_journeys
@@ -1954,17 +1953,17 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     return 0 if not all_errors else 1
 
 
-def _cmd_agent_instructions(args: argparse.Namespace) -> int:
-    target = args.agent_instructions
-    if not args.install_agent_instructions:
-        sys.stdout.write(render_agent_instructions(target))
+def _cmd_agent(args: argparse.Namespace) -> int:
+    target = args.target
+    if not args.install:
+        sys.stdout.write(render_agent_bootstrap(target))
         return 0
 
     try:
         destination = install_agent_instructions(
             target,
             root=Path.cwd(),
-            force=args.force_agent_instructions,
+            force=args.force,
         )
     except FileExistsError as exc:
         existing_path = Path(exc.filename or exc.args[0])
@@ -1973,7 +1972,7 @@ def _cmd_agent_instructions(args: argparse.Namespace) -> int:
             f"Agent instruction file already exists: {existing_path}",
             pretty=pretty_line(
                 "Agent instruction file already exists: "
-                f"{existing_path}. Pass --force-agent-instructions to replace it.",
+                f"{existing_path}. Pass --force to replace it.",
                 style="error",
             ),
             target=target,
@@ -1991,11 +1990,6 @@ def _cmd_agent_instructions(args: argparse.Namespace) -> int:
         target=target,
         path=str(destination),
     )
-    return 0
-
-
-def _cmd_agent_bootstrap(args: argparse.Namespace) -> int:
-    sys.stdout.write(render_agent_bootstrap(args.agent_bootstrap))
     return 0
 
 
@@ -3356,11 +3350,51 @@ def build_logs_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_agent_parser() -> argparse.ArgumentParser:
+    parser = _JourneyArgumentParser(
+        prog="journey agent",
+        description="print or install Journey SDK coding-agent guidance",
+    )
+    parser.add_argument(
+        "target",
+        choices=supported_agent_instruction_targets(),
+        help="Agent target to render: codex, claude, cursor, or generic",
+    )
+    parser.add_argument(
+        "--install",
+        action="store_true",
+        help="Write persistent guidance to the target's default project path",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing assistant instruction file during install",
+    )
+    parser.add_argument(
+        "--output",
+        choices=("pretty", "structured", "jsonl"),
+        default="pretty",
+        help="Set Journey output format (default: pretty)",
+    )
+    parser.add_argument(
+        "--log-level",
+        "--level",
+        dest="log_level",
+        choices=("debug", "info", "warning", "error", "off"),
+        default="info",
+        help="Set Journey diagnostic logging level (default: info)",
+    )
+    return parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey",
         description="execute decorated journey workflows",
-        epilog="Use 'journey logs' to browse logs, browser traces, and videos from completed runs.",
+        epilog=(
+            "Use 'journey logs' to browse run artifacts. "
+            "Use 'journey agent <target>' for coding-agent guidance."
+        ),
     )
     parser.add_argument("--file", help="Execute journeys defined in one Python file")
     parser.add_argument(
@@ -3434,26 +3468,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--fail-fast",
         action="store_true",
         help="Stop at the first discovery, compilation, or execution failure",
-    )
-    parser.add_argument(
-        "--agent-instructions",
-        choices=supported_agent_instruction_targets(),
-        help="Print assistant instructions for Codex, Claude Code, Cursor, or generic agents",
-    )
-    parser.add_argument(
-        "--agent-bootstrap",
-        choices=supported_agent_instruction_targets(),
-        help="Print a complete agent bootstrap packet with instructions, loop commands, and touchpoint references",
-    )
-    parser.add_argument(
-        "--install-agent-instructions",
-        action="store_true",
-        help="Write --agent-instructions output to that assistant's default project path",
-    )
-    parser.add_argument(
-        "--force-agent-instructions",
-        action="store_true",
-        help="Replace an existing assistant instruction file during install",
     )
     parser.add_argument(
         "--touchpoint-docs",
@@ -3534,27 +3548,16 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(raw_argv[1:])
         configure_logging(args.log_level, output_format=args.output)
         return _cmd_recordings(args)
+    if raw_argv and raw_argv[0] == "agent":
+        parser = build_agent_parser()
+        args = parser.parse_args(raw_argv[1:])
+        configure_logging(args.log_level, output_format=args.output)
+        if args.force and not args.install:
+            parser.error("--force requires --install")
+        return _cmd_agent(args)
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.log_level, output_format=args.output)
-    if args.agent_bootstrap is not None and args.agent_instructions is not None:
-        parser.error("--agent-bootstrap cannot be used with --agent-instructions")
-    if args.agent_bootstrap is not None and args.touchpoint_docs is not None:
-        parser.error("--agent-bootstrap cannot be used with --touchpoint-docs")
-    if args.agent_bootstrap is not None and (
-        args.install_agent_instructions or args.force_agent_instructions
-    ):
-        parser.error(
-            "--agent-bootstrap is print-only; use --agent-instructions with --install-agent-instructions"
-        )
-    if args.agent_bootstrap is not None:
-        return _cmd_agent_bootstrap(args)
-    if args.install_agent_instructions and args.agent_instructions is None:
-        parser.error("--install-agent-instructions requires --agent-instructions")
-    if args.force_agent_instructions and not args.install_agent_instructions:
-        parser.error("--force-agent-instructions requires --install-agent-instructions")
-    if args.agent_instructions is not None:
-        return _cmd_agent_instructions(args)
     if args.touchpoint_docs is not None:
         return _cmd_touchpoint_docs(args)
     if args.plan_only and args.interactive:

@@ -51,12 +51,24 @@ installs, browser setup, and local package smoke testing.
 Give your coding assistant one line:
 
 ```text
-Use Journey SDK for this task: <describe the user flow>. Run journey --agent-bootstrap codex first.
+<describe your task>. Use Journey SDK (run `journey agent codex` for instructions).
 ```
 
 Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run that command,
 read the full SDK guidance, discover touchpoint docs as needed, add or extend the smallest useful journey spec, iterate
 with targeted Journey commands, and report the exact commands and evidence it used.
+
+To avoid adding that line to every prompt, install persistent guidance once from the project root:
+
+```bash
+journey agent codex --install
+journey agent claude --install
+journey agent cursor --install
+journey agent generic --install
+```
+
+Install mode writes the selected assistant's default project file or skill and refuses to replace an existing file
+unless `--force` is passed.
 
 If you are authoring a journey by hand, use [Getting Started](docs/01-getting-started.md). It covers imports,
 top-level `@journey` functions, running one file, selecting one journey, and JSON Lines output for tools.
@@ -96,25 +108,26 @@ For a new agentic loop, give the assistant the one-line quickstart prompt above.
 command itself:
 
 ```bash
-journey --agent-bootstrap codex
-journey --agent-bootstrap claude
-journey --agent-bootstrap cursor
-journey --agent-bootstrap generic
+journey agent codex
+journey agent claude
+journey agent cursor
+journey agent generic
 ```
 
-`--agent-bootstrap` is print-only. It prints the shared target-specific assistant guidance from
+`journey agent <target>` is print-only by default. It prints the shared target-specific assistant guidance from
 `journeysdk/agent_templates/instructions.md`, then appends the packaged touchpoint references. The verification loop and
-log-browsing commands live in that shared instruction body so the user prompt can stay short. Use packaged assistant
-instructions when a project-level assistant file should be written:
+log-browsing commands live in that shared instruction body so the user prompt can stay short. Use `--install` when a
+project-level assistant file or skill should be written:
 
 ```bash
-journey --agent-instructions codex
-journey --agent-instructions claude --install-agent-instructions
-journey --agent-instructions cursor --install-agent-instructions
+journey agent codex --install
+journey agent claude --install
+journey agent cursor --install
+journey agent generic --install
 ```
 
 Printing is the default. Install mode writes the selected assistant's default project file and refuses to replace an
-existing file unless `--force-agent-instructions` is passed. The shared source for these instructions is
+existing file unless `--force` is passed. The shared source for these instructions is
 `journeysdk/agent_templates/instructions.md`.
 
 When SDK behavior, CLI flags, touchpoints, journey authoring guidance, or assistant workflows change, review and align

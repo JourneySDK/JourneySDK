@@ -138,6 +138,7 @@ def test_agent_instruction_template_fetches_references_through_cli() -> None:
     )
 
     required_phrases = (
+        "journey agent <target>",
         "journey --touchpoint-docs all",
         "journey --touchpoint-docs browser",
         "journey --touchpoint-docs docker",
@@ -159,6 +160,10 @@ def test_agent_instruction_template_fetches_references_through_cli() -> None:
         "Keep Documentation Aligned",
         "assistant skill output",
         "If no docs or instruction updates are needed",
+        "--agent-bootstrap",
+        "--agent-instructions",
+        "--install-agent-instructions",
+        "--force-agent-instructions",
     )
 
     for phrase in forbidden_phrases:
