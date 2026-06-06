@@ -8,6 +8,7 @@ import urllib.error
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import journeysdk as journey_sdk
 import pytest
@@ -612,6 +613,52 @@ def test_docker_stack_case_exit_stops_compose_without_removing_volumes(
         ]
     ]
     assert "--volumes" not in down_commands[0]
+
+
+def test_docker_stack_case_exit_captures_service_logs_before_down(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    stack = _build_stack(tmp_path)
+    metadata = SimpleNamespace(
+        path=tmp_path / ".journey" / "logs" / "docker.log",
+        manifest_path=tmp_path / ".journey" / "logs" / "docker.manifest.json",
+        kind="docker_compose_logs",
+        touchpoint="docker",
+        source="demo",
+        content_type="text/plain",
+        run_id="run123",
+        sequence=1,
+        key="0001-case_1-start_services-docker-demo-attempt-1-run-run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        step_id="node_1",
+        step_label="start_services",
+        step_name="start_services",
+        node_index=0,
+        attempt=1,
+    )
+    object.__setattr__(stack, "log_artifact_metadata", metadata)
+    runtime = _FakeDockerRuntime(
+        logs_by_service={
+            "web": "web-1  | 2026-04-14T10:00:00Z endpoint unreachable\n",
+        }
+    )
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    stack.__case_exit__(None, None, None)
+
+    log_path = tmp_path / ".journey" / "logs" / "docker-web.log"
+    manifest_path = tmp_path / ".journey" / "logs" / "docker-web.manifest.json"
+    assert "endpoint unreachable" in log_path.read_text(encoding="utf-8")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["format"] == "journey.log_artifact"
+    assert manifest["kind"] == "docker_compose_logs"
+    assert manifest["touchpoint"] == "docker"
+    assert manifest["source"] == "web"
+    assert manifest["case_id"] == "case_1"
 
 
 def test_run_docker_waits_for_configured_raw_container_log(

@@ -1,4 +1,4 @@
-"""Browser recording discovery and case-level artifact helpers."""
+"""Journey log artifact discovery and case-level artifact helpers."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from .state import DEFAULT_STATE_DIR
 _CASE_ARTIFACT_FORMAT = "journey.case_recording"
 _EXECUTION_ARTIFACT_FORMAT = "journey.execution_recording"
 _BROWSER_RECORDING_FORMAT = "journey.browser_recording"
+_LOG_ARTIFACT_FORMAT = "journey.log_artifact"
 _RECORDING_SKIP_DIRS = {
     ".git",
     ".hg",
@@ -65,6 +66,34 @@ class RecordingManifest:
 
 
 @dataclass(frozen=True)
+class LogArtifactManifest:
+    manifest_path: Path
+    logs_dir: Path
+    run_id: str
+    sequence: int
+    journey_id: str
+    function_ref: str
+    case_id: str | None
+    branch_env: dict[str, str]
+    step_id: str | None
+    step_label: str | None
+    step_name: str | None
+    node_index: int | None
+    attempt: int | None
+    kind: str
+    touchpoint: str
+    source: str
+    content_type: str
+    status: str
+    started_at: str | None
+    stopped_at: str | None
+    path: Path | None
+    line_count: int | None
+    byte_count: int | None
+    recording_key: str | None = None
+
+
+@dataclass(frozen=True)
 class CaseRecording:
     recordings_dir: Path
     run_id: str
@@ -73,6 +102,7 @@ class CaseRecording:
     case_id: str
     branch_env: dict[str, str]
     manifests: tuple[RecordingManifest, ...]
+    log_artifacts: tuple[LogArtifactManifest, ...] = ()
 
     @property
     def step_count(self) -> int:
@@ -85,6 +115,10 @@ class CaseRecording:
     @property
     def video_count(self) -> int:
         return len(self.video_inputs())
+
+    @property
+    def log_count(self) -> int:
+        return len(self.log_inputs())
 
     @property
     def started_at(self) -> str | None:
@@ -121,6 +155,13 @@ class CaseRecording:
             and manifest.video_path.exists()
         )
 
+    def log_inputs(self) -> tuple[LogArtifactManifest, ...]:
+        return tuple(
+            artifact
+            for artifact in self.log_artifacts
+            if artifact.path is not None and artifact.path.exists()
+        )
+
 
 @dataclass(frozen=True)
 class ExecutionRecording:
@@ -129,6 +170,7 @@ class ExecutionRecording:
     journey_id: str
     function_ref: str
     cases: tuple[CaseRecording, ...]
+    log_artifacts: tuple[LogArtifactManifest, ...] = ()
 
     @property
     def case_count(self) -> int:
@@ -145,6 +187,10 @@ class ExecutionRecording:
     @property
     def video_count(self) -> int:
         return len(self.video_inputs())
+
+    @property
+    def log_count(self) -> int:
+        return len(self.log_inputs())
 
     @property
     def started_at(self) -> str | None:
@@ -183,6 +229,17 @@ class ExecutionRecording:
             and manifest.video_path.exists()
         )
 
+    def log_inputs(self) -> tuple[LogArtifactManifest, ...]:
+        case_artifacts = [
+            artifact for case in self.cases for artifact in case.log_inputs()
+        ]
+        run_artifacts = [
+            artifact
+            for artifact in self.log_artifacts
+            if artifact.path is not None and artifact.path.exists()
+        ]
+        return tuple(sorted([*case_artifacts, *run_artifacts], key=lambda item: item.sequence))
+
 
 @dataclass(frozen=True)
 class RecordingDiscoveryResult:
@@ -199,17 +256,23 @@ class RecordingArtifact:
 
 
 def discover_recording_cases(root: str | Path) -> RecordingDiscoveryResult:
-    """Discover browser recording manifests grouped into executed cases."""
+    """Discover Journey log artifacts grouped into executed cases."""
 
     root_path = Path(root).expanduser().resolve()
     warnings: list[str] = []
     manifests: list[RecordingManifest] = []
+    log_artifacts: list[LogArtifactManifest] = []
     for recordings_dir in _recording_dirs(root_path):
         for manifest_path in sorted(recordings_dir.glob("*.manifest.json")):
             try:
-                manifests.append(_load_recording_manifest(manifest_path))
+                loaded = _load_manifest(manifest_path)
             except RecordingError as exc:
                 warnings.append(str(exc))
+                continue
+            if isinstance(loaded, RecordingManifest):
+                manifests.append(loaded)
+            elif loaded is not None:
+                log_artifacts.append(loaded)
 
     groups: dict[
         tuple[Path, str, str, str, tuple[tuple[str, str], ...]],
@@ -225,24 +288,74 @@ def discover_recording_cases(root: str | Path) -> RecordingDiscoveryResult:
         )
         groups.setdefault(key, []).append(manifest)
 
-    cases = [
-        CaseRecording(
-            recordings_dir=recordings_dir,
-            run_id=run_id,
-            journey_id=journey_id,
-            function_ref=items[0].function_ref,
-            case_id=case_id,
-            branch_env=dict(branch_items),
-            manifests=tuple(sorted(items, key=lambda item: item.sequence)),
+    log_groups: dict[
+        tuple[Path, str, str, str, tuple[tuple[str, str], ...]],
+        list[LogArtifactManifest],
+    ] = {}
+    run_log_groups: dict[tuple[Path, str, str, str], list[LogArtifactManifest]] = {}
+    for artifact in log_artifacts:
+        run_key = (
+            artifact.logs_dir,
+            artifact.run_id,
+            artifact.journey_id,
+            artifact.function_ref,
         )
-        for (
-            recordings_dir,
-            run_id,
-            journey_id,
-            case_id,
-            branch_items,
-        ), items in groups.items()
-    ]
+        if artifact.case_id is None:
+            run_log_groups.setdefault(run_key, []).append(artifact)
+            continue
+        key = (
+            artifact.logs_dir,
+            artifact.run_id,
+            artifact.journey_id,
+            artifact.case_id,
+            tuple(sorted(artifact.branch_env.items())),
+        )
+        log_groups.setdefault(key, []).append(artifact)
+        if key not in groups:
+            groups[key] = []
+
+    cases: list[CaseRecording] = []
+    for (
+        recordings_dir,
+        run_id,
+        journey_id,
+        case_id,
+        branch_items,
+    ), items in groups.items():
+        artifacts = tuple(
+            sorted(
+                log_groups.get(
+                    (
+                        recordings_dir,
+                        run_id,
+                        journey_id,
+                        case_id,
+                        branch_items,
+                    ),
+                    [],
+                ),
+                key=lambda item: item.sequence,
+            )
+        )
+        if not items and not artifacts:
+            continue
+        function_ref = (
+            items[0].function_ref
+            if items
+            else artifacts[0].function_ref
+        )
+        cases.append(
+            CaseRecording(
+                recordings_dir=recordings_dir,
+                run_id=run_id,
+                journey_id=journey_id,
+                function_ref=function_ref,
+                case_id=case_id,
+                branch_env=dict(branch_items),
+                manifests=tuple(sorted(items, key=lambda item: item.sequence)),
+                log_artifacts=artifacts,
+            )
+        )
     cases.sort(
         key=lambda case: (
             case.journey_id,
@@ -256,12 +369,14 @@ def discover_recording_cases(root: str | Path) -> RecordingDiscoveryResult:
     return RecordingDiscoveryResult(
         cases=case_tuple,
         warnings=tuple(warnings),
-        executions=group_execution_recordings(case_tuple),
+        executions=group_execution_recordings(case_tuple, run_log_groups=run_log_groups),
     )
 
 
 def group_execution_recordings(
     cases: tuple[CaseRecording, ...],
+    *,
+    run_log_groups: dict[tuple[Path, str, str, str], list[LogArtifactManifest]] | None = None,
 ) -> tuple[ExecutionRecording, ...]:
     """Group discovered cases into whole execution recordings."""
 
@@ -291,9 +406,36 @@ def group_execution_recordings(
                     ),
                 )
             ),
+            log_artifacts=tuple(
+                sorted(
+                    (run_log_groups or {}).get(
+                        (recordings_dir, run_id, journey_id, function_ref),
+                        [],
+                    ),
+                    key=lambda item: item.sequence,
+                )
+            ),
         )
         for (recordings_dir, run_id, journey_id, function_ref), items in groups.items()
     ]
+    if run_log_groups:
+        seen = set(groups)
+        for key, artifacts in run_log_groups.items():
+            if key in seen:
+                continue
+            recordings_dir, run_id, journey_id, function_ref = key
+            executions.append(
+                ExecutionRecording(
+                    recordings_dir=recordings_dir,
+                    run_id=run_id,
+                    journey_id=journey_id,
+                    function_ref=function_ref,
+                    cases=(),
+                    log_artifacts=tuple(
+                        sorted(artifacts, key=lambda item: item.sequence)
+                    ),
+                )
+            )
     executions.sort(
         key=lambda execution: (
             execution.journey_id,
@@ -542,10 +684,10 @@ def open_video_recording(video_path: str | Path) -> None:
 
 
 def _recording_dirs(root: Path) -> tuple[Path, ...]:
-    if root.name == "recordings" and root.parent.name == DEFAULT_STATE_DIR:
+    if root.name == "logs" and root.parent.name == DEFAULT_STATE_DIR:
         return (root,)
-    if root.name == DEFAULT_STATE_DIR and (root / "recordings").is_dir():
-        return (root / "recordings",)
+    if root.name == DEFAULT_STATE_DIR and (root / "logs").is_dir():
+        return (root / "logs",)
 
     discovered: list[Path] = []
     if not root.is_dir():
@@ -557,11 +699,34 @@ def _recording_dirs(root: Path) -> tuple[Path, ...]:
         current = Path(current_root)
         if current.name != DEFAULT_STATE_DIR:
             continue
-        recordings_dir = current / "recordings"
-        if recordings_dir.is_dir():
-            discovered.append(recordings_dir.resolve())
-            dirnames[:] = [dirname for dirname in dirnames if dirname != "recordings"]
+        logs_dir = current / "logs"
+        if logs_dir.is_dir():
+            discovered.append(logs_dir.resolve())
+            dirnames[:] = [dirname for dirname in dirnames if dirname != "logs"]
     return tuple(sorted(dict.fromkeys(discovered)))
+
+
+def _load_manifest(manifest_path: Path) -> RecordingManifest | LogArtifactManifest | None:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RecordingError(
+            f"Skipping unreadable Journey log manifest '{manifest_path}': {exc}."
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise RecordingError(
+            f"Skipping invalid Journey log manifest '{manifest_path}': expected a JSON object."
+        )
+    manifest_format = payload.get("format")
+    if manifest_format == _LOG_ARTIFACT_FORMAT:
+        if payload.get("kind") == "browser_recording":
+            return _load_recording_manifest_payload(manifest_path, payload)
+        return _load_log_artifact_manifest_payload(manifest_path, payload)
+    if manifest_format in {_CASE_ARTIFACT_FORMAT, _EXECUTION_ARTIFACT_FORMAT}:
+        return None
+    raise RecordingError(
+        f"Skipping unsupported Journey log manifest '{manifest_path}'."
+    )
 
 
 def _load_recording_manifest(manifest_path: Path) -> RecordingManifest:
@@ -579,6 +744,14 @@ def _load_recording_manifest(manifest_path: Path) -> RecordingManifest:
         raise RecordingError(
             f"Skipping unsupported browser recording manifest '{manifest_path}'."
         )
+
+    return _load_recording_manifest_payload(manifest_path, payload)
+
+
+def _load_recording_manifest_payload(
+    manifest_path: Path,
+    payload: Mapping[str, object],
+) -> RecordingManifest:
 
     recordings_dir = manifest_path.parent.resolve()
     try:
@@ -626,6 +799,59 @@ def _load_recording_manifest(manifest_path: Path) -> RecordingManifest:
     )
 
 
+def _load_log_artifact_manifest_payload(
+    manifest_path: Path,
+    payload: Mapping[str, object],
+) -> LogArtifactManifest:
+    logs_dir = manifest_path.parent.resolve()
+    try:
+        run_id = _required_str(payload, "run_id")
+        sequence = _required_int(payload, "sequence")
+        journey_id = _required_str(payload, "journey_id")
+        function_ref = _required_str(payload, "function_ref")
+        kind = _required_str(payload, "kind")
+        touchpoint = _required_str(payload, "touchpoint")
+        source = _required_str(payload, "source")
+        content_type = _required_str(payload, "content_type")
+    except RecordingError as exc:
+        raise RecordingError(
+            f"Skipping incomplete Journey log manifest '{manifest_path}': {exc}"
+        ) from exc
+
+    branch_env = payload.get("branch_env", {})
+    if not isinstance(branch_env, Mapping):
+        raise RecordingError(
+            f"Skipping incomplete Journey log manifest '{manifest_path}': branch_env must be an object."
+        )
+
+    return LogArtifactManifest(
+        manifest_path=manifest_path.resolve(),
+        logs_dir=logs_dir,
+        run_id=run_id,
+        sequence=sequence,
+        journey_id=journey_id,
+        function_ref=function_ref,
+        case_id=_optional_str(payload.get("case_id")),
+        branch_env={str(key): str(value) for key, value in branch_env.items()},
+        step_id=_optional_str(payload.get("step_id")),
+        step_label=_optional_str(payload.get("step_label")),
+        step_name=_optional_str(payload.get("step_name")),
+        node_index=_optional_int(payload.get("node_index")),
+        attempt=_optional_int(payload.get("attempt")),
+        kind=kind,
+        touchpoint=touchpoint,
+        source=source,
+        content_type=content_type,
+        status=_optional_str(payload.get("status")) or "unknown",
+        started_at=_optional_str(payload.get("started_at")),
+        stopped_at=_optional_str(payload.get("stopped_at")),
+        path=_optional_path(payload.get("path"), base=logs_dir),
+        line_count=_optional_int(payload.get("line_count")),
+        byte_count=_optional_int(payload.get("byte_count")),
+        recording_key=_optional_str(payload.get("recording_key")),
+    )
+
+
 def _required_str(payload: Mapping[str, object], key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -642,6 +868,10 @@ def _required_int(payload: Mapping[str, object], key: str) -> int:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) else None
 
 
 def _optional_path(value: object, *, base: Path) -> Path | None:

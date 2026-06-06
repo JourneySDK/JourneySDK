@@ -97,7 +97,7 @@ def changedetection_core_journey() -> None:
 - Prefer documented touchpoint helpers over hand-written `urlopen`, `time.sleep`, Docker port plumbing, raw selectors, or custom polling.
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles only when later steps need touchpoint state.
-- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, and keep recordings enabled unless sensitive data requires `--no-browser-recording`.
+- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, keep logs enabled unless sensitive data requires `--no-logs`, and use `--no-browser-recording` only to skip trace/video capture.
 - Email: use `step(get_email_inbox())`, `step(send_email(...))`, and `step(wait_for_email(...), inbox, retry=..., retry_delay=...)`; set `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL`.
 - Webhook: use `step(get_webhook_endpoint(path=...))`, pass `endpoint.url` to the app under test, then use `step(wait_for_webhook_request(path=...), endpoint, retry=..., retry_delay=...)`.
 - Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, and use later coarse `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
@@ -141,12 +141,18 @@ journey --file journeys/<feature>_journey.py --step target_label --output jsonl
 ```
 
 - Avoid `--interactive` for non-human agent runs; noninteractive `--develop-step` is designed for coding agents.
+- Use `journey logs --list`, `journey logs --paths --step <step_label> --touchpoint browser`, and `journey logs --show --case <case_id> --step <step_label> --touchpoint docker --tail 80` to inspect correlated run evidence without prompting.
 - Use `--no-memory` only when AI prompt memory must be ignored for a run.
 - Use `--no-state` only for one-off runs that should not resume.
 - Do not pass `None` or placeholder objects into constructors; resolve concrete dependencies first.
 
+## Keep Documentation Aligned
+
+When changing Journey behavior, review the docs, packaged agent instructions, assistant skill output, examples, and
+touchpoint references that describe that behavior. Update them in the same change when they are affected. If no docs or instruction updates are needed, say that the relevant surfaces were reviewed.
+
 ## Verification Standard
 
 Before wrapping up, report the exact Journey command you ran, the targeted step or full journey that passed, and any broader tests that still need to run.
-For browser journeys, also report relevant `journey recordings` traces or videos when they help a human reviewer verify what happened.
+For browser, Docker, or other touchpoint journeys, also report relevant `journey logs` traces, videos, text logs, or paths when they help a human reviewer verify what happened.
 For cloud touchpoint journeys, report the email, webhook, or other payload evidence asserted by the Journey step.

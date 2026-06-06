@@ -15,7 +15,7 @@ otherwise.
 5. [Browser And Local Touchpoints](04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
    browser prompt tutorials.
 6. [Journey Cloud Touchpoints](05-journey-cloud-integrations.md): hosted webhook and email examples.
-7. [Debugging And Failure Modes](06-debugging-and-failure-modes.md): failure reports, recordings, fail-fast runs, and
+7. [Debugging And Failure Modes](06-debugging-and-failure-modes.md): failure reports, logs, fail-fast runs, and
    troubleshooting.
 
 ## Packaged References

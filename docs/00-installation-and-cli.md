@@ -98,13 +98,19 @@ should read existing state but leave the state file unchanged.
 
 Playwright and LangChain are included in the default package install. The first Journey browser step automatically
 downloads Chromium in the active environment. That first launch needs network access and can take a moment.
-Browser steps record Playwright traces and videos by default under `.journey/recordings/`. Use
-`--no-browser-recording` when a run should not write browser debugging artifacts. Journey clears existing browser
-recordings at the start of a run so `journey recordings` shows the current run's cases.
+Journey stores run evidence under `.journey/logs/`: structured Journey events, touchpoint logs, browser traces,
+browser videos, and browser console/network events. Use `--no-logs` only when a run should not write any local
+debugging artifacts. Use `--no-browser-recording` when browser console/network logs should still be kept but
+Playwright trace/video capture should be skipped. Journey clears existing logs at the start of a run so `journey logs`
+shows the current run's cases.
 
-After a run, use `journey recordings` from the project root to list recorded cases interactively. The command can merge
-the whole execution or one case into a Playwright-compatible trace archive, open it in Trace Viewer, or merge and open
-the matching WebM recording.
+After a run, use `journey logs` from the project root to list recorded cases interactively. The command can merge the
+whole execution or one case into a Playwright-compatible trace archive, open it in Trace Viewer, merge and open the
+matching WebM recording, print raw text logs, or print artifact paths. After selecting a case or all-cases entry, choose
+`f` to narrow the scope by step, branch, touchpoint, or source before opening traces, showing logs, or printing paths.
+For agent loops, use noninteractive artifact filters such as
+`journey logs --show --case case_1 --step start_services --touchpoint docker --grep error --tail 80` or
+`journey logs --paths --step report_issue --touchpoint browser`.
 
 ## Local Development Installs
 

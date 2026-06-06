@@ -83,6 +83,35 @@ def _allocate_browser_recording(owner: str) -> Any | None:
     return allocate()
 
 
+def _allocate_log_artifact(
+    owner: str,
+    *,
+    kind: str,
+    touchpoint: str,
+    source: str,
+    suffix: str,
+    content_type: str,
+    recording_key: str | None = None,
+) -> Any | None:
+    """Allocate one persistent log artifact path for the active step, when enabled."""
+
+    session = get_session()
+    if session is None:
+        return None
+    _require_executing_step(owner)
+    allocate = getattr(session, "_allocate_log_artifact", None)
+    if not callable(allocate):
+        return None
+    return allocate(
+        kind=kind,
+        touchpoint=touchpoint,
+        source=source,
+        suffix=suffix,
+        content_type=content_type,
+        recording_key=recording_key,
+    )
+
+
 @contextmanager
 def use_session(session: Any) -> Iterator[None]:
     token = _CURRENT_SESSION.set(session)

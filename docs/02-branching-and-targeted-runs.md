@@ -176,8 +176,8 @@ journey --file journeys/<feature>_journey.py --step <target_step> --no-state
 journey --file journeys/<feature>_journey.py --no-state
 ```
 
-The agent should report the exact commands it ran, the target step or journey that passed, and any browser recordings,
-touchpoint payloads, or other artifacts that prove the end-to-end behavior. When using `--output jsonl`, the agent
+The agent should report the exact commands it ran, the target step or journey that passed, and any `journey logs`
+traces, videos, touchpoint payloads, or text logs that prove the end-to-end behavior. When using `--output jsonl`, the agent
 should read `state_validity` events before relying on replayed evidence.
 
 ## Rehydrate Later Cases from a Step Anchor

@@ -133,7 +133,7 @@ Run the same command again to resume from saved state:
 uv run journey --file docs/browser_resume_journey/browser_resume_journey.py
 ```
 
-Use `journey --touchpoint-docs browser` for `JourneyBrowserPage`, page rehydration, lifecycle, recordings, and
+Use `journey --touchpoint-docs browser` for `JourneyBrowserPage`, page rehydration, lifecycle, logs, and
 `open_page(saved_page)` details.
 
 ## Browser Prompt Tutorial

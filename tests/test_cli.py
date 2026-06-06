@@ -75,11 +75,13 @@ def _capture_prompt_memory_roots(
         no_memory_update: bool = False,
         no_browser_recording: bool = False,
         clean_browser_recordings: bool = True,
+        no_logs: bool = False,
+        clean_logs: bool = True,
         prompt_memory_root: str | Path | None = None,
     ) -> ExecutionReport:
         del journey_fn, step, develop_step, pause_action, state, observer
         del no_state, no_state_update, no_memory, no_memory_update
-        del no_browser_recording, clean_browser_recordings
+        del no_browser_recording, clean_browser_recordings, no_logs, clean_logs
         captured_roots.append(
             Path(prompt_memory_root) if prompt_memory_root is not None else None
         )
@@ -577,9 +579,11 @@ def test_execute_forwards_no_memory_update_flag(
         no_memory: bool = False,
         no_memory_update: bool = False,
         no_browser_recording: bool = False,
+        no_logs: bool = False,
     ) -> tuple[list[object], list[object]]:
         assert no_memory is False
         assert no_browser_recording is False
+        assert no_logs is False
         captured_flags.append(no_memory_update)
         return [], []
 
@@ -682,7 +686,9 @@ def test_execute_forwards_no_browser_recording_flag(
         no_memory: bool = False,
         no_memory_update: bool = False,
         no_browser_recording: bool = False,
+        no_logs: bool = False,
     ) -> tuple[list[object], list[object]]:
+        assert no_logs is False
         captured_flags.append(no_browser_recording)
         return [], []
 
@@ -1843,7 +1849,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
 ):
     flow_file = tmp_path / "flow.py"
     state_file = _state_path(flow_file)
-    recording_dir = tmp_path / ".journey" / "recordings"
+    recording_dir = tmp_path / ".journey" / "logs"
     attempts_file = tmp_path / "attempts.count"
     _write(
         flow_file,
@@ -1886,7 +1892,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
         "Retry failed step: journey --file flow.py --journey flow --develop-step poll"
         in first_output
     )
-    assert "Artifacts: .journey/recordings (run `journey recordings` to inspect)" in first_output
+    assert "Artifacts: .journey/logs (run `journey logs` to inspect)" in first_output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed, duration=" in first_output
     assert state_file.exists()
 
@@ -3012,8 +3018,8 @@ def test_execute_default_state_persists_but_reruns_after_completion(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--log-level", "off"])
-    second_exit = main(["--file", "flow.py", "--log-level", "off"])
+    first_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
+    second_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
 
     assert first_exit == 0
     assert second_exit == 0
@@ -3090,7 +3096,7 @@ def test_execute_no_state_update_reads_without_persisting_progress(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(["--file", "flow.py", "--log-level", "off"])
+    first_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
     state_file = _state_path(flow_file)
     before = state_file.read_bytes()
 
@@ -3210,7 +3216,7 @@ def test_execute_ignores_legacy_default_state_file(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--log-level", "off"])
+    first_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
     capsys.readouterr()
 
     assert first_exit == 130
@@ -3220,7 +3226,7 @@ def test_execute_ignores_legacy_default_state_file(
     state_file.unlink()
     state_file.parent.rmdir()
 
-    second_exit = main(["--file", "flow.py", "--log-level", "off"])
+    second_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
     capsys.readouterr()
 
     assert second_exit == 0

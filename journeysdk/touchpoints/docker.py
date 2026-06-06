@@ -25,7 +25,7 @@ from uuid import uuid4
 
 from journeysdk.logger import JourneyLogLevel, PrettyLine, get_logger, pretty_row
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
-from journeysdk.session import _register_case_exit_object
+from journeysdk.session import _allocate_log_artifact, _register_case_exit_object
 
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
 _CURRENT_SNAPSHOT_FORMAT = 4
@@ -292,6 +292,7 @@ class DockerComposeStack:
     wait_timeout: int | None = None
     log_matchers: tuple[DockerLogMatcher, ...] = ()
     http_checks: tuple[DockerHttpCheck, ...] = ()
+    log_artifact_metadata: object | None = None
 
     @property
     def statuses(self) -> dict[str, tuple[DockerContainerStatus, ...]]:
@@ -393,6 +394,11 @@ class DockerComposeStack:
         if getattr(self, "_case_exit_closed", False):
             return
         object.__setattr__(self, "_case_exit_closed", True)
+        _capture_docker_compose_logs(
+            self,
+            owner="DockerComposeStack.__case_exit__",
+            status="interrupted" if exc_type is not None else "success",
+        )
         _down_docker_stack(
             self,
             owner="DockerComposeStack.__case_exit__",
@@ -522,6 +528,14 @@ def run_docker(
     up_command = ["up", "-d", "--wait"]
     if normalized_wait_timeout is not None:
         up_command.extend(["--wait-timeout", str(normalized_wait_timeout)])
+    log_artifact_metadata = _allocate_log_artifact(
+        "run_docker",
+        kind="docker_compose_logs",
+        touchpoint="docker",
+        source=resolved_project_name,
+        suffix=".docker.log",
+        content_type="text/plain",
+    )
     stack = DockerComposeStack(
         compose_file=str(original_compose_path),
         resolved_compose_file=str(resolved_compose_path),
@@ -530,6 +544,7 @@ def run_docker(
         wait_timeout=normalized_wait_timeout,
         log_matchers=normalized_log_matchers,
         http_checks=normalized_http_checks,
+        log_artifact_metadata=log_artifact_metadata,
     )
     _register_case_exit_object("run_docker", stack)
     log_since = _docker_logs_since_timestamp()
@@ -545,6 +560,11 @@ def run_docker(
         )
     except RuntimeError as exc:
         if not _compose_wait_failure_is_successful_one_shot(stack):
+            _capture_docker_compose_logs(
+                stack,
+                owner="run_docker",
+                status="failed",
+            )
             _LOGGER.error(
                 "compose_failure",
                 "Docker Compose stack failed",
@@ -1442,6 +1462,95 @@ def _load_live_logs(stack: DockerComposeStack) -> dict[str, str]:
         services=len(logs),
     )
     return logs
+
+
+def _capture_docker_compose_logs(
+    stack: DockerComposeStack,
+    *,
+    owner: str,
+    status: str,
+) -> None:
+    metadata = getattr(stack, "log_artifact_metadata", None)
+    if metadata is None:
+        return
+    try:
+        logs = _load_live_logs(stack)
+    except BaseException as exc:
+        _LOGGER.warning(
+            "logs_capture_failure",
+            "could not capture Docker Compose logs",
+            owner=owner,
+            project=stack.project_name,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return
+
+    base_path = Path(getattr(metadata, "path"))
+    for service, text in logs.items():
+        service_slug = _safe_artifact_segment(service)
+        path = base_path.with_name(f"{base_path.stem}-{service_slug}{base_path.suffix}")
+        manifest_path = path.with_name(f"{path.stem}.manifest.json")
+        _write_docker_log_artifact(
+            metadata=metadata,
+            service=service,
+            path=path,
+            manifest_path=manifest_path,
+            text=text,
+            status=status,
+        )
+
+
+def _write_docker_log_artifact(
+    *,
+    metadata: object,
+    service: str,
+    path: Path,
+    manifest_path: Path,
+    text: str,
+    status: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    line_count = len(text.splitlines())
+    manifest = {
+        "format": "journey.log_artifact",
+        "version": 1,
+        "kind": getattr(metadata, "kind"),
+        "touchpoint": getattr(metadata, "touchpoint"),
+        "source": service,
+        "content_type": getattr(metadata, "content_type"),
+        "status": status,
+        "started_at": None,
+        "stopped_at": _utc_timestamp(),
+        "run_id": getattr(metadata, "run_id"),
+        "sequence": getattr(metadata, "sequence"),
+        "artifact_key": f"{getattr(metadata, 'key')}-{service}",
+        "journey_id": getattr(metadata, "journey_id"),
+        "function_ref": getattr(metadata, "function_ref"),
+        "case_id": getattr(metadata, "case_id"),
+        "branch_env": getattr(metadata, "branch_env"),
+        "step_id": getattr(metadata, "step_id"),
+        "step_label": getattr(metadata, "step_label"),
+        "step_name": getattr(metadata, "step_name"),
+        "node_index": getattr(metadata, "node_index"),
+        "attempt": getattr(metadata, "attempt"),
+        "path": str(path),
+        "line_count": line_count,
+        "byte_count": path.stat().st_size,
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _safe_artifact_segment(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.+-]+", "-", value).strip("-._")
+    return (slug or "service")[:96]
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _wait_for_docker_log_match(

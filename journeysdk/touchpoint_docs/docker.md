@@ -58,8 +58,12 @@ needs to replay Docker state, Journey stores and restores Docker-managed volume 
 Docker-managed volumes when branch replay matters, and put `branch(start_from=...)` only on checkpoints worth restoring
 from.
 
-Journey stops the Compose project at case exit with `docker compose down --remove-orphans` and preserves volumes by
-default. Snapshot payloads live under `.journey` with other Journey state.
+Journey captures `docker compose logs --timestamps` per service under `.journey/logs/` before stopping the Compose
+project at case exit with `docker compose down --remove-orphans`. Volumes are preserved by default. Snapshot payloads
+live under `.journey` with other Journey state.
+
+Use `journey logs --show --case <case_id> --step start_services --touchpoint docker` to inspect persisted Compose
+output after a failure, or add `--source <service>` to focus on one service.
 
 ## Limits
 

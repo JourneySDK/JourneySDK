@@ -107,8 +107,9 @@ A good local debugging sequence usually looks like this:
 
 1. Run the full file once.
 2. If one step or one branch is the real problem, switch to `--step` or `--develop-step` from [02 Branching and Targeted Runs](02-branching-and-targeted-runs.md).
-3. If the failure is timing-related, use the retry patterns from [03 Retries and Resume](03-retries-and-resume.md).
-4. If the first failure is enough and you want shorter feedback loops, add `--fail-fast`.
+3. Inspect correlated artifacts with `journey logs --list`, `journey logs --paths --step <step_label> --touchpoint browser`, or `journey logs --show --case <case_id> --step <step_label> --touchpoint docker`.
+4. If the failure is timing-related, use the retry patterns from [03 Retries and Resume](03-retries-and-resume.md).
+5. If the first failure is enough and you want shorter feedback loops, add `--fail-fast`.
 
 If output includes `State: invalidated ...`, Journey found a stale saved checkpoint and reran from a safe boundary. That
 is expected after changes to the journey plan, step source, runtime, or workspace inputs. Use `--no-state` when you want
@@ -117,6 +118,8 @@ fresh-path evidence instead of development replay.
 ## What To Notice
 
 - Journey failures are step-oriented. You do not have to guess which part of the flow broke.
+- `.journey/logs/` keeps structured Journey events, browser traces/videos, browser console/network events, and
+  touchpoint logs correlated by run, case, branch, step, attempt, touchpoint, and source.
 - With default state, first Ctrl-C logs that Journey is finishing the active step, then resumes after that completed step.
   A second Ctrl-C logs that Journey is stopping now, interrupts the dirty step, and restarts that step from saved
   inputs later instead of resuming inside the function body.

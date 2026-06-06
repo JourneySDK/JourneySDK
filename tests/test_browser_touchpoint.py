@@ -34,7 +34,7 @@ def _prompt_memory_path(root: Path, name: str) -> Path:
 
 
 def _browser_recording_root() -> Path:
-    return Path(__file__).parent / ".journey" / "recordings"
+    return Path(__file__).parent / ".journey" / "logs"
 
 
 def _state_payload(
@@ -1454,7 +1454,12 @@ def test_open_page_records_trace_video_and_manifest_by_default(
         configure_logging("info", output_format="pretty")
 
     root = _browser_recording_root()
-    manifests = sorted(root.glob("*.manifest.json"))
+    manifests = [
+        path
+        for path in sorted(root.glob("*.manifest.json"))
+        if json.loads(path.read_text(encoding="utf-8")).get("kind")
+        == "browser_recording"
+    ]
     traces = sorted(root.glob("*.trace.zip"))
     videos = sorted(root.glob("*.webm"))
 
@@ -1535,7 +1540,12 @@ def test_execute_cleans_previous_browser_recordings_before_run(monkeypatch):
 
     journey_sdk.execute(journey, no_state=True)
 
-    manifests = sorted(root.glob("*.manifest.json"))
+    manifests = [
+        path
+        for path in sorted(root.glob("*.manifest.json"))
+        if json.loads(path.read_text(encoding="utf-8")).get("kind")
+        == "browser_recording"
+    ]
     assert not old_manifest.exists()
     assert len(manifests) == 1
     assert manifests[0].name.startswith(
@@ -1561,7 +1571,12 @@ def test_open_page_records_flat_incrementing_files_for_multiple_contexts(monkeyp
 
     journey_sdk.execute(journey, no_state=True)
 
-    manifests = sorted(_browser_recording_root().glob("*.manifest.json"))
+    manifests = [
+        path
+        for path in sorted(_browser_recording_root().glob("*.manifest.json"))
+        if json.loads(path.read_text(encoding="utf-8")).get("kind")
+        == "browser_recording"
+    ]
     assert [path.name[:4] for path in manifests] == ["0001", "0002"]
     assert all(path.parent == _browser_recording_root() for path in manifests)
     payloads = [
@@ -1594,7 +1609,13 @@ def test_execute_can_disable_browser_recording(monkeypatch):
 
     journey_sdk.execute(journey, no_state=True, no_browser_recording=True)
 
-    assert not _browser_recording_root().exists()
+    recording_manifests = [
+        path
+        for path in _browser_recording_root().glob("*.manifest.json")
+        if json.loads(path.read_text(encoding="utf-8")).get("kind")
+        == "browser_recording"
+    ]
+    assert recording_manifests == []
     assert not any(
         isinstance(event, tuple) and event[0] in {"trace_start", "trace_stop", "video_save"}
         for event in events
@@ -1619,7 +1640,12 @@ def test_open_page_finalizes_recording_when_step_fails(monkeypatch):
     with pytest.raises(CallableExecutionError):
         journey_sdk.execute(journey, no_state=True)
 
-    manifests = sorted(_browser_recording_root().glob("*.manifest.json"))
+    manifests = [
+        path
+        for path in sorted(_browser_recording_root().glob("*.manifest.json"))
+        if json.loads(path.read_text(encoding="utf-8")).get("kind")
+        == "browser_recording"
+    ]
     assert len(manifests) == 1
     payload = json.loads(manifests[0].read_text(encoding="utf-8"))
     assert payload["status"] == "failed"

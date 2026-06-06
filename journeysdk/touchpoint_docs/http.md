@@ -27,3 +27,7 @@ def prepare_demo_content(app):
 ```
 
 Prefer these helpers over raw `urllib`, `requests`, `time.sleep`, or custom polling loops in journey files.
+
+HTTP touchpoint lifecycle events appear in the structured Journey log under `.journey/logs/`. Use `journey logs --show`
+with a case or step filter when an agent needs to correlate HTTP polling with browser, Docker, or other touchpoint
+evidence.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
@@ -79,6 +81,8 @@ _configured_level: JourneyLogLevel = "info"
 _configured_stream: TextIO | None = None
 _configured_output_format: JourneyOutputFormat = "pretty"
 _config_lock = Lock()
+_capture_sinks: list[Callable[[dict[str, object]], None]] = []
+_capture_lock = Lock()
 
 
 @dataclass(frozen=True)
@@ -176,20 +180,27 @@ class JourneyLogger:
         if level == "off":
             raise ValueError("JourneyLogger.log(...) does not accept level='off'.")
         _require_level(level)
-        if not _should_emit(level):
-            return
         timestamp = _format_timestamp()
         normalized_event = _normalize_event(event)
+        json_record = _json_record_dict(
+            timestamp=timestamp,
+            level=level,
+            component=self._component,
+            event=normalized_event,
+            message=str(message),
+            fields=fields,
+        )
+        _capture_record(json_record)
+        if not _should_emit(level):
+            return
         output_format = _active_output_format()
         stream = _active_stream()
         if output_format == "jsonl":
-            line = _format_json_line(
-                timestamp=timestamp,
-                level=level,
-                component=self._component,
-                event=normalized_event,
-                message=str(message),
-                fields=fields,
+            line = json.dumps(
+                json_record,
+                ensure_ascii=True,
+                default=str,
+                separators=(",", ":"),
             )
         elif output_format == "structured":
             line = _format_log_line(
@@ -235,6 +246,24 @@ def get_logger(component: str) -> JourneyLogger:
     """Return a logger for one Journey SDK component."""
 
     return JourneyLogger(component)
+
+
+@contextmanager
+def capture_log_records(
+    sink: Callable[[dict[str, object]], None],
+) -> Iterator[None]:
+    """Send every Journey structured log record to a process-local sink."""
+
+    with _capture_lock:
+        _capture_sinks.append(sink)
+    try:
+        yield
+    finally:
+        with _capture_lock:
+            try:
+                _capture_sinks.remove(sink)
+            except ValueError:
+                return
 
 
 def make_log_record(
@@ -330,7 +359,31 @@ def _format_json_line(
     message: str,
     fields: dict[str, object],
 ) -> str:
-    record: dict[str, Any] = {
+    return json.dumps(
+        _json_record_dict(
+            timestamp=timestamp,
+            level=level,
+            component=component,
+            event=event,
+            message=message,
+            fields=fields,
+        ),
+        ensure_ascii=True,
+        default=str,
+        separators=(",", ":"),
+    )
+
+
+def _json_record_dict(
+    *,
+    timestamp: str,
+    level: JourneyLogLevel,
+    component: str,
+    event: str,
+    message: str,
+    fields: dict[str, object],
+) -> dict[str, object]:
+    record: dict[str, object] = {
         "time": timestamp,
         "level": _LEVEL_NAMES[level],
         "component": component,
@@ -339,7 +392,17 @@ def _format_json_line(
     }
     for key in sorted(fields):
         record[key] = _json_field_value(key, fields[key])
-    return json.dumps(record, ensure_ascii=True, default=str, separators=(",", ":"))
+    return record
+
+
+def _capture_record(record: dict[str, object]) -> None:
+    with _capture_lock:
+        sinks = tuple(_capture_sinks)
+    for sink in sinks:
+        try:
+            sink(record)
+        except BaseException:
+            continue
 
 
 def _format_pretty_line(
@@ -628,6 +691,7 @@ __all__ = [
     "JourneyOutputFormat",
     "PrettyLine",
     "PrettyStyle",
+    "capture_log_records",
     "configure_logging",
     "get_logger",
     "make_log_record",

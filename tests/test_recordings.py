@@ -87,13 +87,18 @@ def _write_manifest(
     manifest_path.write_text(
         json.dumps(
             {
-                "format": "journey.browser_recording",
+                "format": "journey.log_artifact",
                 "version": 1,
+                "kind": "browser_recording",
+                "touchpoint": "browser",
+                "source": "page",
+                "content_type": "application/vnd.journey.browser-recording",
                 "status": "success",
                 "started_at": f"2026-05-28T12:00:0{sequence}Z",
                 "stopped_at": f"2026-05-28T12:00:1{sequence}Z",
                 "run_id": run_id,
                 "sequence": sequence,
+                "artifact_key": f"{sequence:04d}-{case_id}-{step}-run-{run_id}",
                 "recording_key": f"{sequence:04d}-{case_id}-{step}-run-{run_id}",
                 "journey_id": journey_id,
                 "function_ref": f"module:{journey_id}",
@@ -122,7 +127,7 @@ def _write_manifest(
 
 
 def test_discover_recording_cases_groups_manifests_and_skips_bad_json(tmp_path: Path):
-    recordings_dir = tmp_path / "journeys" / ".journey" / "recordings"
+    recordings_dir = tmp_path / "journeys" / ".journey" / "logs"
     recordings_dir.mkdir(parents=True)
     _write_manifest(recordings_dir, sequence=1, branch_env={"bg_1": "branch_1"})
     _write_manifest(recordings_dir, sequence=2, branch_env={"bg_1": "branch_1"})
@@ -139,11 +144,59 @@ def test_discover_recording_cases_groups_manifests_and_skips_bad_json(tmp_path: 
     assert case.trace_count == 2
     assert case.video_count == 2
     assert len(result.warnings) == 1
-    assert "Skipping unreadable browser recording manifest" in result.warnings[0]
+    assert "Skipping unreadable Journey log manifest" in result.warnings[0]
+
+
+def test_discover_recording_cases_groups_text_log_artifacts(tmp_path: Path):
+    logs_dir = tmp_path / ".journey" / "logs"
+    logs_dir.mkdir(parents=True)
+    log_path = logs_dir / "web.log"
+    log_path.write_text("server ready\nendpoint unreachable\n", encoding="utf-8")
+    (logs_dir / "web.manifest.json").write_text(
+        json.dumps(
+            {
+                "format": "journey.log_artifact",
+                "version": 1,
+                "kind": "docker_compose_logs",
+                "touchpoint": "docker",
+                "source": "web",
+                "content_type": "text/plain",
+                "status": "success",
+                "run_id": "run123",
+                "sequence": 1,
+                "artifact_key": "web-run-run123",
+                "journey_id": "demo_journey",
+                "function_ref": "module:demo_journey",
+                "case_id": "case_1",
+                "branch_env": {},
+                "step_id": "node_1",
+                "step_label": "start_services",
+                "step_name": "start_services",
+                "node_index": 0,
+                "attempt": 1,
+                "path": str(log_path),
+                "line_count": 2,
+                "byte_count": log_path.stat().st_size,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = recordings.discover_recording_cases(tmp_path)
+
+    [case] = result.cases
+    assert case.case_id == "case_1"
+    assert case.trace_count == 0
+    assert case.log_count == 1
+    [artifact] = case.log_inputs()
+    assert artifact.touchpoint == "docker"
+    assert artifact.source == "web"
+    assert artifact.path == log_path.resolve()
 
 
 def test_discover_recording_cases_sorts_cases_alphabetically(tmp_path: Path):
-    recordings_dir = tmp_path / ".journey" / "recordings"
+    recordings_dir = tmp_path / ".journey" / "logs"
     _write_manifest(recordings_dir, sequence=1, case_id="case_b")
     _write_manifest(recordings_dir, sequence=2, case_id="case_a")
 
@@ -153,7 +206,7 @@ def test_discover_recording_cases_sorts_cases_alphabetically(tmp_path: Path):
 
 
 def test_discover_recording_cases_groups_cases_into_executions(tmp_path: Path):
-    recordings_dir = tmp_path / ".journey" / "recordings"
+    recordings_dir = tmp_path / ".journey" / "logs"
     _write_manifest(recordings_dir, sequence=1, case_id="case_b")
     _write_manifest(recordings_dir, sequence=2, case_id="case_a")
     _write_manifest(recordings_dir, sequence=3, case_id="case_old", run_id="oldrun")
@@ -174,7 +227,7 @@ def test_discover_recording_cases_groups_cases_into_executions(tmp_path: Path):
 def test_ensure_case_trace_merges_playwright_streams_and_reuses_current_artifact(
     tmp_path: Path,
 ):
-    recordings_dir = tmp_path / ".journey" / "recordings"
+    recordings_dir = tmp_path / ".journey" / "logs"
     _write_manifest(recordings_dir, sequence=1, step_name="first")
     _write_manifest(recordings_dir, sequence=2, step_name="second")
     [case] = recordings.discover_recording_cases(recordings_dir).cases
@@ -204,7 +257,7 @@ def test_ensure_case_trace_merges_playwright_streams_and_reuses_current_artifact
 
 
 def test_ensure_execution_trace_merges_all_cases_in_sequence(tmp_path: Path):
-    recordings_dir = tmp_path / ".journey" / "recordings"
+    recordings_dir = tmp_path / ".journey" / "logs"
     _write_manifest(recordings_dir, sequence=1, case_id="case_b", step_name="first")
     _write_manifest(recordings_dir, sequence=2, case_id="case_a", step_name="second")
     [execution] = recordings.discover_recording_cases(recordings_dir).executions
@@ -229,7 +282,7 @@ def test_ensure_execution_trace_merges_all_cases_in_sequence(tmp_path: Path):
 
 
 def test_ensure_case_trace_regenerates_stale_artifact(tmp_path: Path):
-    recordings_dir = tmp_path / ".journey" / "recordings"
+    recordings_dir = tmp_path / ".journey" / "logs"
     _write_manifest(recordings_dir, sequence=1, step_name="first")
     [case] = recordings.discover_recording_cases(recordings_dir).cases
     first = recordings.ensure_case_trace(case)
@@ -250,7 +303,7 @@ def test_ensure_case_video_uses_ffmpeg_copy_then_reencode_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    recordings_dir = tmp_path / ".journey" / "recordings"
+    recordings_dir = tmp_path / ".journey" / "logs"
     _write_manifest(recordings_dir, sequence=1, step_name="first")
     _write_manifest(recordings_dir, sequence=2, step_name="second")
     [case] = recordings.discover_recording_cases(recordings_dir).cases
@@ -286,7 +339,7 @@ def test_ensure_execution_video_merges_all_cases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    recordings_dir = tmp_path / ".journey" / "recordings"
+    recordings_dir = tmp_path / ".journey" / "logs"
     _write_manifest(recordings_dir, sequence=1, case_id="case_1", step_name="first")
     _write_manifest(recordings_dir, sequence=2, case_id="case_2", step_name="second")
     [execution] = recordings.discover_recording_cases(recordings_dir).executions

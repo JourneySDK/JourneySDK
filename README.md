@@ -73,7 +73,7 @@ running one file, selecting one journey, and JSON Lines output for tools.
 - [Browser and Local Touchpoints](docs/04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
   browser prompt tutorials.
 - [Journey Cloud Touchpoints](docs/05-journey-cloud-integrations.md): hosted webhook and email examples.
-- [Debugging and Failure Modes](docs/06-debugging-and-failure-modes.md): failure reports, recordings, and `--fail-fast`.
+- [Debugging and Failure Modes](docs/06-debugging-and-failure-modes.md): failure reports, logs, and `--fail-fast`.
 
 The docs index is [Journey Docs](docs/README.md).
 

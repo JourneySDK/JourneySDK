@@ -12,9 +12,10 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import FrameType, TracebackType
 from typing import Any, NoReturn, ParamSpec, Protocol, TypeVar, cast
@@ -29,7 +30,7 @@ from .errors import (
     InvalidBranchUsageError,
     StepNotFoundError,
 )
-from .logger import get_logger, pretty_line, pretty_row
+from .logger import capture_log_records, get_logger, pretty_line, pretty_row
 from .models import (
     BranchMarkerNode,
     CaseExecutionReport,
@@ -355,6 +356,32 @@ class _BrowserRecordingContext:
     attempt: int
 
 
+@dataclass(frozen=True)
+class _LogArtifactContext:
+    root: Path
+    run_id: str
+    sequence: int
+    key: str
+    stem: str
+    path: Path
+    manifest_path: Path
+    journey_id: str
+    function_ref: str
+    case_id: str
+    branch_env: dict[str, str]
+    step_id: str
+    step_label: str | None
+    step_name: str
+    node_index: int
+    attempt: int
+    kind: str
+    touchpoint: str
+    source: str
+    suffix: str
+    content_type: str
+    recording_key: str | None = None
+
+
 _RECORDING_SLUG_RE = re.compile(r"[^A-Za-z0-9_.+-]+")
 
 
@@ -370,13 +397,14 @@ class _BrowserRecordingController:
         enabled: bool,
         root: Path,
         clean_existing: bool,
+        run_id: str | None = None,
     ) -> None:
         self.enabled = enabled
         self.root = root
-        self.run_id = uuid4().hex[:12]
+        self.run_id = run_id or uuid4().hex[:12]
         self._sequence = 0
-        if clean_existing:
-            _clean_browser_recording_root(root)
+        if enabled and clean_existing:
+            _clean_log_root(root)
 
     def allocate(
         self,
@@ -420,7 +448,154 @@ class _BrowserRecordingController:
         )
 
 
-def _clean_browser_recording_root(root: Path) -> None:
+class _RunArtifactController:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        root: Path,
+        clean_existing: bool,
+        run_id: str | None = None,
+    ) -> None:
+        self.enabled = enabled
+        self.root = root
+        self.run_id = run_id or uuid4().hex[:12]
+        self._sequence = 0
+        self._journey_log_path: Path | None = None
+        self._journey_log_manifest_path: Path | None = None
+        self._journey_log_metadata: dict[str, object] | None = None
+        if enabled and clean_existing:
+            _clean_log_root(root)
+
+    def start_journey_log(self, *, plan: JourneyPlan) -> None:
+        if not self.enabled:
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._sequence += 1
+        sequence = self._sequence
+        stem = f"{sequence:04d}-journey-run-{self.run_id}"
+        self._journey_log_path = self.root / f"{stem}.jsonl"
+        self._journey_log_manifest_path = self.root / f"{stem}.manifest.json"
+        self._journey_log_metadata = {
+            "format": "journey.log_artifact",
+            "version": 1,
+            "kind": "journey_log",
+            "touchpoint": "journey",
+            "source": "journey",
+            "content_type": "application/jsonl",
+            "run_id": self.run_id,
+            "sequence": sequence,
+            "artifact_key": stem,
+            "journey_id": plan.journey_id,
+            "function_ref": plan.function_ref,
+            "case_id": None,
+            "branch_env": {},
+            "step_id": None,
+            "step_label": None,
+            "step_name": None,
+            "node_index": None,
+            "attempt": None,
+            "path": str(self._journey_log_path),
+            "started_at": _utc_timestamp(),
+            "stopped_at": None,
+            "line_count": 0,
+            "byte_count": 0,
+        }
+        self._write_journey_log_manifest()
+
+    def write_journey_record(self, record: dict[str, object]) -> None:
+        if not self.enabled or self._journey_log_path is None:
+            return
+        self._journey_log_path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(record, ensure_ascii=True, default=str, separators=(",", ":")) + "\n"
+        with self._journey_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+        metadata = self._journey_log_metadata
+        if metadata is not None:
+            metadata["line_count"] = int(metadata.get("line_count") or 0) + 1
+            metadata["byte_count"] = int(metadata.get("byte_count") or 0) + len(
+                line.encode("utf-8")
+            )
+
+    def finish_journey_log(self) -> None:
+        if not self.enabled or self._journey_log_metadata is None:
+            return
+        self._journey_log_metadata["stopped_at"] = _utc_timestamp()
+        self._write_journey_log_manifest()
+
+    def allocate(
+        self,
+        *,
+        journey_plan: JourneyPlan,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        attempt: int,
+        kind: str,
+        touchpoint: str,
+        source: str,
+        suffix: str,
+        content_type: str,
+        recording_key: str | None = None,
+    ) -> _LogArtifactContext | None:
+        if not self.enabled:
+            return None
+        self._sequence += 1
+        sequence = self._sequence
+        step_name = node.label or node.node_id
+        key = (
+            f"{sequence:04d}-"
+            f"{_recording_slug(case_plan.case_id, fallback='case')}-"
+            f"{_recording_slug(step_name, fallback='step')}-"
+            f"{_recording_slug(touchpoint, fallback='touchpoint')}-"
+            f"{_recording_slug(source, fallback='source')}-"
+            f"attempt-{attempt}-"
+            f"run-{self.run_id}"
+        )
+        self.root.mkdir(parents=True, exist_ok=True)
+        return _LogArtifactContext(
+            root=self.root,
+            run_id=self.run_id,
+            sequence=sequence,
+            key=key,
+            stem=key,
+            path=self.root / f"{key}{suffix}",
+            manifest_path=self.root / f"{key}.manifest.json",
+            journey_id=journey_plan.journey_id,
+            function_ref=journey_plan.function_ref,
+            case_id=case_plan.case_id,
+            branch_env=dict(case_plan.branch_env),
+            step_id=node.node_id,
+            step_label=node.label,
+            step_name=step_name,
+            node_index=node_index,
+            attempt=attempt,
+            kind=kind,
+            touchpoint=touchpoint,
+            source=source,
+            suffix=suffix,
+            content_type=content_type,
+            recording_key=recording_key,
+        )
+
+    def _write_journey_log_manifest(self) -> None:
+        if (
+            self._journey_log_manifest_path is None
+            or self._journey_log_metadata is None
+        ):
+            return
+        self._journey_log_manifest_path.write_text(
+            json.dumps(self._journey_log_metadata, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _clean_log_root(root: Path) -> None:
     if root.is_symlink() or root.is_file():
         root.unlink(missing_ok=True)
         return
@@ -1871,6 +2046,7 @@ class _RunSession:
         prompt_memory_disabled: bool = False,
         prompt_memory_update_disabled: bool = False,
         browser_recording_controller: _BrowserRecordingController | None = None,
+        log_artifact_controller: _RunArtifactController | None = None,
     ) -> None:
         self.journey_plan = journey_plan
         self.case_plan = case_plan
@@ -1899,6 +2075,7 @@ class _RunSession:
         self._prompt_memory_disabled = prompt_memory_disabled
         self._prompt_memory_update_disabled = prompt_memory_update_disabled
         self._browser_recording_controller = browser_recording_controller
+        self._log_artifact_controller = log_artifact_controller
         self._browser_recording_context_counts: dict[tuple[str, int], int] = {}
         self._active_step_lifecycle: _StepLifecycle | None = None
         self._case_exit_objects: list[_CaseExitObject] = []
@@ -2860,6 +3037,36 @@ class _RunSession:
             node_index=lifecycle.node_index,
             attempt=lifecycle.attempt,
             context_index=context_index,
+        )
+
+    def _allocate_log_artifact(
+        self,
+        *,
+        kind: str,
+        touchpoint: str,
+        source: str,
+        suffix: str,
+        content_type: str,
+        recording_key: str | None = None,
+    ) -> _LogArtifactContext | None:
+        controller = self._log_artifact_controller
+        if controller is None or not controller.enabled:
+            return None
+        lifecycle = self._active_step_lifecycle
+        if lifecycle is None or lifecycle.phase != _STEP_LIFECYCLE_EXECUTION:
+            return None
+        return controller.allocate(
+            journey_plan=self.journey_plan,
+            case_plan=self.case_plan,
+            node=lifecycle.node,
+            node_index=lifecycle.node_index,
+            attempt=lifecycle.attempt,
+            kind=kind,
+            touchpoint=touchpoint,
+            source=source,
+            suffix=suffix,
+            content_type=content_type,
+            recording_key=recording_key,
         )
 
     def prompt_memory_root(self) -> Path | None:
@@ -4160,7 +4367,14 @@ def _resolve_browser_recording_root(
     journey_fn: JourneyEntrypoint,
 ) -> Path:
     source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
-    return Path(source_file).resolve().parent / DEFAULT_STATE_DIR / "recordings"
+    return Path(source_file).resolve().parent / DEFAULT_STATE_DIR / "logs"
+
+
+def _resolve_log_root(
+    journey_fn: JourneyEntrypoint,
+) -> Path:
+    source_file = inspect.getsourcefile(journey_fn) or inspect.getfile(journey_fn)
+    return Path(source_file).resolve().parent / DEFAULT_STATE_DIR / "logs"
 
 
 def _resolve_default_state_path(
@@ -4185,233 +4399,253 @@ def _execute_plan(
     no_memory_update: bool = False,
     no_browser_recording: bool = False,
     clean_browser_recordings: bool = True,
+    no_logs: bool = False,
+    clean_logs: bool = True,
     prompt_memory_root: str | Path | None = None,
 ) -> ExecutionReport | _PausedExecution:
     if no_state and state is not None:
         raise ValueError("execute(...) cannot combine a custom state path with disabled state.")
+    if not clean_browser_recordings:
+        clean_logs = False
     target_step = develop_step if develop_step is not None else step
     selected_cases = _select_cases(plan, target_step)
     validation = validate_journey(journey_fn)
     execution_observer = observer or _LoggingExecutionObserver()
-    execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
-    default_state_path = _resolve_default_state_path(journey_fn)
-    using_default_state = not no_state and state is None
-    state_path = (
-        None
-        if no_state
-        else Path(state)
-        if state is not None
-        else default_state_path
+    log_root = _resolve_log_root(journey_fn)
+    log_artifact_controller = _RunArtifactController(
+        enabled=not no_logs,
+        root=log_root,
+        clean_existing=clean_logs,
     )
-    state_storage = prepare_execution_state_storage(
-        state_path,
-        update_enabled=not no_state_update,
+    log_artifact_controller.start_journey_log(plan=plan)
+    log_capture = (
+        capture_log_records(log_artifact_controller.write_journey_record)
+        if log_artifact_controller.enabled
+        else nullcontext()
     )
-    if no_state:
-        default_artifact_root, _ = artifact_root_for_state(default_state_path)
-        state_storage = replace(
+    with log_capture:
+        execution_observer.on_journey_start(plan=plan, selected_cases=selected_cases)
+        default_state_path = _resolve_default_state_path(journey_fn)
+        using_default_state = not no_state and state is None
+        state_path = (
+            None
+            if no_state
+            else Path(state)
+            if state is not None
+            else default_state_path
+        )
+        state_storage = prepare_execution_state_storage(
+            state_path,
+            update_enabled=not no_state_update,
+        )
+        if no_state:
+            default_artifact_root, _ = artifact_root_for_state(default_state_path)
+            state_storage = replace(
+                state_storage,
+                persistent_artifact_root=default_artifact_root,
+            )
+        rehydration_enabled = _needs_rehydration(
+            selected_cases,
+            step=step,
+            develop_step=develop_step,
+            state=state_storage.run_path,
+        )
+        validity = _state_validity_envelope(
+            journey_fn,
+            plan=plan,
+            selected_cases=selected_cases,
+            step=step,
+            develop_step=develop_step,
+        )
+        develop_refresh = _refresh_develop_state_for_plan(
+            state_storage.run_path,
+            journey_plan=plan,
+            step=step,
+            develop_step=develop_step,
+            selected_cases=selected_cases,
+            validity=validity,
+            pause_action=pause_action,
+            observer=execution_observer,
+        )
+        effective_pause_action = (
+            None if develop_refresh.restarted_case_id is not None else pause_action
+        )
+        state_controller = _StateController(
             state_storage,
-            persistent_artifact_root=default_artifact_root,
+            journey_plan=plan,
+            step=step,
+            develop_step=develop_step,
+            selected_cases=selected_cases,
+            validity=validity,
+            observer=execution_observer,
+            reset_completed_state=using_default_state,
         )
-    rehydration_enabled = _needs_rehydration(
-        selected_cases,
-        step=step,
-        develop_step=develop_step,
-        state=state_storage.run_path,
-    )
-    validity = _state_validity_envelope(
-        journey_fn,
-        plan=plan,
-        selected_cases=selected_cases,
-        step=step,
-        develop_step=develop_step,
-    )
-    develop_refresh = _refresh_develop_state_for_plan(
-        state_storage.run_path,
-        journey_plan=plan,
-        step=step,
-        develop_step=develop_step,
-        selected_cases=selected_cases,
-        validity=validity,
-        pause_action=pause_action,
-        observer=execution_observer,
-    )
-    effective_pause_action = (
-        None if develop_refresh.restarted_case_id is not None else pause_action
-    )
-    state_controller = _StateController(
-        state_storage,
-        journey_plan=plan,
-        step=step,
-        develop_step=develop_step,
-        selected_cases=selected_cases,
-        validity=validity,
-        observer=execution_observer,
-        reset_completed_state=using_default_state,
-    )
-    resolved_prompt_memory_root = _resolve_prompt_memory_root(
-        journey_fn,
-        prompt_memory_root=prompt_memory_root,
-    )
-    browser_recording_controller = _BrowserRecordingController(
-        enabled=not no_browser_recording,
-        root=_resolve_browser_recording_root(journey_fn),
-        clean_existing=clean_browser_recordings,
-    )
+        resolved_prompt_memory_root = _resolve_prompt_memory_root(
+            journey_fn,
+            prompt_memory_root=prompt_memory_root,
+        )
+        browser_recording_controller = _BrowserRecordingController(
+            enabled=not no_browser_recording and not no_logs,
+            root=log_root,
+            clean_existing=False,
+            run_id=log_artifact_controller.run_id,
+        )
 
-    case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
+        case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
 
-    try:
-        start_index = state_controller.current_case_index
+        try:
+            start_index = state_controller.current_case_index
 
-        for case_index in range(start_index, len(selected_cases)):
-            selected_case = selected_cases[case_index]
-            replay_anchor = _replay_anchor_for(
-                selected_case.case_plan,
-                selected_case.stop_after_index,
-            )
-            restored_state = state_controller.active_case_for(
-                case_index=case_index,
-                case_id=selected_case.case_plan.case_id,
-            )
-            start_anchor_key = _branch_start_anchor_key_for(selected_case.case_plan)
-            branch_anchor_seed = (
-                state_controller.branch_anchor_snapshot_for(
-                    start_anchor_key,
-                    case_plan=selected_case.case_plan,
+            for case_index in range(start_index, len(selected_cases)):
+                selected_case = selected_cases[case_index]
+                replay_anchor = _replay_anchor_for(
+                    selected_case.case_plan,
+                    selected_case.stop_after_index,
                 )
-                if rehydration_enabled
-                and restored_state is None
-                and selected_case.stop_after_index is None
-                and start_anchor_key is not None
-                else None
-            )
-            run_session = _RunSession(
-                journey_plan=plan,
-                case_plan=selected_case.case_plan,
-                validation=validation,
-                stop_after_index=selected_case.stop_after_index,
-                develop_step_enabled=develop_step is not None,
-                rehydration_enabled=rehydration_enabled,
-                state_controller=state_controller,
-                restored_state=restored_state,
-                branch_anchor_seed=branch_anchor_seed,
-                branch_anchor_key=(
-                    start_anchor_key if branch_anchor_seed is not None else None
-                ),
-                observer=execution_observer,
-                prompt_memory_root=resolved_prompt_memory_root,
-                prompt_memory_disabled=no_memory,
-                prompt_memory_update_disabled=no_memory or no_memory_update,
-                browser_recording_controller=browser_recording_controller,
-            )
-            if restored_state is None:
-                state_controller.begin_case(
+                restored_state = state_controller.active_case_for(
                     case_index=case_index,
-                    snapshot=run_session.snapshot_state(),
+                    case_id=selected_case.case_plan.case_id,
                 )
-
-            if restored_state is None:
-                execution_observer.on_case_start(
+                start_anchor_key = _branch_start_anchor_key_for(selected_case.case_plan)
+                branch_anchor_seed = (
+                    state_controller.branch_anchor_snapshot_for(
+                        start_anchor_key,
+                        case_plan=selected_case.case_plan,
+                    )
+                    if rehydration_enabled
+                    and restored_state is None
+                    and selected_case.stop_after_index is None
+                    and start_anchor_key is not None
+                    else None
+                )
+                run_session = _RunSession(
+                    journey_plan=plan,
                     case_plan=selected_case.case_plan,
-                    stop_after_index=run_session.stop_after_index,
-                    replay_anchor=replay_anchor,
+                    validation=validation,
+                    stop_after_index=selected_case.stop_after_index,
+                    develop_step_enabled=develop_step is not None,
+                    rehydration_enabled=rehydration_enabled,
+                    state_controller=state_controller,
+                    restored_state=restored_state,
+                    branch_anchor_seed=branch_anchor_seed,
+                    branch_anchor_key=(
+                        start_anchor_key if branch_anchor_seed is not None else None
+                    ),
+                    observer=execution_observer,
+                    prompt_memory_root=resolved_prompt_memory_root,
+                    prompt_memory_disabled=no_memory,
+                    prompt_memory_update_disabled=no_memory or no_memory_update,
+                    browser_recording_controller=browser_recording_controller,
+                    log_artifact_controller=log_artifact_controller,
                 )
-            elif pause_action is None:
-                execution_observer.on_case_resume(
+                if restored_state is None:
+                    state_controller.begin_case(
+                        case_index=case_index,
+                        snapshot=run_session.snapshot_state(),
+                    )
+
+                if restored_state is None:
+                    execution_observer.on_case_start(
+                        case_plan=selected_case.case_plan,
+                        stop_after_index=run_session.stop_after_index,
+                        replay_anchor=replay_anchor,
+                    )
+                elif pause_action is None:
+                    execution_observer.on_case_resume(
+                        case_plan=selected_case.case_plan,
+                        stop_after_index=run_session.stop_after_index,
+                        replay_anchor=replay_anchor,
+                        replay_from_index=restored_state.replay_from_index,
+                    )
+
+                if develop_step is not None:
+                    if run_session.paused_step is not None and effective_pause_action is None:
+                        return _PausedExecution(run_session.paused_step)
+                    run_session.apply_pause_action(effective_pause_action)
+
+                case_started_at = time.perf_counter()
+                stopped_label: str | None = None
+
+                try:
+                    while True:
+                        run_session.begin_attempt()
+                        try:
+                            with use_session(run_session):
+                                journey_fn()
+                        except _RetryRequested as retry_request:
+                            if retry_request.sleep_for > 0:
+                                time.sleep(retry_request.sleep_for)
+                            continue
+                        except _PauseRequested:
+                            raise
+                        except _StopCase:
+                            stopped_label = step
+                        if (
+                            run_session.cursor < len(selected_case.case_plan.nodes)
+                            and run_session.stop_after_index is None
+                        ):
+                            raise InvalidBranchUsageError(
+                                "The journey finished before it reached every step in the compiled plan.",
+                                hint="Check for conditional logic that exits early or skips step() calls during execution.",
+                            )
+                        if (
+                            run_session.stop_after_index is not None
+                            and run_session.cursor <= run_session.stop_after_index
+                        ):
+                            raise InvalidBranchUsageError(
+                                "The journey finished before it reached the targeted step label.",
+                                hint="Check that the step label exists on the path you selected.",
+                            )
+                        break
+                except _PauseRequested as pause_request:
+                    return _PausedExecution(
+                        pause_request.paused_step,
+                        pause_request.pending_exit_objects,
+                        run_session._pop_case_exit_objects(),
+                    )
+                except BaseException as exc:
+                    cleanup_failures = run_session._close_case_exit_objects(
+                        type(exc),
+                        exc,
+                        exc.__traceback__,
+                    )
+                    _add_cleanup_failure_notes(exc, cleanup_failures, case_exit=True)
+                    raise
+
+                cleanup_failures = run_session._close_case_exit_objects()
+                if cleanup_failures:
+                    raise RuntimeError(_case_cleanup_failure_message(cleanup_failures))
+
+                report = CaseExecutionReport(
+                    case_id=selected_case.case_plan.case_id,
+                    branch_env=dict(selected_case.case_plan.branch_env),
+                    records=list(run_session.records),
+                    completed=True,
+                    stopped_at_label=stopped_label,
+                    replay_anchor=replay_anchor if step is not None else None,
+                )
+                case_reports.append(report)
+                state_controller.complete_case(report)
+                execution_observer.on_case_complete(
                     case_plan=selected_case.case_plan,
-                    stop_after_index=run_session.stop_after_index,
-                    replay_anchor=replay_anchor,
-                    replay_from_index=restored_state.replay_from_index,
+                    report=report,
+                    duration_seconds=time.perf_counter() - case_started_at,
                 )
 
-            if develop_step is not None:
-                if run_session.paused_step is not None and effective_pause_action is None:
-                    return _PausedExecution(run_session.paused_step)
-                run_session.apply_pause_action(effective_pause_action)
-
-            case_started_at = time.perf_counter()
-            stopped_label: str | None = None
-
-            try:
-                while True:
-                    run_session.begin_attempt()
-                    try:
-                        with use_session(run_session):
-                            journey_fn()
-                    except _RetryRequested as retry_request:
-                        if retry_request.sleep_for > 0:
-                            time.sleep(retry_request.sleep_for)
-                        continue
-                    except _PauseRequested:
-                        raise
-                    except _StopCase:
-                        stopped_label = step
-                    if (
-                        run_session.cursor < len(selected_case.case_plan.nodes)
-                        and run_session.stop_after_index is None
-                    ):
-                        raise InvalidBranchUsageError(
-                            "The journey finished before it reached every step in the compiled plan.",
-                            hint="Check for conditional logic that exits early or skips step() calls during execution.",
-                        )
-                    if (
-                        run_session.stop_after_index is not None
-                        and run_session.cursor <= run_session.stop_after_index
-                    ):
-                        raise InvalidBranchUsageError(
-                            "The journey finished before it reached the targeted step label.",
-                            hint="Check that the step label exists on the path you selected.",
-                        )
-                    break
-            except _PauseRequested as pause_request:
-                return _PausedExecution(
-                    pause_request.paused_step,
-                    pause_request.pending_exit_objects,
-                    run_session._pop_case_exit_objects(),
-                )
-            except BaseException as exc:
-                cleanup_failures = run_session._close_case_exit_objects(
-                    type(exc),
-                    exc,
-                    exc.__traceback__,
-                )
-                _add_cleanup_failure_notes(exc, cleanup_failures, case_exit=True)
-                raise
-
-            cleanup_failures = run_session._close_case_exit_objects()
-            if cleanup_failures:
-                raise RuntimeError(_case_cleanup_failure_message(cleanup_failures))
-
-            report = CaseExecutionReport(
-                case_id=selected_case.case_plan.case_id,
-                branch_env=dict(selected_case.case_plan.branch_env),
-                records=list(run_session.records),
-                completed=True,
-                stopped_at_label=stopped_label,
-                replay_anchor=replay_anchor if step is not None else None,
+            result = ExecutionReport(
+                journey_id=plan.journey_id,
+                function_ref=plan.function_ref,
+                case_reports=case_reports,
             )
-            case_reports.append(report)
-            state_controller.complete_case(report)
-            execution_observer.on_case_complete(
-                case_plan=selected_case.case_plan,
-                report=report,
-                duration_seconds=time.perf_counter() - case_started_at,
-            )
-
-        result = ExecutionReport(
-            journey_id=plan.journey_id,
-            function_ref=plan.function_ref,
-            case_reports=case_reports,
-        )
-        execution_observer.on_journey_complete(report=result)
-    except KeyboardInterrupt:
-        raise
-    except Exception:
-        state_controller.clear()
-        raise
-    finally:
-        state_controller.cleanup()
+            execution_observer.on_journey_complete(report=result)
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            state_controller.clear()
+            raise
+        finally:
+            state_controller.cleanup()
+            log_artifact_controller.finish_journey_log()
 
     return result
 
@@ -4427,6 +4661,8 @@ def execute(
     no_memory_update: bool = False,
     no_browser_recording: bool = False,
     clean_browser_recordings: bool = True,
+    no_logs: bool = False,
+    clean_logs: bool = True,
 ) -> ExecutionReport:
     """Compile a journey and execute full cases or one targeted step flow.
 
@@ -4439,7 +4675,9 @@ def execute(
         no_memory: Disable prompt-memory reads and writes for this run.
         no_memory_update: Disable prompt-memory writes while still allowing reads.
         no_browser_recording: Disable browser trace/video artifacts for this run.
-        clean_browser_recordings: Remove existing browser recordings before this run.
+        clean_browser_recordings: Deprecated alias for clean_logs.
+        no_logs: Disable persistent logs and trace/video artifacts for this run.
+        clean_logs: Remove existing Journey logs before this run.
     """
 
     plan = compile_journey(journey_fn)
@@ -4454,4 +4692,6 @@ def execute(
         no_memory_update=no_memory_update,
         no_browser_recording=no_browser_recording,
         clean_browser_recordings=clean_browser_recordings,
+        no_logs=no_logs,
+        clean_logs=clean_logs,
     )
