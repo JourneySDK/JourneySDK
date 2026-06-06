@@ -15,18 +15,18 @@ affected journey or step.
 ## Working From A One-Line Prompt
 
 - If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey --agent-bootstrap <target>` yourself.
-- Proceed autonomously: inspect the project, find or create the relevant journey spec, consult packaged touchpoint docs as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
+- Proceed autonomously: inspect the project, find or create the relevant journey spec, fetch touchpoint references with the Journey CLI as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
 
-## Get More Journey Guidance
+## Fetch More Journey Guidance
 
-- When working in the Journey SDK checkout, use `docs/README.md` as the map for subsequent instructions: installation and CLI, getting started, branching and targeted runs, retries and resume, browser/local touchpoints, cloud touchpoints, and debugging.
-- In any project with the installed CLI, run `journey --touchpoint-docs all` to discover all packaged touchpoint references before choosing helpers.
-- For focused touchpoint guidance, run `journey --touchpoint-docs browser`, `journey --touchpoint-docs docker`, `journey --touchpoint-docs email`, `journey --touchpoint-docs webhook`, or `journey --touchpoint-docs http`.
-- Do not ask the user for Journey docs that can be discovered from the local checkout or printed by the installed CLI.
+- Use the installed Journey CLI to fetch Journey reference material.
+- Run `journey --touchpoint-docs all` to inspect every packaged touchpoint reference before choosing helpers for a new flow.
+- Run `journey --touchpoint-docs browser`, `journey --touchpoint-docs docker`, `journey --touchpoint-docs email`, `journey --touchpoint-docs webhook`, or `journey --touchpoint-docs http` for focused helper guidance.
+- Do not ask the user for Journey reference material that can be printed by the installed CLI.
 
 ## Add Journey Specs
 
-- Inspect existing journey files, project docs, test conventions, and local helper APIs before adding a new spec.
+- Inspect existing journey files, tests, fixtures, and local helper APIs before adding a new spec.
 - Follow the project's existing journey location and naming convention when one exists.
 - If there is no convention, add new specs under `journeys/<feature>_journey.py`.
 - Keep journey specs close to the behavior they verify, but do not add public/private cross-repo dependencies.
@@ -106,7 +106,7 @@ def changedetection_core_journey() -> None:
 - Before using an official touchpoint, run `journey --touchpoint-docs <name>` and follow that reference. For Docker-backed apps, run `journey --touchpoint-docs docker`.
 - Use official helpers from `journeysdk.touchpoints` for browser, email, webhook, and Docker Compose touchpoints; write app-specific touchpoints as plain Python helper functions when the SDK has no generic helper.
 - Use touchpoints and app-specific helpers to keep specs readable; they should hide low-level setup while Journey steps keep meaningful user-flow boundaries.
-- Prefer documented touchpoint helpers over hand-written `urlopen`, `time.sleep`, Docker port plumbing, raw selectors, or custom polling.
+- Prefer official touchpoint helpers over hand-written `urlopen`, `time.sleep`, Docker port plumbing, raw selectors, or custom polling.
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles only when later steps need touchpoint state.
 - Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, keep logs enabled unless sensitive data requires `--no-logs`, and use `--no-browser-recording` only to skip trace/video capture.
@@ -157,11 +157,6 @@ journey --file journeys/<feature>_journey.py --step target_label --output jsonl
 - Use `--no-memory` only when AI prompt memory must be ignored for a run.
 - Use `--no-state` only for one-off runs that should not resume.
 - Do not pass `None` or placeholder objects into constructors; resolve concrete dependencies first.
-
-## Keep Documentation Aligned
-
-When changing Journey behavior, review the docs, packaged agent instructions, assistant skill output, examples, and
-touchpoint references that describe that behavior. Update them in the same change when they are affected. If no docs or instruction updates are needed, say that the relevant surfaces were reviewed.
 
 ## Verification Standard
 

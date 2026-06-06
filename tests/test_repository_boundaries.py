@@ -130,7 +130,7 @@ def test_agent_bootstrap_appends_touchpoint_docs_to_shared_body() -> None:
     assert "# Journey SDK Agent Bootstrap" not in appendix
 
 
-def test_agent_instruction_template_mentions_documentation_alignment() -> None:
+def test_agent_instruction_template_fetches_references_through_cli() -> None:
     body = (
         resources.files("journeysdk.agent_templates")
         .joinpath("instructions.md")
@@ -138,14 +138,31 @@ def test_agent_instruction_template_mentions_documentation_alignment() -> None:
     )
 
     required_phrases = (
-        "Keep Documentation Aligned",
-        "packaged agent instructions",
-        "assistant skill output",
-        "If no docs or instruction updates are needed",
+        "journey --touchpoint-docs all",
+        "journey --touchpoint-docs browser",
+        "journey --touchpoint-docs docker",
+        "journey --touchpoint-docs email",
+        "journey --touchpoint-docs webhook",
+        "journey --touchpoint-docs http",
     )
 
     for phrase in required_phrases:
         assert phrase in body
+
+    forbidden_phrases = (
+        "docs/README.md",
+        "README.md",
+        "documentation",
+        "documented",
+        "project docs",
+        "packaged touchpoint docs",
+        "Keep Documentation Aligned",
+        "assistant skill output",
+        "If no docs or instruction updates are needed",
+    )
+
+    for phrase in forbidden_phrases:
+        assert phrase not in body
 
 
 def test_local_markdown_links_in_public_doc_entrypoints_resolve() -> None:
