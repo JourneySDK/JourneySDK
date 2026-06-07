@@ -61,6 +61,11 @@ Error: raise_expected_failure failed after ... (RuntimeError: expected tutorial 
 Error: CallableExecutionError during execute at .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
 What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure ...
 Try this: Inspect the step implementation or rerun after fixing the underlying failure. ...
+Next commands:
+  journey --file docs/fail_fast_journeys/fail_fast_journeys.py --journey broken_demo_journey --develop-step raise_expected_failure
+  journey logs --list-log-sources --step raise_expected_failure
+  journey logs --paths --step raise_expected_failure
+  journey --help
 
   Summary: 1 journey executed, 1 case executed, 1 failed
 ```
@@ -89,6 +94,11 @@ Error: raise_expected_failure failed after ... (RuntimeError: expected tutorial 
 Error: CallableExecutionError during execute at .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
 What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure ...
 Try this: Inspect the step implementation or rerun after fixing the underlying failure. ...
+Next commands:
+  journey --file docs/fail_fast_journeys/fail_fast_journeys.py --journey broken_demo_journey --develop-step raise_expected_failure
+  journey logs --list-log-sources --step raise_expected_failure
+  journey logs --paths --step raise_expected_failure
+  journey --help
 
   Summary: 0 journeys executed, 0 cases executed, 1 failed
 ```
@@ -101,6 +111,8 @@ Each failed run gives you three layers of information:
 
 - The pretty stdout line shows the step label, attempt number, and error class without exposing structured event codenames.
 - The error block summarizes the failure in plain English.
+- The `Next commands` block gives copyable CLI commands for the focused retry, log discovery, artifact inspection, or
+  relevant `--help` surface.
 - The final summary tells you whether the CLI continued into later journeys or stopped early.
 
 A good local debugging sequence usually looks like this:

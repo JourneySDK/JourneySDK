@@ -94,6 +94,38 @@ class _JourneyArgumentParser(argparse.ArgumentParser):
             return
         _CLI_LOGGER.info("parser_output", stripped)
 
+    def error(self, message: str) -> None:
+        usage = self.format_usage().rstrip()
+        if usage:
+            _CLI_LOGGER.info("parser_usage", usage, pretty=usage)
+        problem = f"{self.prog}: error: {message}"
+        help_command = _help_command_for_prog(self.prog)
+        instructions = _parser_error_instructions(self.prog, message)
+        next_commands = _parser_error_next_commands(self.prog, message)
+        _CLI_LOGGER.error(
+            "parser_error",
+            problem,
+            pretty=pretty_line(f"What happened: {problem}", style="error"),
+            error_message=problem,
+            instructions=instructions,
+            next_commands=next_commands,
+            help_command=help_command,
+        )
+        _CLI_LOGGER.error(
+            "parser_error_hint",
+            f"Try this: {instructions}",
+            pretty=pretty_line(f"Try this: {instructions}", style="error"),
+            instructions=instructions,
+            help_command=help_command,
+        )
+        _emit_next_commands(
+            next_commands,
+            level="error",
+            event="parser_error_next_commands",
+            help_command=help_command,
+        )
+        self.exit(2)
+
 
 class _CliStepInterruptController:
     def __init__(self, *, graceful: bool = True) -> None:
@@ -223,6 +255,9 @@ class _CommandError:
     error_type: str
     message: str
     hint: str | None
+    instructions: str | None = None
+    next_commands: tuple[str, ...] = ()
+    help_command: str | None = None
     step_label: str | None = None
 
 
@@ -294,6 +329,212 @@ def _pretty_target(*, display_file: str | None, journey: str | None) -> str:
     if display_file is not None:
         return display_file
     return "journey"
+
+
+def _help_command_for_prog(prog: str) -> str:
+    if prog == "journey logs":
+        return "journey logs --help"
+    if prog == "journey agent":
+        return "journey agent --help"
+    return "journey --help"
+
+
+def _parser_error_instructions(prog: str, message: str) -> str:
+    if prog == "journey logs":
+        if "--branch" in message:
+            return (
+                "Use --branch KEY=VALUE, or run `journey logs --list-scopes` "
+                "to discover branch filters from saved logs."
+            )
+        return (
+            "Run `journey logs --help`, then use `journey logs --list-scopes` "
+            "and `journey logs --list-log-sources` to discover valid filters."
+        )
+    if prog == "journey agent":
+        return (
+            "Run `journey agent --help`, choose one target "
+            "(codex, claude, cursor, or generic), and add --install only when "
+            "writing persistent instructions."
+        )
+    return (
+        "Run `journey --help`, choose the narrowest command, and use "
+        "`journey agent <target>` or `journey --touchpoint-docs <name>` "
+        "when you need packaged Journey guidance."
+    )
+
+
+def _parser_error_next_commands(prog: str, message: str) -> tuple[str, ...]:
+    if prog == "journey logs":
+        commands = ["journey logs --help", "journey logs --list-scopes"]
+        if "--branch" not in message:
+            commands.append("journey logs --list-log-sources")
+        return tuple(commands)
+    if prog == "journey agent":
+        return ("journey agent --help", "journey agent codex")
+    return ("journey --help", "journey agent codex", "journey logs --help")
+
+
+def _default_help_command_for_phase(phase: str) -> str:
+    if phase == "logs":
+        return "journey logs --help"
+    if phase == "agent":
+        return "journey agent --help"
+    return "journey --help"
+
+
+def _default_hint_for_error(error: _CommandError) -> str:
+    if error.hint is not None:
+        return error.hint
+    if error.phase == "plan":
+        return (
+            "Fix the journey file import, decorator, branch, or step structure, "
+            "then rerun the command or add `--debug-plan` to inspect planning "
+            "without executing steps."
+        )
+    if error.phase == "execute":
+        return (
+            "Use the first failed step as the source of truth, inspect logs when "
+            "artifacts exist, then rerun the focused `--develop-step` command "
+            "until it passes."
+        )
+    if error.phase == "logs":
+        return (
+            "Run `journey logs --help`, discover available scopes with "
+            "`journey logs --list-scopes`, then retry with valid filters."
+        )
+    if error.phase == "agent":
+        return (
+            "Run `journey agent --help`, choose a supported target, and use "
+            "`--force` only with `--install` when replacing existing guidance."
+        )
+    return "Run the related Journey --help command, then retry with the corrected command."
+
+
+def _default_instructions_for_error(error: _CommandError) -> str:
+    if error.instructions is not None:
+        return error.instructions
+    if error.phase == "plan":
+        return (
+            "Planning failed before Journey could execute steps. Read the "
+            "`What happened` line, fix the selected journey file or target, and "
+            "rerun with `--debug-plan` when you need to validate labels and cases."
+        )
+    if error.phase == "execute":
+        return (
+            "Execution failed at a Journey step. Use `Retry failed step:` when "
+            "present; otherwise select the failing label with `--develop-step`, "
+            "inspect `journey logs`, and broaden to `--step` or a full run after "
+            "the focused loop passes."
+        )
+    if error.phase == "logs":
+        return (
+            "Log inspection failed. Use `journey logs --list-scopes` to discover "
+            "case, branch, and step filters, then use `--list-log-sources`, "
+            "`--show`, or `--paths` with valid filters."
+        )
+    if error.phase == "agent":
+        return (
+            "Agent guidance command failed. Use `journey agent --help` to choose "
+            "a target and install mode, then retry with a valid command."
+        )
+    return "Use the related Journey help command, correct the command, and retry."
+
+
+def _target_selection_command(root: Path, error: _CommandError, *extra: str) -> str:
+    parts: list[str] = ["journey"]
+    if error.file is not None:
+        try:
+            display_file = _display_path(root, Path(error.file))
+        except TypeError:
+            display_file = error.file
+        parts.extend(("--file", display_file))
+    if error.journey_name is not None:
+        parts.extend(("--journey", error.journey_name))
+    parts.extend(extra)
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def _default_next_commands_for_error(root: Path, error: _CommandError) -> tuple[str, ...]:
+    commands: list[str] = list(error.next_commands)
+    if error.phase == "plan":
+        if error.file is not None or error.journey_name is not None:
+            commands.append(_target_selection_command(root, error, "--debug-plan"))
+        else:
+            commands.append("journey --help")
+    elif error.phase == "execute":
+        if retry_command := _retry_command_for_error(root, error):
+            commands.append(retry_command)
+        if error.step_label is not None:
+            commands.append(
+                " ".join(
+                    shlex.quote(part)
+                    for part in (
+                        "journey",
+                        "logs",
+                        "--list-log-sources",
+                        "--step",
+                        error.step_label,
+                    )
+                )
+            )
+            commands.append(
+                " ".join(
+                    shlex.quote(part)
+                    for part in ("journey", "logs", "--paths", "--step", error.step_label)
+                )
+            )
+        else:
+            commands.append("journey logs --list-scopes")
+    elif error.phase == "logs":
+        commands.extend(("journey logs --list-scopes", "journey logs --list-log-sources"))
+    elif error.phase == "agent":
+        commands.append("journey agent --help")
+
+    help_command = error.help_command or _default_help_command_for_phase(error.phase)
+    commands.append(help_command)
+    return tuple(dict.fromkeys(command for command in commands if command))
+
+
+def _resolved_error_guidance(
+    root: Path,
+    error: _CommandError,
+) -> tuple[str, tuple[str, ...], str, str]:
+    instructions = _default_instructions_for_error(error)
+    next_commands = _default_next_commands_for_error(root, error)
+    help_command = error.help_command or _default_help_command_for_phase(error.phase)
+    hint = _default_hint_for_error(error)
+    return instructions, next_commands, help_command, hint
+
+
+def _command_error_payload(root: Path, error: _CommandError) -> dict[str, object]:
+    payload = asdict(error)
+    instructions, next_commands, help_command, hint = _resolved_error_guidance(root, error)
+    payload["hint"] = hint
+    payload["instructions"] = instructions
+    payload["next_commands"] = next_commands
+    payload["help_command"] = help_command
+    return payload
+
+
+def _emit_next_commands(
+    commands: tuple[str, ...],
+    *,
+    level: str,
+    event: str,
+    help_command: str,
+) -> None:
+    if not commands:
+        return
+    lines: list[str | object] = [pretty_line("Next commands:", style="error" if level == "error" else "warning")]
+    lines.extend(pretty_line(f"  {command}", style="error" if level == "error" else "warning") for command in commands)
+    log = _CLI_LOGGER.error if level == "error" else _CLI_LOGGER.warning
+    log(
+        event,
+        "Next commands: " + " ; ".join(commands),
+        pretty=lines,
+        next_commands=commands,
+        help_command=help_command,
+    )
 
 
 def _pretty_case_line(case: str, *, labels: list[str] | None = None, branches: str | None = None) -> str:
@@ -748,6 +989,7 @@ def _emit_errors(root: Path, errors: list[_CommandError]) -> None:
         location = error.file or "<selection>"
         if error.journey_name is not None:
             location = f"{location}:{error.journey_name}"
+        instructions, next_commands, help_command, hint = _resolved_error_guidance(root, error)
         _CLI_LOGGER.error(
             "command_error",
             f"ERROR [{error.phase}] {location} ({error.error_type})",
@@ -758,7 +1000,10 @@ def _emit_errors(root: Path, errors: list[_CommandError]) -> None:
             location=location,
             error_type=error.error_type,
             error_message=error.message,
-            hint=error.hint,
+            hint=hint,
+            instructions=instructions,
+            next_commands=next_commands,
+            help_command=help_command,
         )
         _CLI_LOGGER.error(
             "command_error_message",
@@ -768,15 +1013,22 @@ def _emit_errors(root: Path, errors: list[_CommandError]) -> None:
             location=location,
             error_type=error.error_type,
         )
-        if error.hint is not None:
-            _CLI_LOGGER.error(
-                "command_error_hint",
-                f"Try this: {error.hint}",
-                pretty=pretty_line(f"Try this: {error.hint}", style="error"),
-                phase=error.phase,
-                location=location,
-                error_type=error.error_type,
-            )
+        _CLI_LOGGER.error(
+            "command_error_hint",
+            f"Try this: {hint}",
+            pretty=pretty_line(f"Try this: {hint}", style="error"),
+            phase=error.phase,
+            location=location,
+            error_type=error.error_type,
+            instructions=instructions,
+            help_command=help_command,
+        )
+        _emit_next_commands(
+            next_commands,
+            level="error",
+            event="command_error_next_commands",
+            help_command=help_command,
+        )
         retry_command = _retry_command_for_error(root, error)
         if retry_command is not None:
             _CLI_LOGGER.error(
@@ -1730,7 +1982,7 @@ def _emit_execute_output(
             }
             for item in executed
         ],
-        "errors": [asdict(error) for error in payload_errors],
+        "errors": [_command_error_payload(root, error) for error in payload_errors],
     }
     summary = (
         f"Summary: develop-step {develop_step_stopped} stopped after target, {failed} failed"
@@ -1978,16 +2230,28 @@ def _cmd_agent(args: argparse.Namespace) -> int:
         )
     except FileExistsError as exc:
         existing_path = Path(exc.filename or exc.args[0])
-        _CLI_LOGGER.error(
-            "agent_instruction_install_error",
-            f"Agent instruction file already exists: {existing_path}",
-            pretty=pretty_line(
-                "Agent instruction file already exists: "
-                f"{existing_path}. Pass --force to replace it.",
-                style="error",
-            ),
-            target=target,
-            path=str(existing_path),
+        _emit_errors(
+            Path.cwd().resolve(),
+            [
+                _CommandError(
+                    file=str(existing_path),
+                    journey_name=None,
+                    phase="agent",
+                    error_type="FileExistsError",
+                    message=f"Agent instruction file already exists: {existing_path}.",
+                    hint="Pass `--force` with `--install` to replace the existing file.",
+                    instructions=(
+                        "Decide whether the existing assistant guidance should be "
+                        "kept or replaced. To replace it, rerun the same "
+                        "`journey agent` install command with `--force`."
+                    ),
+                    next_commands=(
+                        f"journey agent {target} --install --force",
+                        "journey agent --help",
+                    ),
+                    help_command="journey agent --help",
+                )
+            ],
         )
         return 1
 
@@ -3096,6 +3360,33 @@ def _format_filter_cli(filters: _LogsFilter) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
 
+def _logs_filter_has_values(filters: _LogsFilter) -> bool:
+    return bool(_filter_cli_parts(filters))
+
+
+def _logs_command_error(
+    message: str,
+    *,
+    hint: str,
+    next_commands: tuple[str, ...] = (),
+) -> _CommandError:
+    return _CommandError(
+        file=None,
+        journey_name=None,
+        phase="logs",
+        error_type="RecordingError",
+        message=message,
+        hint=hint,
+        instructions=(
+            "Use `journey logs --help` for the log-inspection command manual, "
+            "then discover valid filters with `journey logs --list-scopes` and "
+            "`journey logs --list-log-sources` before reading large artifacts."
+        ),
+        next_commands=next_commands,
+        help_command="journey logs --help",
+    )
+
+
 def _emit_log_scopes(
     cases: tuple[CaseRecording, ...],
     *,
@@ -3209,6 +3500,24 @@ def _cmd_logs_noninteractive(
     filters = _logs_filter_from_args(args)
     filtered_cases = _filter_log_cases(cases, filters)
     filtered_executions = _filter_log_executions(executions, filters)
+    if _logs_filter_has_values(filters) and not filtered_cases and not filtered_executions:
+        _emit_errors(
+            root,
+            [
+                _logs_command_error(
+                    f"No Journey logs matched filters: {_format_filter_cli(filters)}.",
+                    hint=(
+                        "Run `journey logs --list-scopes` without those filters to "
+                        "discover available run, case, branch, and step values."
+                    ),
+                    next_commands=(
+                        "journey logs --list-scopes",
+                        "journey logs --list-log-sources",
+                    ),
+                )
+            ],
+        )
+        return 1
     if args.list_scopes:
         _emit_log_scopes(filtered_cases, executions=filtered_executions)
         return 0
@@ -3240,6 +3549,25 @@ def _cmd_logs_noninteractive(
 
 def _cmd_recordings(args: argparse.Namespace) -> int:
     root = Path(args.dir).expanduser().resolve()
+    try:
+        _parse_branch_filters(args.branch)
+    except RecordingError as exc:
+        _emit_errors(
+            root,
+            [
+                _logs_command_error(
+                    str(exc),
+                    hint=(
+                        "Use `--branch KEY=VALUE`, or run "
+                        "`journey logs --list-scopes` to copy a branch filter "
+                        "printed by Journey."
+                    ),
+                    next_commands=("journey logs --help", "journey logs --list-scopes"),
+                )
+            ],
+        )
+        return 1
+
     result = discover_recording_cases(root)
     for warning in result.warnings:
         _CLI_LOGGER.warning(
@@ -3250,14 +3578,20 @@ def _cmd_recordings(args: argparse.Namespace) -> int:
         )
     executions = result.executions or group_execution_recordings(result.cases)
     if not result.cases and not executions:
-        _CLI_LOGGER.warning(
-            "log_cases_missing",
-            "no Journey logs found",
-            pretty=pretty_line(
-                f"No Journey logs found under {root}.",
-                style="warning",
-            ),
-            root=str(root),
+        _emit_errors(
+            root,
+            [
+                _logs_command_error(
+                    f"No Journey logs found under {root}.",
+                    hint=(
+                        "Run a Journey command with logs enabled, then run "
+                        "`journey logs` from that project root or pass `--dir` "
+                        "to the directory containing `.journey/logs`. Do not use "
+                        "`--no-logs` when you need artifacts."
+                    ),
+                    next_commands=("journey --help", "journey logs --help"),
+                )
+            ],
         )
         return 1
 
@@ -3286,6 +3620,24 @@ def build_logs_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey logs",
         description="browse Journey logs, browser traces, and videos from completed runs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Coding-agent log loop:\n"
+            "  1. Run `journey logs --help` when log usage is unclear.\n"
+            "  2. Discover filters before reading large artifacts:\n"
+            "     journey logs --list-scopes\n"
+            "     journey logs --list-log-sources --case <case_id> --step <step_label>\n"
+            "  3. Inspect focused evidence:\n"
+            "     journey logs --show --case <case_id> --step <step_label> --touchpoint docker --source <service> --tail 80\n"
+            "     journey logs --paths --step <step_label> --touchpoint browser\n"
+            "\n"
+            "Recovery:\n"
+            "  - If no logs are found, rerun the Journey without --no-logs, then run `journey logs` from that project root or pass --dir.\n"
+            "  - If a filter returns no matches, rerun `journey logs --list-scopes` and copy the printed run/case/branch/step values.\n"
+            "  - Use --branch KEY=VALUE exactly as printed by --list-scopes.\n"
+            "\n"
+            "Related CLI commands: `journey --help`, `journey --file <file> --develop-step <step>`, `journey agent <target>`."
+        ),
     )
     parser.add_argument(
         "--dir",
@@ -3365,6 +3717,20 @@ def build_agent_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey agent",
         description="print or install Journey SDK coding-agent guidance",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Coding-agent guidance loop:\n"
+            "  1. Run `journey agent <target>` to print the full installed Journey guidance packet.\n"
+            "  2. Inside that loop, use `journey --help` for execution commands and `journey logs --help` for artifact inspection.\n"
+            "  3. Use `journey agent <target> --install` only when persistent project instructions should be written.\n"
+            "\n"
+            "Targets: codex, claude, cursor, generic.\n"
+            "Recovery:\n"
+            "  - If --force is rejected, add it only together with --install.\n"
+            "  - If install refuses to overwrite an existing file, rerun with --install --force only after deciding replacement is intended.\n"
+            "\n"
+            "Related CLI commands: `journey --help`, `journey logs --help`, `journey --touchpoint-docs all`."
+        ),
     )
     parser.add_argument(
         "target",
@@ -3402,9 +3768,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey",
         description="execute decorated journey workflows",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Use 'journey logs' to browse run artifacts. "
-            "Use 'journey agent <target>' for coding-agent guidance."
+            "Coding-agent command manual:\n"
+            "  - Start with `journey --help` when command usage or recovery is unclear.\n"
+            "  - For a new loop, run `journey agent <target>` where target is codex, claude, cursor, or generic.\n"
+            "  - For touchpoint APIs, run `journey --touchpoint-docs browser|docker|email|webhook|http|all`.\n"
+            "\n"
+            "Command selection:\n"
+            "  journey --file journeys/<feature>_journey.py --debug-plan\n"
+            "      Compile and print cases/labels without executing steps.\n"
+            "  journey --file journeys/<feature>_journey.py --develop-step <step_label>\n"
+            "      Focus the edit loop on one target step and reuse default persistent state.\n"
+            "  journey --file journeys/<feature>_journey.py --step <step_label> --no-state\n"
+            "      Verify the selected case from a fresh path after the focused loop passes.\n"
+            "  journey --file journeys/<feature>_journey.py --no-state\n"
+            "      Run the full journey from a fresh path before finishing when feasible.\n"
+            "\n"
+            "Self-healing loop:\n"
+            "  - Read `What happened`, `Try this`, `Next commands`, and `Retry failed step:` lines.\n"
+            "  - Copy `Retry failed step:` when present; otherwise use --develop-step with the first failed label.\n"
+            "  - Inspect artifacts with `journey logs --help`, `journey logs --list-scopes`, and `journey logs --paths` or `--show`.\n"
+            "  - Rerun the focused command until it passes, then broaden to --step or a full --no-state run.\n"
+            "\n"
+            "Related CLI commands: `journey logs --help`, `journey agent --help`, `journey --touchpoint-docs all`."
         ),
     )
     parser.add_argument("--file", help="Execute journeys defined in one Python file")

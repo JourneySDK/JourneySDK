@@ -57,6 +57,33 @@ uv add journey-sdk
 uv run journey --help
 ```
 
+## CLI Help
+
+Journey keeps command-related guidance in the `--help` output. Both human developers and coding agents should use 
+these commands as the self-contained command manuals before choosing flags or repairing a failed command:
+
+```bash
+journey --help
+journey logs --help
+journey agent --help
+```
+
+`journey --help` explains the execution loop, targeted `--develop-step` and `--step` commands, state flags, touchpoint
+reference commands, and recovery commands. `journey logs --help` explains how to discover scopes and sources before
+reading artifacts. `journey agent --help` explains print/install modes for packaged assistant guidance.
+
+When a Journey command fails, the CLI prints an instructional block:
+
+```console
+What happened: ...
+Try this: ...
+Next commands:
+  journey ...
+```
+
+Structured and JSON Lines output include the same recovery data in `instructions`, `next_commands`, and
+`help_command` fields so agents can continue without external docs.
+
 ## Ctrl-C And Resumable Runs
 
 Journey persists execution state by default when you want a long run to survive interruption:

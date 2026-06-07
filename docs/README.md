@@ -20,6 +20,15 @@ otherwise.
 
 ## Packaged References
 
+The CLI `--help` surfaces are the self-contained command manuals. Coding agents should run the relevant help command
+before choosing or repairing CLI usage:
+
+```bash
+journey --help
+journey logs --help
+journey agent --help
+```
+
 Detailed touchpoint API references are packaged with the SDK and available from any installed `journey` CLI:
 
 ```bash

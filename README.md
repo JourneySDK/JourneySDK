@@ -43,8 +43,16 @@ Run the CLI without installing it globally:
 uvx --from journey-sdk journey --help
 ```
 
-See [Installation And CLI](docs/00-installation-and-cli.md) for the complete install guide, CLI flags, editable
-installs, browser setup, and local package smoke testing.
+The CLI help surfaces are the command manuals for humans and coding agents:
+
+```bash
+journey --help
+journey logs --help
+journey agent --help
+```
+
+See [Installation And CLI](docs/00-installation-and-cli.md) for the complete install guide, self-healing CLI help,
+editable installs, browser setup, and local package smoke testing.
 
 ## Quick Start
 
@@ -86,6 +94,12 @@ top-level `@journey` functions, running one file, selecting one journey, and JSO
 - [Debugging and Failure Modes](docs/06-debugging-and-failure-modes.md): failure reports, logs, and `--fail-fast`.
 
 The docs index is [Journey Docs](docs/README.md).
+
+## CLI Help
+
+Use `journey --help` as the self-contained execution command manual. It includes the agentic verification loop,
+targeted run commands, state guidance, and recovery commands. Use `journey logs --help` for artifact inspection and
+`journey agent --help` before printing or installing assistant guidance.
 
 ## Touchpoint References
 

@@ -21,6 +21,9 @@ affected journey or step.
 ## Fetch More Journey Guidance
 
 - Use the installed Journey CLI to fetch Journey reference material.
+- Run `journey --help` before choosing or repairing Journey execution commands when command usage is unclear.
+- Run `journey logs --help` before inspecting artifacts when log filters, trace paths, or text logs are unclear.
+- Run `journey agent --help` before installing or replacing persistent assistant guidance.
 - Run `journey --touchpoint-docs all` to inspect every packaged touchpoint reference before choosing helpers for a new flow.
 - Run `journey --touchpoint-docs browser`, `journey --touchpoint-docs docker`, `journey --touchpoint-docs email`, `journey --touchpoint-docs webhook`, or `journey --touchpoint-docs http` for focused helper guidance.
 - Do not ask the user for Journey reference material that can be printed by the installed CLI.
@@ -119,7 +122,7 @@ def changedetection_core_journey() -> None:
 ## Quick Verification Loop
 
 1. Run from the project that owns the journey.
-2. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
+2. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Read every `What happened`, `Try this`, and `Next commands` block; if command usage is unclear, run the relevant `--help` command printed by the CLI. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
 
 3. Use the narrowest useful Journey command while editing:
 

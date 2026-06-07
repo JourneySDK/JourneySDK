@@ -17,6 +17,7 @@ from journeysdk.cli import (
     _active_environment_python,
     _read_pause_choice,
     build_agent_parser,
+    build_logs_parser,
     build_parser,
     main,
 )
@@ -250,6 +251,10 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert exc_info.value.code == 2
     removed_output = capsys.readouterr().out
     assert "unrecognized arguments: --plan-only" in removed_output
+    assert "What happened: journey: error: unrecognized arguments: --plan-only" in removed_output
+    assert "Try this:" in removed_output
+    assert "Next commands:" in removed_output
+    assert "journey --help" in removed_output
 
     agent_parser = build_agent_parser()
     agent_args = agent_parser.parse_args(["codex"])
@@ -309,6 +314,22 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert parser.parse_args(["--output", "pretty"]).output == "pretty"
     assert parser.parse_args(["--output", "structured"]).output == "structured"
     assert parser.parse_args(["--output", "jsonl"]).output == "jsonl"
+
+
+def test_help_outputs_include_agentic_command_manual():
+    root_help = build_parser().format_help()
+    logs_help = build_logs_parser().format_help()
+    agent_help = build_agent_parser().format_help()
+
+    assert "Coding-agent command manual" in root_help
+    assert "Self-healing loop" in root_help
+    assert "journey logs --help" in root_help
+    assert "Coding-agent log loop" in logs_help
+    assert "journey logs --list-scopes" in logs_help
+    assert "Recovery:" in logs_help
+    assert "Coding-agent guidance loop" in agent_help
+    assert "journey --help" in agent_help
+    assert "journey agent <target>" in agent_help
 
 
 def test_agent_prints_complete_packet_without_discovery(
@@ -466,8 +487,31 @@ def test_agent_force_requires_install(
     with pytest.raises(SystemExit) as force_exc:
         main(["agent", "generic", "--force"])
 
+    output = capsys.readouterr().out
     assert force_exc.value.code == 2
-    assert "--force requires --install" in capsys.readouterr().out
+    assert "--force requires --install" in output
+    assert "What happened: journey agent: error: --force requires --install" in output
+    assert "Try this:" in output
+    assert "Next commands:" in output
+    assert "journey agent --help" in output
+
+
+def test_execute_structured_errors_include_agent_guidance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["--file", "missing.py", "--output", "structured"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "event=command_error" in output
+    assert "instructions=" in output
+    assert "next_commands=" in output
+    assert "help_command=" in output
+    assert "journey --help" in output
 
 
 @pytest.mark.parametrize(
@@ -1381,6 +1425,9 @@ def test_execute_output_jsonl_errors_include_hint_for_missing_step(
         "Step label 'missing' was not found in the selected journey."
     )
     assert "Check that the target step label exists" in payload["errors"][0]["hint"]
+    assert "Execution failed at a Journey step" in payload["errors"][0]["instructions"]
+    assert "journey --help" in payload["errors"][0]["help_command"]
+    assert "journey --help" in payload["errors"][0]["next_commands"]
 
 
 def test_execute_streams_live_case_progress_for_all_branches(

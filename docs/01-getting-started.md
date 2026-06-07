@@ -49,7 +49,8 @@ The command is print-only by default. It gives the agent the installed Journey i
 loop, and the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or
 polling helpers. To make the guidance persistent for future prompts, run `journey agent codex --install` once from the
 project root. When debugging a journey, the agent should run the failing journey or the focused `--develop-step` retry
-until executable evidence passes.
+until executable evidence passes. If the agent is unsure which flags to use or how to recover, it should run
+`journey --help`, `journey logs --help`, or `journey agent --help` and follow the CLI's `Next commands` block.
 
 ## The Smallest Useful Journey
 

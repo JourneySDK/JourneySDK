@@ -200,8 +200,66 @@ def test_logs_command_reports_missing_cases(
 
     exit_code = main(["logs", "--dir", str(tmp_path)])
 
+    output = capsys.readouterr().out
     assert exit_code == 1
-    assert "No Journey logs found" in capsys.readouterr().out
+    assert "No Journey logs found" in output
+    assert "What happened:" in output
+    assert "Try this:" in output
+    assert "Next commands:" in output
+    assert "journey logs --help" in output
+
+
+def test_logs_command_invalid_branch_filter_is_instructional(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    exit_code = main(["logs", "--dir", str(tmp_path), "--branch", "nope", "--list"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "Traceback" not in output
+    assert "--branch expects KEY=VALUE." in output
+    assert "What happened:" in output
+    assert "Try this:" in output
+    assert "Next commands:" in output
+    assert "journey logs --list-scopes" in output
+
+
+def test_logs_command_noninteractive_zero_match_is_instructional(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    case = CaseRecording(
+        recordings_dir=tmp_path / ".journey" / "logs",
+        run_id="run123",
+        journey_id="demo_journey",
+        function_ref="module:demo_journey",
+        case_id="case_1",
+        branch_env={},
+        manifests=(),
+        log_artifacts=(
+            _log_artifact(
+                tmp_path,
+                sequence=1,
+                text="ready\n",
+                step_label="start_services",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "journeysdk.cli.discover_recording_cases",
+        lambda root: RecordingDiscoveryResult((case,), ()),
+    )
+
+    exit_code = main(["logs", "--dir", str(tmp_path), "--show", "--case", "missing"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "No Journey logs matched filters: --case missing." in output
+    assert "Try this:" in output
+    assert "Next commands:" in output
+    assert "journey logs --list-scopes" in output
 
 
 def test_logs_command_noninteractively_shows_filtered_log(
