@@ -37,6 +37,7 @@ from .models import (
     CasePlan,
     ExecutionReport,
     JourneyPlan,
+    NodeExecutionStatus,
     NodeExecutionRecord,
     PlannedValue,
     StepNode,
@@ -664,6 +665,34 @@ class _ExecutionObserver:
     ) -> None:
         return
 
+    def on_step_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        record: NodeExecutionRecord,
+    ) -> None:
+        return
+
+    def on_branch_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: BranchMarkerNode,
+        node_index: int,
+        record: NodeExecutionRecord,
+    ) -> None:
+        return
+
+    def on_case_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        report: CaseExecutionReport,
+    ) -> None:
+        return
+
     def on_retry(
         self,
         *,
@@ -865,10 +894,10 @@ class _LoggingExecutionObserver(_ExecutionObserver):
     ) -> None:
         self._logger.info(
             "step_start",
-            f"  step {_step_name(node)} attempt={attempt} start",
+            f"  step {_step_name(node)} attempt={attempt} start status=executed",
             pretty=pretty_row(
                 _step_name(node),
-                _step_detail("start", attempt=attempt),
+                _step_detail("start executed", attempt=attempt),
                 indent=6,
                 label_width=29,
                 style="context",
@@ -877,6 +906,7 @@ class _LoggingExecutionObserver(_ExecutionObserver):
             step=_step_name(node),
             node_index=node_index,
             attempt=attempt,
+            status="executed",
         )
 
     def on_branch(
@@ -888,7 +918,7 @@ class _LoggingExecutionObserver(_ExecutionObserver):
     ) -> None:
         self._logger.info(
             "branch_select",
-            f"  branch {node.group_id}={node.active_key}",
+            f"  branch {node.group_id}={node.active_key} status=executed",
             pretty=pretty_row(
                 f"branch {node.group_id}",
                 node.active_key,
@@ -900,6 +930,80 @@ class _LoggingExecutionObserver(_ExecutionObserver):
             branch_group=node.group_id,
             branch=node.active_key,
             node_index=node_index,
+            status="executed",
+        )
+
+    def on_step_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        record: NodeExecutionRecord,
+    ) -> None:
+        self._logger.info(
+            "step_replay",
+            f"  step {_step_name(node)} replayed",
+            pretty=pretty_row(
+                _step_name(node),
+                "replayed",
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            status=record.status,
+        )
+
+    def on_branch_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: BranchMarkerNode,
+        node_index: int,
+        record: NodeExecutionRecord,
+    ) -> None:
+        self._logger.info(
+            "branch_replay",
+            f"  branch {node.group_id}={node.active_key} replayed",
+            pretty=pretty_row(
+                f"branch {node.group_id}",
+                f"replayed {node.active_key}",
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
+            case=case_plan.case_id,
+            branch_group=node.group_id,
+            branch=node.active_key,
+            node_index=node_index,
+            status=record.status,
+        )
+
+    def on_case_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        report: CaseExecutionReport,
+    ) -> None:
+        self._logger.info(
+            "case_replay",
+            f"- {report.case_id} replay branches={_format_branch_env(case_plan.branch_env)}",
+            pretty=pretty_line(
+                f"    {report.case_id} replay"
+                + (
+                    f"  branches={_format_branch_env(case_plan.branch_env)}"
+                    if case_plan.branch_env
+                    else ""
+                ),
+                style="context",
+            ),
+            case=report.case_id,
+            branches=_format_branch_env(case_plan.branch_env),
+            steps=sum(1 for record in report.records if record.node_type == "StepNode"),
+            status="replayed",
         )
 
     def on_retry(
@@ -952,13 +1056,13 @@ class _LoggingExecutionObserver(_ExecutionObserver):
         self._logger.info(
             "step_success",
             (
-                f"  step {_step_name(node)} attempt={attempt} ok "
+                f"  step {_step_name(node)} attempt={attempt} executed "
                 f"duration={_format_duration(duration_seconds)}"
             ),
             pretty=pretty_row(
                 _step_name(node),
                 _step_detail(
-                    "ok",
+                    "executed",
                     attempt=attempt,
                     duration=_format_duration(duration_seconds),
                 ),
@@ -971,6 +1075,7 @@ class _LoggingExecutionObserver(_ExecutionObserver):
             node_index=node_index,
             attempt=attempt,
             duration=_format_duration(duration_seconds),
+            status="executed",
         )
 
     def on_step_failure(
@@ -1003,6 +1108,7 @@ class _LoggingExecutionObserver(_ExecutionObserver):
             attempt=attempt,
             duration=_format_duration(duration_seconds),
             error=_format_exception(error),
+            status="failed",
         )
 
     def on_step_interrupted(
@@ -1035,6 +1141,7 @@ class _LoggingExecutionObserver(_ExecutionObserver):
             attempt=attempt,
             duration=_format_duration(duration_seconds),
             error=_format_exception(error),
+            status="failed",
         )
 
     def on_case_complete(
@@ -1169,13 +1276,48 @@ def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotSta
     )
 
 
+def _record_with_status(
+    record: NodeExecutionRecord,
+    status: NodeExecutionStatus,
+) -> NodeExecutionRecord:
+    return NodeExecutionRecord(
+        node_id=record.node_id,
+        node_type=record.node_type,
+        label=record.label,
+        status=status,
+        result=record.result,
+        error=record.error,
+    )
+
+
+def _replayed_record(record: NodeExecutionRecord) -> NodeExecutionRecord:
+    if record.status == "failed":
+        return record
+    return _record_with_status(record, "replayed")
+
+
+def _replayed_records(records: list[NodeExecutionRecord]) -> list[NodeExecutionRecord]:
+    return [_replayed_record(record) for record in records]
+
+
+def _replayed_case_report(report: CaseExecutionReport) -> CaseExecutionReport:
+    return CaseExecutionReport(
+        case_id=report.case_id,
+        branch_env=dict(report.branch_env),
+        records=_replayed_records(report.records),
+        completed=report.completed,
+        stopped_at_label=report.stopped_at_label,
+        replay_anchor=report.replay_anchor,
+    )
+
+
 def _state_record(record: NodeExecutionRecord) -> NodeExecutionRecord:
     result = None if record.node_type == "StepNode" else record.result
     return NodeExecutionRecord(
         node_id=record.node_id,
         node_type=record.node_type,
         label=record.label,
-        ok=record.ok,
+        status=record.status,
         result=result,
         error=record.error,
     )
@@ -1439,7 +1581,10 @@ class _StateController:
 
     @property
     def completed_case_reports(self) -> list[CaseExecutionReport]:
-        return list(self._state.completed_case_reports)
+        return [
+            _replayed_case_report(report)
+            for report in self._state.completed_case_reports
+        ]
 
     @property
     def current_case_index(self) -> int:
@@ -2179,7 +2324,7 @@ class _RunSession:
     ) -> None:
         restored = _copy_runtime_snapshot(snapshot)
         self._record_indices = restored.record_indices
-        self.records = restored.records
+        self.records = _replayed_records(restored.records)
         for key, binding in restored.step_bindings.items():
             self._step_bindings[key] = binding
             self._step_binding_contexts[key] = self._branch_anchor_restore_context(
@@ -2201,7 +2346,7 @@ class _RunSession:
 
         restored = _copy_runtime_snapshot(restored_state.snapshot)
         self._record_indices = restored.record_indices
-        self.records = restored.records
+        self.records = _replayed_records(restored.records)
         self._step_bindings = restored.step_bindings
         self._step_binding_contexts = {
             key: self._active_state_restore_context(key)
@@ -2217,6 +2362,14 @@ class _RunSession:
         self._paused_step = restored_state.paused_step
         if self._dirty_node_id is None and self._paused_step is None:
             self._trim_from(self.replay_from_index, preserve_retry_for=None)
+
+    def emit_replayed_records(self) -> None:
+        _emit_replayed_records(
+            self._observer,
+            case_plan=self.case_plan,
+            record_indices=self._record_indices,
+            records=self.records,
+        )
 
     @property
     def paused_step(self) -> PausedStepState | None:
@@ -2344,7 +2497,7 @@ class _RunSession:
         self,
         node_index: int,
         node: Any,
-        ok: bool,
+        status: NodeExecutionStatus,
         result: Any = None,
         error: str | None = None,
     ) -> bool:
@@ -2355,7 +2508,7 @@ class _RunSession:
                 node_id=node.node_id,
                 node_type=type(node).__name__,
                 label=label,
-                ok=ok,
+                status=status,
                 result=result,
                 error=error,
             )
@@ -2614,7 +2767,12 @@ class _RunSession:
         if should_pause_without_retry:
             self._retry_remaining.pop(node.node_id, None)
             self._dirty_node_id = None
-            should_stop = self._record(node_index, node, ok=False, error=str(exc))
+            should_stop = self._record(
+                node_index,
+                node,
+                status="failed",
+                error=str(exc),
+            )
             self._observer.on_step_failure(
                 case_plan=self.case_plan,
                 node=node,
@@ -2656,7 +2814,12 @@ class _RunSession:
             raise _RetryRequested(sleep_for=sleep_for)
         self._retry_remaining.pop(node.node_id, None)
         self._dirty_node_id = None
-        should_stop = self._record(node_index, node, ok=False, error=str(exc))
+        should_stop = self._record(
+            node_index,
+            node,
+            status="failed",
+            error=str(exc),
+        )
         self._observer.on_step_failure(
             case_plan=self.case_plan,
             node=node,
@@ -3154,7 +3317,12 @@ class _RunSession:
         self._retry_remaining.pop(node.node_id, None)
         self._dirty_node_id = None
         self._mark_replay_boundary_available_after(node_index)
-        should_stop = self._record(node_index, node, ok=True, result=output)
+        should_stop = self._record(
+            node_index,
+            node,
+            status="executed",
+            result=output,
+        )
         self._observer.on_step_success(
             case_plan=self.case_plan,
             node=node,
@@ -3300,7 +3468,18 @@ class _RunSession:
             )
             self._remember_step_result(node, result)
             self.replay_from_index = max(self.replay_from_index, node_index + 1)
-            should_stop = self._record(node_index, node, ok=True, result=result)
+            should_stop = self._record(
+                node_index,
+                node,
+                status="replayed",
+                result=result,
+            )
+            self._observer.on_step_replay(
+                case_plan=self.case_plan,
+                node=node,
+                node_index=node_index,
+                record=self.records[-1],
+            )
             if should_stop:
                 if self._develop_step_enabled:
                     self._pause_after_step(
@@ -3443,7 +3622,12 @@ class _RunSession:
             )
 
         if marker_index >= self.replay_from_index:
-            should_stop = self._record(marker_index, node, ok=True, result=node.active_key)
+            should_stop = self._record(
+                marker_index,
+                node,
+                status="executed",
+                result=node.active_key,
+            )
             self._observer.on_branch(
                 case_plan=self.case_plan,
                 node=node,
@@ -4121,6 +4305,77 @@ def _record_matches_node(
     return False
 
 
+def _node_index_for_record(
+    case_plan: CasePlan,
+    record: NodeExecutionRecord,
+) -> int | None:
+    for index, node in enumerate(case_plan.nodes):
+        if node.node_id == record.node_id and type(node).__name__ == record.node_type:
+            return index
+    return None
+
+
+def _emit_replayed_record(
+    observer: _ExecutionObserver,
+    *,
+    case_plan: CasePlan,
+    node_index: int,
+    record: NodeExecutionRecord,
+) -> None:
+    if record.status != "replayed":
+        return
+    node = case_plan.nodes[node_index]
+    if isinstance(node, StepNode):
+        observer.on_step_replay(
+            case_plan=case_plan,
+            node=node,
+            node_index=node_index,
+            record=record,
+        )
+    elif isinstance(node, BranchMarkerNode):
+        observer.on_branch_replay(
+            case_plan=case_plan,
+            node=node,
+            node_index=node_index,
+            record=record,
+        )
+
+
+def _emit_replayed_records(
+    observer: _ExecutionObserver,
+    *,
+    case_plan: CasePlan,
+    record_indices: list[int],
+    records: list[NodeExecutionRecord],
+) -> None:
+    for node_index, record in zip(record_indices, records):
+        _emit_replayed_record(
+            observer,
+            case_plan=case_plan,
+            node_index=node_index,
+            record=record,
+        )
+
+
+def _emit_replayed_case_report(
+    observer: _ExecutionObserver,
+    *,
+    case_plan: CasePlan,
+    report: CaseExecutionReport,
+) -> None:
+    observer.on_case_replay(case_plan=case_plan, report=report)
+    for record in report.records:
+        node_index = _node_index_for_record(case_plan, record)
+        if node_index is None:
+            continue
+        _emit_replayed_record(
+            observer,
+            case_plan=case_plan,
+            node_index=node_index,
+            record=record,
+        )
+
+
 def _snapshot_matches_prefix(
     snapshot: RuntimeSnapshotState,
     case_plan: CasePlan,
@@ -4504,6 +4759,14 @@ def _execute_plan(
         )
 
         case_reports: list[CaseExecutionReport] = state_controller.completed_case_reports
+        for completed_index, report in enumerate(case_reports):
+            if completed_index >= len(selected_cases):
+                break
+            _emit_replayed_case_report(
+                execution_observer,
+                case_plan=selected_cases[completed_index].case_plan,
+                report=report,
+            )
 
         try:
             start_index = state_controller.current_case_index
@@ -4569,6 +4832,7 @@ def _execute_plan(
                         replay_anchor=replay_anchor,
                         replay_from_index=restored_state.replay_from_index,
                     )
+                run_session.emit_replayed_records()
 
                 if develop_step is not None:
                     if run_session.paused_step is not None and effective_pause_action is None:

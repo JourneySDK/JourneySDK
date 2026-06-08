@@ -103,13 +103,13 @@ Plan
 
 Execution
     case_2  branches={bg_1=branch_2}
-      load_signup_request  start attempt=1
-      load_signup_request  ok attempt=1 duration=...
-      classify_signup_request  start attempt=1
-      classify_signup_request  ok attempt=1 duration=...
+      load_signup_request  start executed attempt=1
+      load_signup_request  executed attempt=1 duration=...
+      classify_signup_request  start executed attempt=1
+      classify_signup_request  executed attempt=1 duration=...
       branch bg_1  branch_2
-      queue_manual_review_signup  start attempt=1
-      queue_manual_review_signup  ok attempt=1 duration=...
+      queue_manual_review_signup  start executed attempt=1
+      queue_manual_review_signup  executed attempt=1 duration=...
     case_2 done steps=3 duration=... stopped_at=queue_manual_review_signup replay_anchor=classify_signup_request
   Summary: 1 journey executed, 1 case executed, 0 failed
 ```
@@ -132,7 +132,7 @@ Plan
   Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Development mode stopped after step queue_manual_review_signup attempt=1 ok.
+Development mode stopped after step queue_manual_review_signup attempt=1 executed.
   Summary: develop-step queue_manual_review_signup stopped after target, 0 failed
 ```
 
@@ -160,7 +160,8 @@ When an agent is fixing a failed journey, it should run the failing command or f
 step and the CLI's `Retry failed step:` command as the focused loop, and rerun that same `--develop-step` command after
 every edit until it passes. The agent should report the exact commands it ran, the target step or journey that passed,
 and any `journey logs` traces, videos, touchpoint payloads, or text logs that prove the end-to-end behavior. When using
-`--output jsonl`, the agent should read `state_validity` events before relying on replayed evidence.
+`--output jsonl`, the agent should read `state_validity` events and each report record's `status` before relying on
+replayed evidence.
 
 ## Rehydrate Later Cases from a Step Anchor
 
@@ -204,10 +205,10 @@ Plan
 
 Execution
     case_2  branches={bg_1=branch_2}
-      prepare_context  ok attempt=1 duration=...
-      shared_after_anchor  ok attempt=1 duration=...
+      prepare_context  executed attempt=1 duration=...
+      shared_after_anchor  executed attempt=1 duration=...
       branch bg_1  branch_2
-      complete_branch_b_from_anchor  ok attempt=1 duration=...
+      complete_branch_b_from_anchor  executed attempt=1 duration=...
     case_2 done steps=3 duration=... stopped_at=complete_branch_b_from_anchor replay_anchor=prepare_context
   Summary: 1 journey executed, 1 case executed, 0 failed
 ```

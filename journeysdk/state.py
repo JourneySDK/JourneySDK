@@ -10,6 +10,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from .errors import (
     CorruptExecutionStateError,
@@ -17,6 +18,7 @@ from .errors import (
 )
 from .models import (
     CaseExecutionReport,
+    NodeExecutionStatus,
     NodeExecutionRecord,
 )
 from .rehydration import StoredValue
@@ -569,7 +571,7 @@ def _encode_record(record: NodeExecutionRecord) -> dict[str, object]:
         "node_id": record.node_id,
         "node_type": record.node_type,
         "label": record.label,
-        "ok": record.ok,
+        "status": record.status,
         "result": _encode_pickle(record.result),
         "error": record.error,
     }
@@ -581,10 +583,19 @@ def _decode_record(payload: object) -> NodeExecutionRecord:
         node_id=_require_str(data, "node_id"),
         node_type=_require_str(data, "node_type"),
         label=_optional_str(data.get("label"), "label"),
-        ok=_require_bool(data, "ok"),
+        status=_decode_record_status(data),
         result=_decode_pickle(data.get("result"), "record result"),
         error=_optional_str(data.get("error"), "error"),
     )
+
+
+def _decode_record_status(data: dict[str, object]) -> NodeExecutionStatus:
+    if "status" in data:
+        status = _require_str(data, "status")
+        if status in {"executed", "replayed", "failed"}:
+            return cast(NodeExecutionStatus, status)
+        raise ValueError("status must be executed, replayed, or failed")
+    return "executed" if _require_bool(data, "ok") else "failed"
 
 
 def _encode_pickle(value: object) -> dict[str, str]:

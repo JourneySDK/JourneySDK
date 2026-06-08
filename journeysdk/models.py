@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 StepRetryDelay: TypeAlias = int | float | timedelta
 StepArgument: TypeAlias = object
 StepArguments: TypeAlias = tuple[StepArgument, ...]
 StepKeywordArguments: TypeAlias = dict[str, StepArgument]
 StepResult: TypeAlias = object
+NodeExecutionStatus: TypeAlias = Literal["executed", "replayed", "failed"]
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,7 @@ class NodeExecutionRecord:
     node_id: str
     node_type: str
     label: str | None
-    ok: bool
+    status: NodeExecutionStatus
     result: StepResult = None
     error: str | None = None
 

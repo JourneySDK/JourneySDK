@@ -1045,7 +1045,7 @@ def test_execute_prints_all_selected_plans_before_any_journey_runs(
     assert "[journey]" not in log_output
     assert "OK " not in log_output
     assert "alpha_step" in log_output
-    assert "start attempt=1" in log_output
+    assert "start executed attempt=1" in log_output
 
 
 def test_execute_output_structured_preserves_logfmt_events(
@@ -1135,6 +1135,73 @@ def test_execute_output_jsonl_keeps_stdout_parseable(
     assert payload["errors"] == []
     assert captured.err == ""
     assert any(event["event"] == "step_success" for event in _jsonl_events(captured.out))
+
+
+def test_execute_branch_anchor_status_visible_in_all_output_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _write(
+        tmp_path / "flow.py",
+        """
+        import journeysdk as journey
+
+        def prepare():
+            return {"token": "ready"}
+
+        def finish_a(payload):
+            return payload["token"] == "ready"
+
+        def finish_b(payload):
+            return payload["token"] == "ready"
+
+        @journey.journey
+        def flow():
+            payload = journey.step(prepare)
+            if journey.branch():
+                journey.step(finish_a, payload)
+            elif journey.branch(start_from=payload):
+                journey.step(finish_b, payload)
+        """,
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    pretty_exit = main(["--file", "flow.py"])
+    pretty_output = capsys.readouterr().out
+    case_2_output = pretty_output.split("case_2  branches={bg_1=branch_2}", 1)[1]
+    assert pretty_exit == 0
+    assert "prepare" in case_2_output
+    assert "replayed" in case_2_output
+    assert "finish_b" in case_2_output
+    assert "executed attempt=1 duration=" in case_2_output
+
+    jsonl_exit = main(["--file", "flow.py", "--output", "jsonl"])
+    jsonl_output = capsys.readouterr().out
+    jsonl_events = _jsonl_events(jsonl_output)
+    payload = _execute_result_payload(jsonl_output)
+    case_2_records = payload["journeys"][0]["report"]["case_reports"][1]["records"]
+
+    assert jsonl_exit == 0
+    assert any(
+        event["event"] == "step_replay"
+        and event["step"] == "prepare"
+        and event["status"] == "replayed"
+        for event in jsonl_events
+    )
+    assert case_2_records[0]["status"] == "replayed"
+    assert case_2_records[-1]["status"] == "executed"
+    assert "ok" not in case_2_records[0]
+
+    structured_exit = main(["--file", "flow.py", "--output", "structured"])
+    structured_output = capsys.readouterr().out
+
+    assert structured_exit == 0
+    assert "event=step_replay" in structured_output
+    assert "status=replayed" in structured_output
+    assert "event=step_success" in structured_output
+    assert "status=executed" in structured_output
 
 
 def test_execute_output_jsonl_reports_state_invalidation(
@@ -1475,8 +1542,8 @@ def test_execute_streams_live_case_progress_for_all_branches(
     assert "case_2  branches={bg_1=branch_2}" in log_output
     assert "case_2 done steps=2 duration=" in log_output
     assert "prepare" in log_output
-    assert "start attempt=1" in log_output
-    assert "ok attempt=1 duration=" in log_output
+    assert "start executed attempt=1" in log_output
+    assert "executed attempt=1 duration=" in log_output
     assert "branch bg_1" in log_output
     assert "finish_fast" in log_output
     assert "finish_manual" in log_output
@@ -1544,7 +1611,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
     )
     assert "stopped_at=finish_manual replay_anchor=prepare" in log_output
     assert "prepare" in log_output
-    assert "ok attempt=1 duration=" in log_output
+    assert "executed attempt=1 duration=" in log_output
     assert "branch bg_1" in log_output
     assert "finish_manual" in log_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
@@ -1606,14 +1673,14 @@ def test_execute_develop_step_steps_forward_with_continue(
         output,
         "Plan",
         "Execution",
-        "Development mode paused after step publish attempt=1 ok.",
+        "Development mode paused after step publish attempt=1 executed.",
     )
     assert "prepare" in log_output
     assert "publish" in log_output
-    assert "ok attempt=1 duration=" in log_output
-    assert "Development mode paused after step publish attempt=1 ok." in output
+    assert "executed attempt=1 duration=" in log_output
+    assert "Development mode paused after step publish attempt=1 executed." in output
     assert "cleanup" in log_output
-    assert "Development mode paused after step cleanup attempt=1 ok." in output
+    assert "Development mode paused after step cleanup attempt=1 executed." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -1652,9 +1719,9 @@ def test_execute_develop_step_exits_after_target_without_prompt(
     assert exit_code == 0
     assert "prepare" in log_output
     assert "publish" in log_output
-    assert "ok attempt=1 duration=" in log_output
-    assert "Development mode stopped after step publish attempt=1 ok." in log_output
-    assert "cleanup                       ok attempt=1 duration=" not in log_output
+    assert "executed attempt=1 duration=" in log_output
+    assert "Development mode stopped after step publish attempt=1 executed." in log_output
+    assert "cleanup                       executed attempt=1 duration=" not in log_output
     assert "Press c to continue or r to retry" not in output
     assert "Summary: develop-step publish stopped after target, 0 failed" in output
     assert "Summary: develop-step publish stopped after target, 0 failed, duration=" in output
@@ -1707,21 +1774,21 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     first_logs = first_capture.out
 
     assert first_exit == 0
-    assert "Development mode stopped after step publish attempt=1 ok." in first_logs
+    assert "Development mode stopped after step publish attempt=1 executed." in first_logs
     assert _event_lines(events_file) == ["prepare", "publish"]
 
     second_exit = main(["--file", "flow.py", "--develop-step", "publish"])
     second_logs = capsys.readouterr().out
 
     assert second_exit == 0
-    assert "Development mode stopped after step publish attempt=2 ok." in second_logs
+    assert "Development mode stopped after step publish attempt=2 executed." in second_logs
     assert _event_lines(events_file) == ["prepare", "publish", "prepare", "publish"]
 
     third_exit = main(["--file", "flow.py", "--develop-step", "cleanup"])
     third_logs = capsys.readouterr().out
 
     assert third_exit == 0
-    assert "Development mode stopped after step cleanup attempt=1 ok." in third_logs
+    assert "Development mode stopped after step cleanup attempt=1 executed." in third_logs
     assert _event_lines(events_file) == [
         "prepare",
         "publish",
@@ -1834,8 +1901,8 @@ def test_execute_develop_step_retry_allows_unrelated_branch_anchor_snapshots(
     assert second_exit == 0
     assert "invalid branch anchor snapshot data" not in first_output
     assert "invalid branch anchor snapshot data" not in second_output
-    assert "Development mode stopped after step review_thread attempt=1 ok." in first_output
-    assert "Development mode stopped after step review_thread attempt=2 ok." in second_output
+    assert "Development mode stopped after step review_thread attempt=1 executed." in first_output
+    assert "Development mode stopped after step review_thread attempt=2 executed." in second_output
 
 
 def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
@@ -1896,7 +1963,7 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     second_logs = capsys.readouterr().out
 
     assert second_exit == 0
-    assert "Development mode stopped after step poll attempt=2 ok." in second_logs
+    assert "Development mode stopped after step poll attempt=2 executed." in second_logs
 
 
 def test_execute_develop_step_cannot_continue_later_from_failed_pause(
@@ -2146,7 +2213,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
 
     assert first_exit == 130
     assert state_file.exists()
-    assert "Development mode paused after step publish attempt=1 ok." in first_output
+    assert "Development mode paused after step publish attempt=1 executed." in first_output
     assert "Interrupted: Journey execution was interrupted before it finished." in first_output
 
     monkeypatch.setattr("builtins.input", resume_input)
@@ -2165,7 +2232,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
 
     assert second_exit == 0
     assert "case_1 resume" in second_logs
-    assert "Development mode paused after step publish attempt=1 ok." in second_output
+    assert "Development mode paused after step publish attempt=1 executed." in second_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in second_output
 
 
@@ -2228,11 +2295,11 @@ def test_execute_develop_step_retry_same_step_after_failed_pause(
     assert "Error: poll failed after" in log_output
     assert "Development mode paused after step poll attempt=2 failed (pending)." in output
     assert "poll" in log_output
-    assert "ok attempt=3 duration=" in log_output
-    assert "Development mode paused after step poll attempt=3 ok." in output
+    assert "executed attempt=3 duration=" in log_output
+    assert "Development mode paused after step poll attempt=3 executed." in output
     assert "finish" in log_output
-    assert "ok attempt=1 duration=" in log_output
-    assert "Development mode paused after step finish attempt=1 ok." in output
+    assert "executed attempt=1 duration=" in log_output
+    assert "Development mode paused after step finish attempt=1 executed." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -2583,7 +2650,7 @@ def test_execute_develop_step_accepts_future_plan_changes_after_continue(
     log_output = captured.out
     assert exit_code == 0
     assert "restarting case_1" in log_output
-    assert "Development mode paused after step extra attempt=1 ok." in output
+    assert "Development mode paused after step extra attempt=1 executed." in output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
         "prepare",
         "publish",
@@ -2802,11 +2869,11 @@ def test_execute_streams_retry_events_in_pretty_mode(
     log_output = captured.out
     assert exit_code == 0
     assert "poll" in log_output
-    assert "start attempt=1" in log_output
+    assert "start executed attempt=1" in log_output
     assert "Warning: poll retry after" in log_output
     assert "RuntimeError: pending" in log_output
-    assert "start attempt=2" in log_output
-    assert "ok attempt=2 duration=" in log_output
+    assert "start executed attempt=2" in log_output
+    assert "executed attempt=2 duration=" in log_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -2944,7 +3011,7 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "b_good.py:good" in output
-    assert "finish                         start attempt=" not in output
+    assert "finish                         start executed attempt=" not in output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in output
 
 
@@ -3305,7 +3372,7 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
     assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_capture.out
     assert "phase=execution" not in first_capture.out
     assert "publish" in first_capture.out
-    assert "ok attempt=1 duration=" in first_capture.out
+    assert "executed attempt=1 duration=" in first_capture.out
     assert "publish interrupted" not in first_capture.out
     assert _event_lines(events_file) == [
         "publish",
@@ -3319,7 +3386,7 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
     assert second_exit == 0
     assert "publish" in second_capture.out
     assert "finish" in second_capture.out
-    assert "ok attempt=2 duration=" in second_capture.out
+    assert "executed attempt=2 duration=" in second_capture.out
     events = _event_lines(events_file)
     assert events[:3] == [
         "publish",
@@ -3407,7 +3474,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
 
     assert second_exit == 0
     assert "publish" in second_capture.out
-    assert "ok attempt=2 duration=" in second_capture.out
+    assert "executed attempt=2 duration=" in second_capture.out
     final_events = _event_lines(events_file)
     resumed_seed = final_events[2].rsplit("_", 1)[1]
     assert final_events == [
@@ -3464,8 +3531,8 @@ def test_execute_state_resume_streams_case_resume_in_pretty_mode(
     assert second_exit == 0
     assert "case_1 resume" in second_logs
     assert "maybe_interrupt" in second_logs
-    assert "start attempt=2" in second_logs
-    assert "ok attempt=2 duration=" in second_logs
+    assert "start executed attempt=2" in second_logs
+    assert "executed attempt=2 duration=" in second_logs
     assert "case_1 done steps=1 duration=" in second_logs
 
 
@@ -3541,12 +3608,12 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
     assert second_exit == 0
     assert "case_1 resume" in second_logs
     assert "poll" in second_logs
-    assert "start attempt=2" in second_logs
+    assert "start executed attempt=2" in second_logs
     assert "Warning: poll retry after" in second_logs
     assert "RuntimeError: pending" in second_logs
-    assert "start attempt=3" in second_logs
-    assert "start attempt=4" in second_logs
-    assert "ok attempt=4 duration=" in second_logs
+    assert "start executed attempt=3" in second_logs
+    assert "start executed attempt=4" in second_logs
+    assert "executed attempt=4 duration=" in second_logs
 
     assert attempt_counter_file.read_text(encoding="utf-8") == "4"
     events = events_file.read_text(encoding="utf-8").splitlines()

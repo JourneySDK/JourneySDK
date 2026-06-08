@@ -140,7 +140,8 @@ journey --file journeys/<feature>_journey.py --no-state
 
 State checklist:
 
-- Read `state_validity` events in JSONL output or the `State:` lines in pretty output.
+- Read `state_validity` events in JSONL output or the `State:` lines in pretty output, and read each report record's
+  `status` field (`executed`, `replayed`, or `failed`) before relying on a step as fresh evidence.
 - Treat `replayed` state as development-loop evidence, not final release evidence.
 - Treat `invalidated` as normal after journey, source, runtime, or workspace changes; Journey reran from a safe boundary.
 - Use `--no-state` for the final target-step or full journey confidence run whenever feasible.

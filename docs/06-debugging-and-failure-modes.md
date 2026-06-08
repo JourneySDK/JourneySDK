@@ -50,13 +50,13 @@ Plan
 
 Execution
     case_1
-      raise_expected_failure  start attempt=1
+      raise_expected_failure  start executed attempt=1
 Error: raise_expected_failure failed after ... (RuntimeError: expected tutorial failure)
 
   docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey ...
     case_1
-      finish_successfully  start attempt=1
-      finish_successfully  ok attempt=1 duration=...
+      finish_successfully  start executed attempt=1
+      finish_successfully  executed attempt=1 duration=...
     case_1 done steps=1 duration=...
 Error: CallableExecutionError during execute at .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
 What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure ...
@@ -89,7 +89,7 @@ Plan
 
 Execution
     case_1
-      raise_expected_failure  start attempt=1
+      raise_expected_failure  start executed attempt=1
 Error: raise_expected_failure failed after ... (RuntimeError: expected tutorial failure)
 Error: CallableExecutionError during execute at .../docs/fail_fast_journeys/fail_fast_journeys.py:broken_demo_journey
 What happened: Step 'raise_expected_failure' failed while it was running: RuntimeError: expected tutorial failure ...

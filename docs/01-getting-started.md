@@ -82,8 +82,8 @@ Expected pretty stdout includes:
 ```console
 Plan
   docs/first_journey/first_journey.py:first_journey ...
-      create_customer_profile  start attempt=1 ...
-      create_customer_profile  ok attempt=1 duration=... ...
+      create_customer_profile  start executed attempt=1 ...
+      create_customer_profile  executed attempt=1 duration=... ...
   Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
@@ -125,8 +125,8 @@ uv run journey --file docs/selection_journeys/selection_journeys.py --journey in
 
 ```jsonl
 {"time":"...","level":"INFO","component":"cli","event":"plan_start","message":"Plan"}
-{"time":"...","level":"INFO","component":"executor","event":"step_success","message":"  step load_invoice_reminder attempt=1 ok duration=...","step":"load_invoice_reminder"}
-{"time":"...","level":"INFO","component":"cli","event":"execute_result","message":"execution result","payload":{"journeys":[{"file":".../docs/selection_journeys/selection_journeys.py","journey_name":"invoice_reminder_journey","report":{"journey_id":"invoice_reminder_journey","function_ref":"...","case_reports":[{"case_id":"case_1","completed":true,"stopped_at_label":null,"replay_anchor":null,"records":[{"label":"load_invoice_reminder","ok":true},{"label":"assert_invoice_reminder","ok":true}]}]}}],"errors":[]}}
+{"time":"...","level":"INFO","component":"executor","event":"step_success","message":"  step load_invoice_reminder attempt=1 executed duration=...","status":"executed","step":"load_invoice_reminder"}
+{"time":"...","level":"INFO","component":"cli","event":"execute_result","message":"execution result","payload":{"journeys":[{"file":".../docs/selection_journeys/selection_journeys.py","journey_name":"invoice_reminder_journey","report":{"journey_id":"invoice_reminder_journey","function_ref":"...","case_reports":[{"case_id":"case_1","completed":true,"stopped_at_label":null,"replay_anchor":null,"records":[{"label":"load_invoice_reminder","status":"executed"},{"label":"assert_invoice_reminder","status":"executed"}]}]}}],"errors":[]}}
 ```
 
 ## What To Notice

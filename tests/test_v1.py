@@ -27,6 +27,7 @@ from journeysdk.state import (
     SelectedCaseState,
     StateFingerprint,
     StateValidityEnvelope,
+    load_execution_state,
 )
 
 
@@ -41,6 +42,14 @@ def _labels(case_plan):
 
 def _record_labels(case_report):
     return [record.label for record in case_report.records if record.label is not None]
+
+
+def _record_statuses(case_report):
+    return [
+        (record.label, record.status)
+        for record in case_report.records
+        if record.label is not None
+    ]
 
 
 class _ReplayValue:
@@ -1918,6 +1927,10 @@ def test_execute_develop_step_retry_rewinds_same_step_and_refreshes_retry_budget
     assert first.paused_step.ok is False
     assert first.paused_step.attempt == 1
     assert events == ["prepare", "poll_1"]
+    first_state = load_execution_state(state_file)
+    assert first_state is not None
+    assert first_state.active_case is not None
+    assert first_state.active_case.snapshot.records[-1].status == "failed"
 
     report = journey_executor._execute_plan(
         journey,
@@ -2796,10 +2809,20 @@ def test_execute_resumes_interrupted_retryable_step_from_same_step_anchor(tmp_pa
     with pytest.raises(KeyboardInterrupt):
         journey_sdk.execute(journey, state=state_file)
 
+    state_payload = json.loads(state_file.read_text(encoding="utf-8"))
+    for record in state_payload["active_case"]["snapshot"]["records"]:
+        record["ok"] = record.pop("status") != "failed"
+    state_file.write_text(json.dumps(state_payload), encoding="utf-8")
+
     report = journey_sdk.execute(journey, state=state_file)
 
     assert events == ["warmup", "poll_1", "poll_2", "finish"]
     assert _record_labels(report.case_reports[0]) == ["warmup", "poll", "finish"]
+    assert _record_statuses(report.case_reports[0]) == [
+        ("warmup", "replayed"),
+        ("poll", "executed"),
+        ("finish", "executed"),
+    ]
     assert state_file.exists()
 
 
@@ -3154,6 +3177,16 @@ def test_execute_rehydrates_step_started_branch_cases_from_anchor_post_exit():
         "prepare",
         "shared_after_anchor",
         "finish_branch_b",
+    ]
+    assert _record_statuses(report.case_reports[0]) == [
+        ("prepare", "executed"),
+        ("shared_after_anchor", "executed"),
+        ("finish_branch_a", "executed"),
+    ]
+    assert _record_statuses(report.case_reports[1]) == [
+        ("prepare", "replayed"),
+        ("shared_after_anchor", "executed"),
+        ("finish_branch_b", "executed"),
     ]
 
 

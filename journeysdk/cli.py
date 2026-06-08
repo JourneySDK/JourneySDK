@@ -45,6 +45,7 @@ from .models import (
     CasePlan,
     ExecutionReport,
     JourneyPlan,
+    NodeExecutionRecord,
     StepNode,
 )
 from .planner import compile_journey
@@ -673,10 +674,10 @@ class _LiveTextReporter(_ExecutionObserver):
     ) -> None:
         self._logger.info(
             "step_start",
-            f"  step {_step_name(node)} attempt={attempt} start",
+            f"  step {_step_name(node)} attempt={attempt} start status=executed",
             pretty=pretty_row(
                 _step_name(node),
-                _pretty_step_detail("start", attempt=attempt),
+                _pretty_step_detail("start executed", attempt=attempt),
                 indent=6,
                 label_width=29,
                 style="context",
@@ -687,6 +688,7 @@ class _LiveTextReporter(_ExecutionObserver):
             step=_step_name(node),
             node_index=node_index,
             attempt=attempt,
+            status="executed",
         )
 
     def on_branch(
@@ -698,7 +700,7 @@ class _LiveTextReporter(_ExecutionObserver):
     ) -> None:
         self._logger.info(
             "branch_select",
-            f"  branch {node.group_id}={node.active_key}",
+            f"  branch {node.group_id}={node.active_key} status=executed",
             pretty=pretty_row(
                 f"branch {node.group_id}",
                 node.active_key,
@@ -712,6 +714,86 @@ class _LiveTextReporter(_ExecutionObserver):
             branch_group=node.group_id,
             branch=node.active_key,
             node_index=node_index,
+            status="executed",
+        )
+
+    def on_step_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: StepNode,
+        node_index: int,
+        record: NodeExecutionRecord,
+    ) -> None:
+        self._logger.info(
+            "step_replay",
+            f"  step {_step_name(node)} replayed",
+            pretty=pretty_row(
+                _step_name(node),
+                "replayed",
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            step=_step_name(node),
+            node_index=node_index,
+            status=record.status,
+        )
+
+    def on_branch_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        node: BranchMarkerNode,
+        node_index: int,
+        record: NodeExecutionRecord,
+    ) -> None:
+        self._logger.info(
+            "branch_replay",
+            f"  branch {node.group_id}={node.active_key} replayed",
+            pretty=pretty_row(
+                f"branch {node.group_id}",
+                f"replayed {node.active_key}",
+                indent=6,
+                label_width=29,
+                style="context",
+            ),
+            file=self._display,
+            journey=self._journey_name,
+            case=case_plan.case_id,
+            branch_group=node.group_id,
+            branch=node.active_key,
+            node_index=node_index,
+            status=record.status,
+        )
+
+    def on_case_replay(
+        self,
+        *,
+        case_plan: CasePlan,
+        report: CaseExecutionReport,
+    ) -> None:
+        self._logger.info(
+            "case_replay",
+            f"- {report.case_id} replay branches={_format_branch_env(case_plan.branch_env)}",
+            pretty=pretty_line(
+                f"    {report.case_id} replay"
+                + (
+                    f"  branches={_format_branch_env(case_plan.branch_env)}"
+                    if case_plan.branch_env
+                    else ""
+                ),
+                style="context",
+            ),
+            file=self._display,
+            journey=self._journey_name,
+            case=report.case_id,
+            branches=_format_branch_env(case_plan.branch_env),
+            steps=_count_step_records(report),
+            status="replayed",
         )
 
     def on_retry(
@@ -766,13 +848,13 @@ class _LiveTextReporter(_ExecutionObserver):
         self._logger.info(
             "step_success",
             (
-                f"  step {_step_name(node)} attempt={attempt} ok "
+                f"  step {_step_name(node)} attempt={attempt} executed "
                 f"duration={_format_duration(duration_seconds)}"
             ),
             pretty=pretty_row(
                 _step_name(node),
                 _pretty_step_detail(
-                    "ok",
+                    "executed",
                     attempt=attempt,
                     duration=_format_duration(duration_seconds),
                 ),
@@ -787,6 +869,7 @@ class _LiveTextReporter(_ExecutionObserver):
             node_index=node_index,
             attempt=attempt,
             duration=_format_duration(duration_seconds),
+            status="executed",
         )
 
     def on_step_failure(
@@ -821,6 +904,7 @@ class _LiveTextReporter(_ExecutionObserver):
             attempt=attempt,
             duration=_format_duration(duration_seconds),
             error=_format_exception(error),
+            status="failed",
         )
 
     def on_step_interrupted(
@@ -855,6 +939,7 @@ class _LiveTextReporter(_ExecutionObserver):
             attempt=attempt,
             duration=_format_duration(duration_seconds),
             error=_format_exception(error),
+            status="failed",
         )
 
     def on_case_complete(
@@ -1254,7 +1339,7 @@ def _step_stop_status(paused: _PausedExecution, *, verb: str) -> str:
     if paused.paused_step.ok:
         return (
             f"Development mode {action} after step "
-            f"{step_name} attempt={paused.paused_step.attempt} ok."
+            f"{step_name} attempt={paused.paused_step.attempt} executed."
         )
     if paused.paused_step.error:
         return (

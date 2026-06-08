@@ -61,7 +61,7 @@ def test_first_journey_readme_commands(
     assert "Execution" in execute_output
     assert "docs/first_journey/first_journey.py:first_journey" in execute_output
     assert "create_customer_profile" in execute_logs
-    assert "ok attempt=1 duration=" in execute_logs
+    assert "executed attempt=1 duration=" in execute_logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
 
@@ -150,7 +150,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
     logs = capture.out
 
     assert exit_code == 0
-    assert "Development mode stopped after step queue_manual_review_signup attempt=1 ok." in logs
+    assert "Development mode stopped after step queue_manual_review_signup attempt=1 executed." in logs
     assert "Summary: develop-step queue_manual_review_signup stopped after target, 0 failed" in output
 
 
@@ -173,7 +173,7 @@ def test_retry_readme_commands_show_retry_behavior(
     assert exit_code == 0
     assert "Warning: wait_for_same_step retry after" in output
     assert "wait_for_same_step" in output
-    assert "ok attempt=2 duration=" in output
+    assert "executed attempt=2 duration=" in output
 
     exit_code = main(
         [
@@ -186,8 +186,8 @@ def test_retry_readme_commands_show_retry_behavior(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "issue_report_request" in output
-    assert "start attempt=1" in output
-    assert "start attempt=2" in output
+    assert "start executed attempt=1" in output
+    assert "start executed attempt=2" in output
 
     exit_code = main(
         [
@@ -200,8 +200,8 @@ def test_retry_readme_commands_show_retry_behavior(
     output = capsys.readouterr().out
     assert exit_code == 0
     assert "refresh_status_cache" in output
-    assert "start attempt=1" in output
-    assert "start attempt=2" in output
+    assert "start executed attempt=1" in output
+    assert "start executed attempt=2" in output
 
 
 def test_resume_readme_commands_interrupt_then_resume(
@@ -244,7 +244,7 @@ def test_resume_readme_commands_interrupt_then_resume(
     assert INTERRUPT_PROMPT_PREFIX in first_error
     assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_error
     assert "wait_for_resume_signal" in first_error
-    assert "ok attempt=1 duration=" in first_error
+    assert "executed attempt=1 duration=" in first_error
 
     second_exit = main(
         [
@@ -260,9 +260,9 @@ def test_resume_readme_commands_interrupt_then_resume(
     assert "case_1 resume" in second_error
     assert "load_support_ticket" in second_error
     assert "wait_for_resume_signal" in second_error
-    assert "start attempt=2" in second_error
+    assert "start executed attempt=2" in second_error
     assert "assert_resumed_ticket" in second_error
-    assert "ok attempt=1 duration=" in second_error
+    assert "executed attempt=1 duration=" in second_error
     assert "The journey finished." in second_error
 
 
@@ -291,7 +291,7 @@ def test_cloud_webhook_readme_commands(
     assert "docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in execute_output
     assert "get_webhook_invoice_paid" in execute_logs
     assert "receive_webhook_invoice_paid" in execute_logs
-    assert "ok attempt=1 duration=" in execute_logs
+    assert "executed attempt=1 duration=" in execute_logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
 
@@ -345,7 +345,7 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
         assert "Interrupted: Journey execution was interrupted before it finished." in first_output
         assert "Ctrl-C received. Finishing the active step so Journey can save progress." in first_error
         assert "continue_authenticated_dashboard" in first_error
-        assert "ok attempt=1 duration=" in first_error
+        assert "executed attempt=1 duration=" in first_error
         assert "Signed in and returned JourneyBrowserPage" in first_error
         assert INTERRUPT_PROMPT_PREFIX in first_error
 
@@ -364,9 +364,9 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
     assert second_exit == 0
     assert "case_1 resume" in second_error
     assert "continue_authenticated_dashboard" in second_error
-    assert "start attempt=2" in second_error
+    assert "start executed attempt=2" in second_error
     assert "assert_protected_action_complete" in second_error
-    assert "ok attempt=1 duration=" in second_error
+    assert "executed attempt=1 duration=" in second_error
     assert "The protected action completed." in second_error
 
 
@@ -399,5 +399,5 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
 
     assert fail_fast_exit == 1
     assert "docs/fail_fast_journeys/fail_fast_journeys.py:good_demo_journey" in fail_fast_output
-    assert "finish_successfully                       start attempt=" not in fail_fast_output
+    assert "finish_successfully                       start executed attempt=" not in fail_fast_output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed" in fail_fast_output
