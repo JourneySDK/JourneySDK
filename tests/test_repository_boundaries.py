@@ -193,14 +193,15 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
     for phrase in required_phrases:
         assert phrase in body
     assert "--plan-only" not in body
-    assert "--debug-plan" not in body
+    removed_plan_inspection_flag = "--" + "debug" + "-plan"
+    assert removed_plan_inspection_flag not in body
 
     for target in ("codex", "claude", "cursor", "generic"):
         rendered = render_agent_instructions(target)
         for phrase in required_phrases:
             assert phrase in rendered
         assert "--plan-only" not in rendered
-        assert "--debug-plan" not in rendered
+        assert removed_plan_inspection_flag not in rendered
 
 
 def test_agent_instruction_template_defines_step_scope_by_boundary_value() -> None:

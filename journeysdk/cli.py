@@ -389,8 +389,7 @@ def _default_hint_for_error(error: _CommandError) -> str:
     if error.phase == "plan":
         return (
             "Fix the journey file import, decorator, branch, or step structure, "
-            "then rerun the command or add `--debug-plan` to inspect planning "
-            "without executing steps."
+            "then rerun the Journey command so it executes the selected flow."
         )
     if error.phase == "execute":
         return (
@@ -418,7 +417,7 @@ def _default_instructions_for_error(error: _CommandError) -> str:
         return (
             "Planning failed before Journey could execute steps. Read the "
             "`What happened` line, fix the selected journey file or target, and "
-            "rerun with `--debug-plan` when you need to validate labels and cases."
+            "rerun the Journey command to verify the journey with execution."
         )
     if error.phase == "execute":
         return (
@@ -459,7 +458,7 @@ def _default_next_commands_for_error(root: Path, error: _CommandError) -> tuple[
     commands: list[str] = list(error.next_commands)
     if error.phase == "plan":
         if error.file is not None or error.journey_name is not None:
-            commands.append(_target_selection_command(root, error, "--debug-plan"))
+            commands.append(_target_selection_command(root, error))
         else:
             commands.append("journey --help")
     elif error.phase == "execute":
@@ -2116,25 +2115,6 @@ def _emit_execute_output(
     )
 
 
-def _emit_debug_plan_output(
-    root: Path,
-    compiled: list[_CompiledJourney],
-    errors: list[_CommandError],
-) -> None:
-    _CLI_LOGGER.info(
-        "debug_plan_complete",
-        "debug-plan mode completed without execution",
-        pretty=pretty_line(
-            "Debug-plan mode: execution skipped.",
-            indent=2,
-            style="muted",
-        ),
-        root=str(root),
-        journeys=len(compiled),
-        failures=len(errors),
-    )
-
-
 def _emit_execution_section() -> None:
     _CLI_LOGGER.info(
         "execution_section",
@@ -2195,9 +2175,6 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         error = _error_from_exception(exc, phase="plan")
         root = Path.cwd().resolve()
         _emit_plan_output(root, [], [error])
-        if args.debug_plan:
-            _emit_debug_plan_output(root, [], [error])
-            return 1
         _emit_execution_section()
         _emit_execute_output(
             root,
@@ -2218,16 +2195,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     )
     errors.extend(compile_errors)
 
-    if args.debug_plan and compiled and not (args.fail_fast and errors):
-        target_step = args.develop_step or args.step
-        if target_step is not None:
-            _, target_errors = _select_targeted_journey(compiled, step=target_step)
-            errors.extend(target_errors)
-
     _emit_plan_output(root, compiled, errors)
-    if args.debug_plan:
-        _emit_debug_plan_output(root, compiled, errors)
-        return 0 if not errors else 1
 
     _emit_execution_section()
 
@@ -3861,8 +3829,6 @@ def build_parser() -> argparse.ArgumentParser:
             "  - For touchpoint APIs, run `journey --touchpoint-docs browser|docker|email|webhook|http|all`.\n"
             "\n"
             "Command selection:\n"
-            "  journey --file journeys/<feature>_journey.py --debug-plan\n"
-            "      Compile and print cases/labels without executing steps.\n"
             "  journey --file journeys/<feature>_journey.py --develop-step <step_label>\n"
             "      Focus the edit loop on one target step and reuse default persistent state.\n"
             "  journey --file journeys/<feature>_journey.py --step <step_label> --no-state\n"
@@ -3897,11 +3863,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--interactive",
         action="store_true",
         help="Prompt to continue or retry after each --develop-step pause",
-    )
-    parser.add_argument(
-        "--debug-plan",
-        action="store_true",
-        help="Debug journey planning by printing compiled cases and exiting without executing steps",
     )
     parser.add_argument(
         "--no-state",
@@ -4043,8 +4004,6 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(args.log_level, output_format=args.output)
     if args.touchpoint_docs is not None:
         return _cmd_touchpoint_docs(args)
-    if args.debug_plan and args.interactive:
-        parser.error("--interactive cannot be used with --debug-plan")
     if args.interactive and getattr(args, "develop_step", None) is None:
         parser.error("--interactive requires --develop-step")
     return _cmd_execute(args)

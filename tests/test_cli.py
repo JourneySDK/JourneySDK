@@ -230,7 +230,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
             "--no-memory",
             "--no-memory-update",
             "--no-browser-recording",
-            "--debug-plan",
         ]
     )
     assert execute_args.file == "journeys.py"
@@ -244,7 +243,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert execute_args.no_memory is True
     assert execute_args.no_memory_update is True
     assert execute_args.no_browser_recording is True
-    assert execute_args.debug_plan is True
 
     with pytest.raises(SystemExit) as exc_info:
         parser.parse_args(["--plan-only"])
@@ -299,6 +297,9 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
         parser.parse_args(["--step", "target", "--develop-step", "target"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--json"])
+    removed_plan_inspection_flag = "--" + "debug" + "-plan"
+    with pytest.raises(SystemExit):
+        parser.parse_args([removed_plan_inspection_flag])
     with pytest.raises(SystemExit):
         parser.parse_args(["--agent-instructions", "codex"])
     with pytest.raises(SystemExit):
@@ -324,6 +325,8 @@ def test_help_outputs_include_agentic_command_manual():
     assert "Coding-agent command manual" in root_help
     assert "Self-healing loop" in root_help
     assert "journey logs --help" in root_help
+    removed_plan_inspection_flag = "--" + "debug" + "-plan"
+    assert removed_plan_inspection_flag not in root_help
     assert "Coding-agent log loop" in logs_help
     assert "journey logs --list-scopes" in logs_help
     assert "Recovery:" in logs_help
@@ -708,87 +711,16 @@ def test_execute_interactive_requires_develop_step(
     assert captured.err == ""
 
 
-def test_execute_debug_plan_compiles_without_running_steps(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_execute_removed_plan_inspection_flag_is_rejected(
     capsys: pytest.CaptureFixture[str],
 ):
-    events_file = tmp_path / "events.log"
-    _write(
-        tmp_path / "flow.py",
-        f"""
-        import journeysdk as journey
-        from pathlib import Path
-
-        EVENTS = Path({str(events_file)!r})
-
-        def run_target():
-            EVENTS.write_text("ran", encoding="utf-8")
-            return True
-
-        @journey.journey
-        def flow():
-            journey.step(run_target)
-        """,
-    )
-
-    monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--debug-plan"])
-
-    captured = capsys.readouterr()
-    output = captured.out
-    assert exit_code == 0
-    assert "Plan" in output
-    assert "run_target" in output
-    assert "Debug-plan mode: execution skipped." in output
-    assert "Execution" not in output
-    assert not events_file.exists()
-
-
-def test_execute_debug_plan_validates_requested_step_without_running(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-):
-    events_file = tmp_path / "events.log"
-    _write(
-        tmp_path / "flow.py",
-        f"""
-        import journeysdk as journey
-        from pathlib import Path
-
-        EVENTS = Path({str(events_file)!r})
-
-        def run_target():
-            EVENTS.write_text("ran", encoding="utf-8")
-            return True
-
-        @journey.journey
-        def flow():
-            journey.step(run_target)
-        """,
-    )
-
-    monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--debug-plan", "--step", "missing"])
-
-    output = capsys.readouterr().out
-    assert exit_code == 1
-    assert "Step label 'missing' was not found in the selected journey." in output
-    assert "Debug-plan mode: execution skipped." in output
-    assert "Execution" not in output
-    assert not events_file.exists()
-
-
-def test_execute_debug_plan_rejects_interactive_mode(
-    capsys: pytest.CaptureFixture[str],
-):
+    removed_plan_inspection_flag = "--" + "debug" + "-plan"
     with pytest.raises(SystemExit) as exc_info:
-        main(["--debug-plan", "--develop-step", "target", "--interactive"])
+        main([removed_plan_inspection_flag])
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "--interactive cannot be used with --debug-plan" in captured.out
+    assert f"unrecognized arguments: {removed_plan_inspection_flag}" in captured.out
     assert captured.err == ""
 
 
@@ -2920,6 +2852,10 @@ def test_execute_continues_and_summarizes_compile_failures_by_default(
     assert exit_code == 1
     assert "good.py:good" in output
     assert "Error:" in output
+    assert "Next commands:" in output
+    assert "journey --file broken.py --journey broken" in output
+    removed_plan_inspection_flag = "--" + "debug" + "-plan"
+    assert removed_plan_inspection_flag not in output
     assert "Summary: 1 journey planned, 1 case planned, 1 failed" in output
     assert "Execution" in output
     assert "Summary: 1 journey executed, 1 case executed, 1 failed" in output
