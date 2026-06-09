@@ -203,6 +203,33 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
         assert "--debug-plan" not in rendered
 
 
+def test_agent_instruction_template_defines_step_scope_by_replayable_operation() -> None:
+    body = (
+        resources.files("journeysdk.agent_templates")
+        .joinpath("instructions.md")
+        .read_text(encoding="utf-8")
+    )
+
+    required_phrases = (
+        "one whole replayable operation",
+        "Choose step scope by replay behavior, not by function-name patterns",
+        "safe and meaningful to rerun from the function start repeatedly",
+        "perform the full operation, wait or poll as needed, verify the operation's outcome",
+        "If actions must always be rerun together to recover correctly",
+        "Do not model one branch outcome as separate start interaction, confirm, and check behavior steps",
+        "Put retry on the whole replayable operation",
+        "Split steps only when each boundary is independently useful",
+    )
+
+    for phrase in required_phrases:
+        assert phrase in body
+
+    for target in ("codex", "claude", "cursor", "generic"):
+        rendered = render_agent_instructions(target)
+        for phrase in required_phrases:
+            assert phrase in rendered
+
+
 def test_local_markdown_links_in_public_doc_entrypoints_resolve() -> None:
     entrypoints = (
         _public_root() / "README.md",

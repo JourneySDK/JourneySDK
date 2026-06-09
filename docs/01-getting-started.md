@@ -14,9 +14,11 @@ one journey when you need script-friendly JSONL output.
 - Treat every step as an execution boundary. Only explicit replay boundaries store rehydratable state:
   `branch(start_from=...)` and steps with a positive `retry=...`.
 - A step earns its checkpoint. Do not make a step for every click, form fill, poll, helper call, or assertion.
-- Size steps around durable procedures, not individual clicks, API calls, and assertions. A step should usually perform
-  one end-to-end piece of the user journey and verify the outcome it owns, especially when Docker or browser
-  touchpoints make replay boundaries expensive.
+- Size steps around replayable operations, not individual clicks, API calls, and assertions. A step should usually
+  accept explicit prior state, perform one end-to-end piece of the user journey, wait as needed, verify the outcome it
+  owns, and return only state that later operations need.
+- If actions must always be rerun together to recover correctly, keep them in the same step or in helpers called by
+  that step.
 - Use touchpoints when a step needs to interact with another system, such as a browser, inbox, webhook endpoint, CRM,
   payment provider, or back-office process.
 - Use `journey` to compile and run the authored flow as linear executable cases.

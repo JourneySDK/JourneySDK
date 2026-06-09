@@ -82,13 +82,16 @@ def changedetection_core_journey() -> None:
 
 ## Use Steps
 
-- Each `step(...)` should encapsulate a meaningful, retryable part of the user journey, such as `clear_basket_and_add_items`, `submit_order_and_verify_confirmation`, or `receive_confirmation_email`.
+- Each `step(...)` should encapsulate one whole replayable operation in the user journey, such as `clear_basket_and_add_items`, `submit_order_and_verify_confirmation`, or `receive_confirmation_email`.
+- Choose step scope by replay behavior, not by function-name patterns. A step should be safe and meaningful to rerun from the function start repeatedly: accept explicit prior state, perform the full operation, wait or poll as needed, verify the operation's outcome, and return only state that later operations need.
 - A step earns a checkpoint. Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
 - Avoid tiny implementation fragments like `click_button`, `fill_form`, or `assert_text` unless that action is itself the durable user-journey boundary.
 - Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
-- Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or `change_page_and_wait_for_detection`.
+- If actions must always be rerun together to recover correctly, keep them in one step or in helpers called by that step.
+- Do not model one branch outcome as separate start interaction, confirm, and check behavior steps when recovery would rerun them together. Model one terminal branch operation that drives the app to the confirmed outcome and verifies the branch-specific behavior before returning.
 - Put assertions inside the user-flow step that owns the outcome when they are not useful independent replay anchors.
-- Put retry on the async user-flow boundary, not on many tiny follow-up checks.
+- Put retry on the whole replayable operation, not on a trailing wait or assertion phase split away from the action that produced the state.
+- Split steps only when each boundary is independently useful for targeting, branch replay, retry from a stable checkpoint, or passing durable state to later operations.
 - Prefer explicit top-level step functions over lambdas or nested closures.
 - Step function names are stable CLI labels used by `--step`, `--develop-step`, state files, retries, and branch replay. Rename them only when updating those references intentionally.
 - Pass concrete dependencies and previous step results as explicit arguments.

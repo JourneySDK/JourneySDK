@@ -19,16 +19,19 @@ journey files into infrastructure harnesses: subprocess management, embedded HTT
 files, ports, datastore cleanup, and similar plumbing should stay outside the journey spec. Use the shortest
 deterministic route that proves the real user journey.
 
-Each `step(...)` should encapsulate a meaningful, retryable part of the user journey. A step is a checkpoint that may
-be targeted, retried, stored, or used as a branch replay anchor, so it should earn that checkpoint. Prefer names like
-`clear_basket_and_add_items`, `submit_order`, or `receive_confirmation_email` over tiny fragments such as `click_button`.
-Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and branch replay.
+Each `step(...)` should encapsulate a meaningful, retryable operation in the user journey. A step is a checkpoint that
+may be targeted, retried, stored, or used as a branch replay anchor, so it should earn that checkpoint. Prefer names
+like `clear_basket_and_add_items`, `submit_order`, or `receive_confirmation_email` over tiny fragments such as
+`click_button`. Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and
+branch replay.
 
 Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
 Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
-Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or
+Choose step scope by replay behavior: a step should be safe and meaningful to rerun from the function start repeatedly,
+perform the full operation, wait as needed, verify the outcome it owns, and return only state that later operations
+need. Group actions that are always repeated together into one user-flow step, such as `create_watch_for_demo_page` or
 `change_page_and_wait_for_detection`; put the assertions for that outcome inside the same step.
-Put retry on the async user-flow boundary, not on many tiny follow-up checks.
+Put retry on the whole replayable operation, not on many tiny follow-up checks.
 
 Use `branch(...)` for alternate user paths after shared setup. Use `branch(start_from=step_result)` when later branch
 cases should restart from a saved step boundary instead of repeating every shared setup step. Choose `start_from` as the

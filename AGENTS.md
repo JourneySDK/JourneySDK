@@ -26,6 +26,6 @@ For every SDK change, review and align the public docs and instruction surfaces 
 Claude skill, Cursor, and generic assistant instructions. If no doc update is needed, report that the relevant surfaces
 were reviewed.
 
-When authoring or reviewing journeys, treat each `step(...)` as a durable replay, retry, target, or state-passing
-boundary. Do not split one real user outcome into separate click/form-fill/poll/assertion steps; put those details in a
-helper and expose one coarse user-flow step.
+When authoring or reviewing journeys, treat each `step(...)` as a whole replayable operation boundary: safe and
+meaningful to rerun from the function start, with internal clicks, fills, polls, waits, and assertions kept together
+when they must recover together. Use separate steps only for durable replay, retry, target, or state-passing boundaries.
