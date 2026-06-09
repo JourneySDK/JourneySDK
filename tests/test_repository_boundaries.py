@@ -203,7 +203,7 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
         assert "--debug-plan" not in rendered
 
 
-def test_agent_instruction_template_defines_step_scope_by_replayable_operation() -> None:
+def test_agent_instruction_template_defines_step_scope_by_boundary_value() -> None:
     body = (
         resources.files("journeysdk.agent_templates")
         .joinpath("instructions.md")
@@ -211,14 +211,14 @@ def test_agent_instruction_template_defines_step_scope_by_replayable_operation()
     )
 
     required_phrases = (
-        "one whole replayable operation",
-        "Choose step scope by replay behavior, not by function-name patterns",
-        "safe and meaningful to rerun from the function start repeatedly",
-        "perform the full operation, wait or poll as needed, verify the operation's outcome",
-        "If actions must always be rerun together to recover correctly",
-        "Do not model one branch outcome as separate start interaction, confirm, and check behavior steps",
-        "Put retry on the whole replayable operation",
-        "Split steps only when each boundary is independently useful",
+        "intentional replay boundary",
+        "Choose step scope by recovery value, not by function-name patterns",
+        "would this be a meaningful place to restart from the function start",
+        "Every step boundary has a cost",
+        "state binding, log scope, invalidation/replay decision, and possible rehydration",
+        "Do not split merely to freeze intermediate state for assertion or prompt tuning",
+        "Put retry on the operation whose rerun semantics match real recovery",
+        "Split only when the intermediate result is independently useful",
     )
 
     for phrase in required_phrases:

@@ -82,16 +82,13 @@ def changedetection_core_journey() -> None:
 
 ## Use Steps
 
-- Each `step(...)` should encapsulate one whole replayable operation in the user journey, such as `clear_basket_and_add_items`, `submit_order_and_verify_confirmation`, or `receive_confirmation_email`.
-- Choose step scope by replay behavior, not by function-name patterns. A step should be safe and meaningful to rerun from the function start repeatedly: accept explicit prior state, perform the full operation, wait or poll as needed, verify the operation's outcome, and return only state that later operations need.
-- A step earns a checkpoint. Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
-- Avoid tiny implementation fragments like `click_button`, `fill_form`, or `assert_text` unless that action is itself the durable user-journey boundary.
-- Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
-- If actions must always be rerun together to recover correctly, keep them in one step or in helpers called by that step.
-- Do not model one branch outcome as separate start interaction, confirm, and check behavior steps when recovery would rerun them together. Model one terminal branch operation that drives the app to the confirmed outcome and verifies the branch-specific behavior before returning.
-- Put assertions inside the user-flow step that owns the outcome when they are not useful independent replay anchors.
-- Put retry on the whole replayable operation, not on a trailing wait or assertion phase split away from the action that produced the state.
-- Split steps only when each boundary is independently useful for targeting, branch replay, retry from a stable checkpoint, or passing durable state to later operations.
+- Each `step(...)` is an intentional replay boundary for one whole operation in the user journey, such as `clear_basket_and_add_items`, `submit_order_and_verify_confirmation`, or `receive_confirmation_email`.
+- Choose step scope by recovery value, not by function-name patterns. Before splitting, ask: would this be a meaningful place to restart from the function start, is the state stable and durable enough to restore, and is restoring it cheaper or more correct than recreating it?
+- Every step boundary has a cost: another label, state binding, log scope, invalidation/replay decision, and possible rehydration. External or rehydratable state makes the cost more visible, but the rule applies to all steps.
+- Do not wrap every click, form fill, setup call, poll, or assertion as its own step. If actions must recover together, keep them in one step or in helpers called by that step.
+- Do not split merely to freeze intermediate state for assertion or prompt tuning. Keep the suffix with the operation when it only completes or verifies the outcome produced by that operation.
+- Put retry on the operation whose rerun semantics match real recovery, not on a trailing wait or assertion suffix carved away from the action that produced the state.
+- Split only when the intermediate result is independently useful as a target, retry point, branch replay anchor, or durable value passed to later operations.
 - Prefer explicit top-level step functions over lambdas or nested closures.
 - Step function names are stable CLI labels used by `--step`, `--develop-step`, state files, retries, and branch replay. Rename them only when updating those references intentionally.
 - Pass concrete dependencies and previous step results as explicit arguments.
