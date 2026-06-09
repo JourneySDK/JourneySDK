@@ -13,7 +13,7 @@ from threading import Lock
 from typing import Any, Literal, Sequence, TextIO, TypeAlias
 
 JourneyLogLevel = Literal["debug", "info", "warning", "error", "off"]
-JourneyOutputFormat = Literal["pretty", "structured", "jsonl"]
+JourneyOutputFormat = Literal["pretty", "jsonl"]
 PrettyStyle = Literal[
     "default",
     "heading",
@@ -41,8 +41,7 @@ _LEVEL_NAMES: dict[JourneyLogLevel, str] = {
     "error": "ERROR",
     "off": "OFF",
 }
-_OUTPUT_FORMATS: set[JourneyOutputFormat] = {"pretty", "structured", "jsonl"}
-_SAFE_VALUE_RE = re.compile(r"^[A-Za-z0-9_.:/@+-]+$")
+_OUTPUT_FORMATS: set[JourneyOutputFormat] = {"pretty", "jsonl"}
 _PASSWORD_QUOTED_RE = re.compile(r"(?i)(password\s*)([\"'])(.*?)(\2)")
 _PASSWORD_BARE_RE = re.compile(r"(?i)(password\s+)(?![\"'])([^\s,;.)]+)")
 _SENSITIVE_FIELD_FRAGMENTS = (
@@ -95,7 +94,7 @@ class PrettyLine:
 
 @dataclass(frozen=True)
 class JourneyLogRecord:
-    """One JSON-safe structured Journey diagnostic record."""
+    """One JSON-safe Journey diagnostic record."""
 
     level: JourneyLogLevel
     component: str
@@ -202,15 +201,6 @@ class JourneyLogger:
                 default=str,
                 separators=(",", ":"),
             )
-        elif output_format == "structured":
-            line = _format_log_line(
-                timestamp=timestamp,
-                level=level,
-                component=self._component,
-                event=normalized_event,
-                message=str(message),
-                fields=fields,
-            )
         else:
             line = _format_pretty_line(
                 level=level,
@@ -252,7 +242,7 @@ def get_logger(component: str) -> JourneyLogger:
 def capture_log_records(
     sink: Callable[[dict[str, object]], None],
 ) -> Iterator[None]:
-    """Send every Journey structured log record to a process-local sink."""
+    """Send every Journey diagnostic log record to a process-local sink."""
 
     with _capture_lock:
         _capture_sinks.append(sink)
@@ -325,52 +315,6 @@ def pretty_row(
             continuation_prefix=" " * len(first_prefix),
         ),
         style,
-    )
-
-
-def _format_log_line(
-    *,
-    timestamp: str,
-    level: JourneyLogLevel,
-    component: str,
-    event: str,
-    message: str,
-    fields: dict[str, object],
-) -> str:
-    parts = [
-        "[journey]",
-        f"time={timestamp}",
-        f"level={_LEVEL_NAMES[level]}",
-        f"component={_format_value(component)}",
-        f"event={_format_value(event)}",
-        f"message={_format_value(message)}",
-    ]
-    for key in sorted(fields):
-        parts.append(f"{key}={_format_field_value(key, fields[key])}")
-    return " ".join(parts)
-
-
-def _format_json_line(
-    *,
-    timestamp: str,
-    level: JourneyLogLevel,
-    component: str,
-    event: str,
-    message: str,
-    fields: dict[str, object],
-) -> str:
-    return json.dumps(
-        _json_record_dict(
-            timestamp=timestamp,
-            level=level,
-            component=component,
-            event=event,
-            message=message,
-            fields=fields,
-        ),
-        ensure_ascii=True,
-        default=str,
-        separators=(",", ":"),
     )
 
 
@@ -589,12 +533,6 @@ def _format_timestamp() -> str:
     )
 
 
-def _format_field_value(key: str, value: object) -> str:
-    if _is_sensitive_field(key):
-        return _format_value("[redacted]")
-    return _format_value(value)
-
-
 def _json_field_value(key: str, value: object) -> object:
     if _is_sensitive_field(key):
         return "[redacted]"
@@ -612,19 +550,6 @@ def _json_safe_value(value: object) -> object:
     if isinstance(value, list | tuple):
         return [_json_safe_value(item) for item in value]
     return str(value)
-
-
-def _format_value(value: object) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return str(value)
-    text = str(value)
-    if _SAFE_VALUE_RE.fullmatch(text):
-        return text
-    return json.dumps(text, ensure_ascii=True)
 
 
 def _is_sensitive_field(key: str) -> bool:

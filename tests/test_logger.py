@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from io import StringIO
 from pathlib import Path
-import re
 
 import pytest
 
@@ -104,11 +103,12 @@ def test_logger_pretty_false_suppresses_only_pretty_output(
     assert captured.out == ""
     assert captured.err == ""
 
-    configure_logging("info", output_format="structured")
+    configure_logging("info", output_format="jsonl")
     logger.info("event_name", "machine message", pretty=False, detail="value")
     captured = capsys.readouterr()
-    assert "message=\"machine message\"" in captured.out
-    assert "detail=value" in captured.out
+    record = json.loads(captured.out)
+    assert record["message"] == "machine message"
+    assert record["detail"] == "value"
     assert "pretty" not in captured.out
 
 
@@ -188,8 +188,8 @@ def test_logger_styles_pretty_output_for_tty_streams() -> None:
     assert "\x1b[31mError: prepare failed\x1b[0m" in output
 
 
-def test_logger_writes_structured_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
-    configure_logging("info", output_format="structured")
+def test_logger_writes_jsonl_format_to_current_stdout(capsys: pytest.CaptureFixture[str]):
+    configure_logging("info", output_format="jsonl")
 
     get_logger("component").info(
         "event_name",
@@ -202,16 +202,18 @@ def test_logger_writes_structured_format_to_current_stdout(capsys: pytest.Captur
     )
 
     captured = capsys.readouterr()
-    output = captured.out.strip()
+    record = json.loads(captured.out)
     assert captured.err == ""
-    assert "pretty" not in output
-    assert "Human only" not in output
-    assert re.match(
-        r'^\[journey\] time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z '
-        r'level=INFO component=component event=event_name message="starting step" '
-        r"attempt=1 case=case_1 journey=flow step=prepare$",
-        output,
-    )
+    assert "pretty" not in captured.out
+    assert "Human only" not in captured.out
+    assert record["level"] == "INFO"
+    assert record["component"] == "component"
+    assert record["event"] == "event_name"
+    assert record["message"] == "starting step"
+    assert record["attempt"] == 1
+    assert record["case"] == "case_1"
+    assert record["journey"] == "flow"
+    assert record["step"] == "prepare"
 
 
 def test_logger_respects_level_filtering_and_off(capsys: pytest.CaptureFixture[str]):
@@ -242,17 +244,18 @@ def test_logger_accepts_configured_stream_and_flushes() -> None:
             super().flush()
 
     stream = FlushRecordingStream()
-    configure_logging("debug", stream=stream, output_format="structured")
+    configure_logging("debug", stream=stream, output_format="jsonl")
 
     get_logger("component").debug("cli_start", "running command", command="docker ps")
 
+    record = json.loads(stream.getvalue())
     assert stream.flush_count == 1
-    assert "level=DEBUG" in stream.getvalue()
-    assert 'command="docker ps"' in stream.getvalue()
+    assert record["level"] == "DEBUG"
+    assert record["command"] == "docker ps"
 
 
 def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
-    configure_logging("info", output_format="structured")
+    configure_logging("info", output_format="jsonl")
 
     get_logger("component").info(
         "request_start",
@@ -264,13 +267,14 @@ def test_logger_redacts_sensitive_fields(capsys: pytest.CaptureFixture[str]):
     )
 
     output = capsys.readouterr().out
+    record = json.loads(output)
     assert "secret-api-key" not in output
     assert "Bearer token" not in output
     assert "secret-password" not in output
-    assert 'api_key="[redacted]"' in output
-    assert 'authorization="[redacted]"' in output
-    assert 'password="[redacted]"' in output
-    assert "route=/v1/test" in output
+    assert record["api_key"] == "[redacted]"
+    assert record["authorization"] == "[redacted]"
+    assert record["password"] == "[redacted]"
+    assert record["route"] == "/v1/test"
 
 
 def test_logger_redacts_sensitive_fields_in_pretty(capsys: pytest.CaptureFixture[str]):

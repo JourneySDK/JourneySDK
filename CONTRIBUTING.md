@@ -101,8 +101,8 @@ put that validation in the helper module owned by the feature and register it as
 ## Logger API
 
 Journey-owned output must go through `journeysdk.logger`; do not use direct `print(...)` calls for SDK, CLI, touchpoint, or
-tutorial diagnostics. The logger owns levels, stdout routing, redaction, `pretty` / `structured` / `jsonl` formatting,
-and `--log-level off` suppression.
+tutorial diagnostics. The logger owns levels, stdout routing, redaction, `pretty` / `jsonl` formatting, and
+`--log-level off` suppression.
 
 Keep dependency direction one-way: SDK modules may depend on `journeysdk.logger`, but `logger.py` must not know about
 CLI, executor, Playwright, Docker, email, webhook, or cloud event names. Each module that emits an event owns its own
@@ -121,11 +121,11 @@ _LOGGER.info(
 )
 ```
 
-Use `message` and keyword fields for machine-readable data. `--output structured` and `--output jsonl` include the
-event name, message, and fields, but never the `pretty=` value. Use `pretty=` only for human console rendering:
+Use `message` and keyword fields for machine-readable data. `--output jsonl` includes the event name, message, and
+fields, but never the `pretty=` value. Use `pretty=` only for human console rendering:
 
 - `pretty=None` lets the logger render a generic line from `message` plus fields.
-- `pretty=False` suppresses that event in `pretty` mode while preserving `structured` and `jsonl`.
+- `pretty=False` suppresses that event in `pretty` mode while preserving `jsonl`.
 - `pretty="text"` emits one human line.
 - `pretty_line(...)` and `pretty_row(...)` emit styled, aligned human lines; pass a list for multi-line output.
 

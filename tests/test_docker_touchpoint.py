@@ -1758,7 +1758,7 @@ def test_store_docker_debug_logs_snapshot_phase_timings(
     assert isinstance(volume_record["duration_ms"], int | float)
 
 
-def test_store_docker_structured_info_hides_snapshot_phase_events(
+def test_store_docker_jsonl_info_hides_snapshot_phase_events(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1767,16 +1767,18 @@ def test_store_docker_structured_info_hides_snapshot_phase_events(
     runtime = _FakeDockerRuntime()
     monkeypatch.setattr(journey_docker, "_run_cli", runtime)
 
-    configure_logging("info", output_format="structured")
+    configure_logging("info", output_format="jsonl")
     try:
         journey_docker.store_docker(stack, snapshot_name="after_boot")
     finally:
         configure_logging("info")
 
-    output = capsys.readouterr().out
-    assert "event=snapshot_store_success" in output
-    assert "event=snapshot_store_volume_payload_success" not in output
-    assert "event=snapshot_store_manifest_write_success" not in output
+    events = {
+        record["event"] for record in _docker_jsonl_records(capsys.readouterr().out)
+    }
+    assert "snapshot_store_success" in events
+    assert "snapshot_store_volume_payload_success" not in events
+    assert "snapshot_store_manifest_write_success" not in events
 
 
 def test_store_docker_pretty_logs_compact_snapshot_summary(

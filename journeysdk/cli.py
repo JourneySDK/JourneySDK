@@ -3751,7 +3751,7 @@ def build_logs_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        choices=("pretty", "structured", "jsonl"),
+        choices=("pretty", "jsonl"),
         default="pretty",
         help="Set Journey output format (default: pretty)",
     )
@@ -3802,7 +3802,7 @@ def build_agent_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        choices=("pretty", "structured", "jsonl"),
+        choices=("pretty", "jsonl"),
         default="pretty",
         help="Set Journey output format (default: pretty)",
     )
@@ -3896,7 +3896,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        choices=("pretty", "structured", "jsonl"),
+        choices=("pretty", "jsonl"),
         default="pretty",
         help="Set Journey output format (default: pretty)",
     )
@@ -3939,7 +3939,7 @@ def _preconfigure_logging(argv: list[str]) -> None:
         or "info"
     )
     output = _extract_option_value(argv, "--output")
-    output_format = output if output in {"pretty", "structured", "jsonl"} else "pretty"
+    output_format = output if output in {"pretty", "jsonl"} else "pretty"
     try:
         configure_logging(level, output_format=output_format)  # type: ignore[arg-type]
     except ValueError:

@@ -89,9 +89,9 @@ Plan
 ```
 
 The important part is not the formatting. The important part is that Journey routes plan summaries, execution results,
-and every step boundary through one logger-owned stdout stream. Use `--output structured` for logfmt-style fields,
-`--output jsonl` for one parseable JSON object per line, `--log-level off` to suppress all Journey-owned output, or
-`--log-level debug` for more detail.
+and every step boundary through one logger-owned stdout stream. Use `--output jsonl` for one parseable JSON object per
+line, `--log-level off` to suppress all Journey-owned output, or `--log-level debug` for more detail. The default
+`pretty` output is intended for human local development.
 
 ## One File Can Define More Than One Journey
 

@@ -221,7 +221,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
             "--step",
             "target",
             "--output",
-            "structured",
+            "jsonl",
             "--log-level",
             "debug",
             "--fail-fast",
@@ -235,7 +235,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert execute_args.file == "journeys.py"
     assert execute_args.journey == "alpha"
     assert execute_args.step == "target"
-    assert execute_args.output == "structured"
+    assert execute_args.output == "jsonl"
     assert execute_args.log_level == "debug"
     assert execute_args.fail_fast is True
     assert execute_args.no_state is True
@@ -311,9 +311,10 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     removed_flag = "--" + "state"
     with pytest.raises(SystemExit):
         parser.parse_args([removed_flag, "run.json"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--output", "structured"])
 
     assert parser.parse_args(["--output", "pretty"]).output == "pretty"
-    assert parser.parse_args(["--output", "structured"]).output == "structured"
     assert parser.parse_args(["--output", "jsonl"]).output == "jsonl"
 
 
@@ -499,21 +500,22 @@ def test_agent_force_requires_install(
     assert "journey agent --help" in output
 
 
-def test_execute_structured_errors_include_agent_guidance(
+def test_execute_structured_output_is_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(tmp_path)
 
-    exit_code = main(["--file", "missing.py", "--output", "structured"])
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--file", "missing.py", "--output", "structured"])
 
     output = capsys.readouterr().out
-    assert exit_code == 1
-    assert "event=command_error" in output
-    assert "instructions=" in output
-    assert "next_commands=" in output
-    assert "help_command=" in output
+    assert exc_info.value.code == 2
+    assert "invalid choice: 'structured'" in output
+    assert "What happened: journey: error: argument --output: invalid choice" in output
+    assert "Try this:" in output
+    assert "Next commands:" in output
     assert "journey --help" in output
 
 
@@ -980,37 +982,6 @@ def test_execute_prints_all_selected_plans_before_any_journey_runs(
     assert "start executed attempt=1" in log_output
 
 
-def test_execute_output_structured_preserves_logfmt_events(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-):
-    _write(
-        tmp_path / "flow.py",
-        """
-        import journeysdk as journey
-
-        def finish():
-            return True
-
-        @journey.journey
-        def flow():
-            journey.step(finish)
-        """,
-    )
-
-    monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--output", "structured"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    assert "[journey]" in captured.out
-    assert "component=cli event=plan_start message=Plan" in captured.out
-    assert "component=executor event=step_success" in captured.out
-    assert "Summary: 1 journey executed, 1 case executed, 0 failed" in captured.out
-
-
 def test_execute_log_level_off_suppresses_diagnostics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1069,7 +1040,7 @@ def test_execute_output_jsonl_keeps_stdout_parseable(
     assert any(event["event"] == "step_success" for event in _jsonl_events(captured.out))
 
 
-def test_execute_branch_anchor_status_visible_in_all_output_modes(
+def test_execute_branch_anchor_status_visible_in_pretty_and_jsonl(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1125,15 +1096,6 @@ def test_execute_branch_anchor_status_visible_in_all_output_modes(
     assert case_2_records[0]["status"] == "replayed"
     assert case_2_records[-1]["status"] == "executed"
     assert "ok" not in case_2_records[0]
-
-    structured_exit = main(["--file", "flow.py", "--output", "structured"])
-    structured_output = capsys.readouterr().out
-
-    assert structured_exit == 0
-    assert "event=step_replay" in structured_output
-    assert "status=replayed" in structured_output
-    assert "event=step_success" in structured_output
-    assert "status=executed" in structured_output
 
 
 def test_execute_output_jsonl_reports_state_invalidation(
