@@ -55,6 +55,15 @@ journey agent --help
 See [Installation And CLI](docs/00-installation-and-cli.md) for the complete install guide, self-healing CLI help,
 editable installs, browser setup, and local package smoke testing.
 
+Agent-authored journeys are not considered verified by code generation alone. After adding or changing a Journey, the
+agent should run executable `journey --file ...` commands, use `--develop-step` or `--step` for each requested branch
+target, and finish with fresh `--no-state` evidence whenever the app infrastructure is available. If the app is not
+running, the agent should follow documented local startup commands before declaring the run environment-blocked. Agents
+should list secret configuration by key presence only and must not print credential values while discovering the
+environment; they should not dump `.env*` or credential files wholesale. For auth, seed data, payments, or other test
+setup, agents should inspect existing E2E helpers before guessing credentials or magic codes, and request approval
+before running repo-supported setup that mutates external services.
+
 ## Quick Start
 
 Give your coding assistant one line:
@@ -133,7 +142,10 @@ journey agent generic
 `journey agent <target>` is print-only by default. It prints the shared target-specific assistant guidance from
 `journeysdk/agent_templates/instructions.md`, then appends the packaged touchpoint references. The verification loop and
 log-browsing commands live in that shared instruction body so the user prompt can stay short. The guidance directs
-agents to run the failed step or journey and keep rerunning executable Journey commands until the fix is proven. Use
+agents to run the failed step or journey and keep rerunning executable Journey commands until the fix is proven. It also
+directs agents that add new branching journeys to execute every requested branch target and report state/log evidence
+instead of stopping at generated code, import checks, or lint. When a shared setup label is ambiguous across branches,
+agents should target a branch-specific step instead of disabling branches as an iteration shortcut. Use
 `--install` when a
 project-level assistant file or skill should be written:
 

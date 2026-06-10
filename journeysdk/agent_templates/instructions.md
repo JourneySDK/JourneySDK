@@ -16,7 +16,11 @@ affected journey or step.
 
 - If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey agent <target>` yourself.
 - Proceed autonomously: inspect the project, find or create the relevant journey spec, fetch touchpoint references with the Journey CLI as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
+- When asked to write, add, or extend a Journey spec, do not stop after code generation, import checks, lint, or type checks. A new or changed Journey is unfinished until you have run at least one executable `journey --file ...` command against it, unless the app infrastructure is genuinely unavailable.
+- For a new branching journey, run the shared setup and every requested branch target with Journey selection commands such as `--develop-step <branch_step>` or `--step <branch_step>`; then finish with a broader fresh run such as `--step <target> --no-state` or full `--no-state` when infrastructure permits.
 - When asked to fix a Journey file, do not stop after static review or a plausible code edit. Run the failing Journey command or the full journey once, use the first failing step as the source of truth, then iterate with the CLI's `Retry failed step:` command or the narrowest equivalent `--develop-step` command until it passes.
+- Do not ask the user whether to run the journey when verification is the requested task. If the app is not running and the repository provides a normal local startup command, start the required services or request tool approval for that command; classify the run as `environment-blocked` only after the repo-provided startup path is missing or fails.
+- Do not print secret values from `.env`, credentials files, or CLI output. Do not `cat`, `sed`, `nl`, `head`, `tail`, or `Read` `.env*`, `journeys/.env`, credentials files, or other secret-bearing files wholesale. When checking configuration, list variable names or presence only, load needed values directly into the process environment without echoing them, and redact values before writing logs, memory, summaries, or final answers.
 
 ## Fetch More Journey Guidance
 
@@ -31,9 +35,11 @@ affected journey or step.
 ## Add Journey Specs
 
 - Inspect existing journey files, tests, fixtures, and local helper APIs before adding a new spec.
+- For sign-in, seed data, payments, email, or other test setup, inspect existing E2E helpers and setup scripts before guessing credentials, magic codes, or UI flows. If the repo-supported setup mutates an external service, request approval or report the setup as the explicit environment blocker instead of brute-forcing credentials.
 - Follow the project's existing journey location and naming convention when one exists.
 - If there is no convention, add new specs under `journeys/<feature>_journey.py`.
 - Keep journey specs close to the behavior they verify, but do not add public/private cross-repo dependencies.
+- If the spec needs a fixture, create or locate the fixture before running the journey; do not leave required image, PDF, or data files as placeholders.
 
 ## Keep Journeys User-Centered
 
@@ -102,6 +108,7 @@ def changedetection_core_journey() -> None:
 - For flows like changedetection.io, model shared setup once, then branch from a detected-change anchor to verify diff UI and notification behavior independently.
 - Avoid decorative branches when there is only one meaningful path.
 - Choose the `start_from` step as the durable point you would be comfortable retrying or resuming from while iterating on later branches.
+- If a shared setup step label appears in multiple branch cases and is ambiguous as a CLI target, do not comment out or disable other branches just to make it selectable. Target a branch-specific step that depends on the shared setup, or run the full journey until a branch target; any temporary narrowing must be restored before final evidence and called out explicitly.
 - Keep values that cross replay boundaries pickle-serializable or implement Journey's rehydration protocol.
 
 ## Use Touchpoints
@@ -122,16 +129,18 @@ def changedetection_core_journey() -> None:
 ## Quick Verification Loop
 
 1. Run from the project that owns the journey.
-2. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Read every `What happened`, `Try this`, and `Next commands` block; if command usage is unclear, run the relevant `--help` command printed by the CLI. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
+2. When authoring a new journey, make the first draft executable quickly. After the file imports, run the full journey or the narrowest target that reaches the first requested branch; for branching flows, run each requested branch target before claiming coverage. Static checks only prove syntax, not the user journey.
+3. If the Journey cannot connect to the app, inspect repository-provided local startup commands and bring up the smallest required frontend/backend/dependency stack. After startup, rerun the same Journey command that exposed the connection failure.
+4. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Read every `What happened`, `Try this`, and `Next commands` block; if command usage is unclear, run the relevant `--help` command printed by the CLI. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
 
-3. Use the narrowest useful Journey command while editing:
+5. Use the narrowest useful Journey command while editing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --develop-step target_label
 ```
 
-4. Rerun the same `--develop-step` command after every edit to retry the paused step with Journey's default persistent state. Keep iterating until the target step passes.
-5. Broaden verification before finishing:
+6. Rerun the same `--develop-step` command after every edit to retry the paused step with Journey's default persistent state. Keep iterating until the target step passes.
+7. Broaden verification before finishing:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label --no-state
@@ -147,7 +156,7 @@ State checklist:
 - Use `--no-state` for the final target-step or full journey confidence run whenever feasible.
 - Do not ask the user to delete Journey state after normal edits; Journey invalidates stale state automatically.
 
-6. Use JSON Lines output when another tool or script needs to parse results:
+8. Use JSON Lines output when another tool or script needs to parse results:
 
 ```bash
 journey --file journeys/<feature>_journey.py --step target_label --output jsonl
@@ -162,5 +171,7 @@ journey --file journeys/<feature>_journey.py --step target_label --output jsonl
 ## Verification Standard
 
 Before wrapping up, report the exact Journey command you ran, the targeted step or full journey that passed, and any broader tests that still need to run.
+Do not describe a Journey as tested, verified, or complete if the strongest evidence is only generated code, `py_compile`, import success, lint, or test discovery.
+For new branching journeys, list every branch target that was executed, whether each relevant step status was `executed` or `replayed`, and which final `--no-state` command produced fresh confidence. If no executable Journey run completed because infrastructure was unavailable, say `environment-blocked` and name the missing dependency instead of inferring product behavior.
 For browser, Docker, or other touchpoint journeys, also report relevant `journey logs` traces, videos, text logs, or paths when they help a human reviewer verify what happened.
 For cloud touchpoint journeys, report the email, webhook, or other payload evidence asserted by the Journey step.

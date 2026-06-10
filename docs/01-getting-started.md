@@ -52,6 +52,14 @@ polling helpers. To make the guidance persistent for future prompts, run `journe
 project root. When debugging a journey, the agent should run the failing journey or the focused `--develop-step` retry
 until executable evidence passes. If the agent is unsure which flags to use or how to recover, it should run
 `journey --help`, `journey logs --help`, or `journey agent --help` and follow the CLI's `Next commands` block.
+When adding a new journey, import checks, lint, and type checks are only setup hygiene. The agent should still run
+`journey --file ...`, execute each requested branch target with `--develop-step` or `--step`, and finish with fresh
+`--no-state` evidence whenever the app infrastructure is available.
+If the app is not running, the agent should follow the repository's documented local startup path before declaring the
+run environment-blocked. When inspecting `.env` or credential files, it should report key presence only, never print
+secret values, and avoid dumping secret-bearing files wholesale. For sign-in and seed data, it should inspect existing
+E2E helpers and request approval before running setup that mutates external services. For branching journeys, an
+ambiguous shared setup label should be handled by targeting branch-specific steps, not by disabling branches.
 
 ## The Smallest Useful Journey
 

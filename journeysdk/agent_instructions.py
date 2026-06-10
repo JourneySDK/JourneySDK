@@ -12,7 +12,7 @@ _SUPPORTED_TARGETS = ("codex", "claude", "cursor", "generic")
 
 _CLAUDE_ENVELOPE = """---
 name: journey-developer
-description: Use Journey SDK as the end-to-end test layer for real user journeys. Use whenever code changes should be verified through a user flow, when implementing features that should extend or add journey specs, when a Journey SDK journey uses journeysdk primitives or journeysdk.touchpoints, or when iterating quickly with journey --develop-step, --step, default state, and JSONL output.
+description: Use Journey SDK as the end-to-end test layer for real user journeys. Use whenever code changes should be verified through a user flow, when implementing features that should extend or add journey specs, when a Journey SDK journey uses journeysdk primitives or journeysdk.touchpoints, or when iterating quickly with journey --develop-step, --step, default state, and JSONL output. Do not stop at code generation; finish with executable Journey CLI evidence whenever infrastructure permits.
 ---
 
 """

@@ -61,7 +61,13 @@ Give the one-line prompt to the assistant and let it run `journey agent <target>
 when an agent needs the complete verification loop plus touchpoint references in one response.
 Use `journey agent <target> --install` when the project should receive a persistent assistant instruction file or skill.
 Agents fixing a failure should run the failed journey or the focused `--develop-step` retry until executable evidence
-passes.
+passes. Agents adding new branching journeys should execute every requested branch target and finish with fresh
+`--no-state` evidence when infrastructure permits; generated code, import checks, lint, or test discovery alone are not
+Journey verification. If a local app is not running, agents should follow documented startup commands before declaring
+the run environment-blocked, and should inspect configuration without printing secret values or dumping secret-bearing
+files. For auth, seed data, payments, and similar setup, agents should inspect existing E2E helpers before guessing
+credentials or magic codes, and request approval before mutating external services. Ambiguous shared setup labels in a
+branching journey should be handled with branch-specific targets instead of disabling branches.
 
 The canonical source files are `journeysdk/touchpoint_docs/*.md` and
 `journeysdk/agent_templates/instructions.md`.

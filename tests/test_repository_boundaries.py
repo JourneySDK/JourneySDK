@@ -204,6 +204,45 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
         assert removed_plan_inspection_flag not in rendered
 
 
+def test_agent_instruction_template_requires_execution_for_new_journeys() -> None:
+    body = (
+        resources.files("journeysdk.agent_templates")
+        .joinpath("instructions.md")
+        .read_text(encoding="utf-8")
+    )
+
+    required_phrases = (
+        "When asked to write, add, or extend a Journey spec",
+        "A new or changed Journey is unfinished until you have run at least one executable `journey --file ...` command",
+        "For a new branching journey, run the shared setup and every requested branch target",
+        "Do not ask the user whether to run the journey when verification is the requested task",
+        "start the required services or request tool approval for that command",
+        "Do not print secret values from `.env`, credentials files, or CLI output",
+        "Do not `cat`, `sed`, `nl`, `head`, `tail`, or `Read` `.env*`, `journeys/.env`, credentials files",
+        "list variable names or presence only",
+        "load needed values directly into the process environment without echoing them",
+        "inspect existing E2E helpers and setup scripts before guessing credentials",
+        "request approval or report the setup as the explicit environment blocker",
+        "If a shared setup step label appears in multiple branch cases and is ambiguous as a CLI target",
+        "do not comment out or disable other branches just to make it selectable",
+        "Target a branch-specific step that depends on the shared setup",
+        "If the spec needs a fixture, create or locate the fixture before running the journey",
+        "Static checks only prove syntax, not the user journey",
+        "If the Journey cannot connect to the app, inspect repository-provided local startup commands",
+        "Do not describe a Journey as tested, verified, or complete if the strongest evidence is only generated code",
+        "list every branch target that was executed",
+        "If no executable Journey run completed because infrastructure was unavailable, say `environment-blocked`",
+    )
+
+    for phrase in required_phrases:
+        assert phrase in body
+
+    claude = render_agent_instructions("claude")
+    assert "finish with executable Journey CLI evidence whenever infrastructure permits" in claude
+    for phrase in required_phrases:
+        assert phrase in claude
+
+
 def test_agent_instruction_template_defines_step_scope_by_boundary_value() -> None:
     body = (
         resources.files("journeysdk.agent_templates")
