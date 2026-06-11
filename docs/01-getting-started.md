@@ -13,8 +13,9 @@ one journey when you need script-friendly JSONL output.
 - Pass step results explicitly into later steps.
 - Treat every step as an execution boundary. Only explicit replay boundaries store rehydratable state:
   `branch(start_from=...)` and steps with a positive `retry=...`.
-- A step is an intentional replay boundary with cost. Do not make a step for every click, form fill, poll, helper call,
-  or assertion.
+- A step is an intentional replay boundary with cost. Each extra step can add state binding, invalidation checks, log
+  scopes, and store/restore work. Do not make a step for every click, form fill, poll, helper call, touchpoint wait, or
+  assertion.
 - Size steps around replayable operations, not fragments. A useful step is a meaningful place to restart from the
   function start, with stable state worth restoring or passing onward.
 - If actions must recover together, keep them in the same step or in helpers called by that step.
@@ -27,9 +28,10 @@ If you remember only one thing, remember this: Journey does not ask you to stop 
 Python step calls into a runnable plan, and long-running work stays manageable because explicit replay boundaries can
 restart meaningful procedures instead of tiny do/assert fragments.
 
-A touchpoint is not a special kind of step. It is the external surface a step talks to. For example, a step might use
-the browser touchpoint to click through checkout, then a later step might use an email or webhook touchpoint to confirm
-the service produced the expected side effect.
+A touchpoint is not a special kind of step. It is the external surface a step talks to. For example, a coarse checkout
+step might use the browser touchpoint to submit an order, then call email or webhook touchpoint helpers to confirm the
+service produced the expected side effects. Split those checks into later steps only when an agent would independently
+target, retry, or branch from them.
 
 ## Agent Bootstrap
 

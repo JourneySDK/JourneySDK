@@ -20,17 +20,19 @@ files, ports, datastore cleanup, and similar plumbing should stay outside the jo
 deterministic route that proves the real user journey.
 
 Each `step(...)` should encapsulate a meaningful, retryable operation in the user journey. A step is a boundary that may
-be targeted, retried, stored, logged, invalidated, or used as a branch replay anchor, so it should earn that cost.
+be targeted, retried, stored, logged, invalidated, or used as a branch replay anchor, so it should earn that cost. Each
+extra step can add state binding, invalidation checks, log scopes, and store/restore work.
 Prefer names like `clear_basket_and_add_items`, `submit_order`, or `receive_confirmation_email` over tiny fragments such
 as `click_button`. Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and
 branch replay.
 
-Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or values passed to later steps.
-Do not wrap every click, form fill, setup call, poll, or assertion as its own step.
+Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or
+values passed to later steps. Do not wrap every click, form fill, setup call, touchpoint wait, poll, or assertion as its
+own step.
 Choose step scope by recovery value: a step should be a useful place to restart from the function start, with stable
 state worth restoring or passing onward. Group actions that recover together into one user-flow step, such as
-`create_watch_for_demo_page` or `change_page_and_wait_for_detection`; put the assertions for that outcome inside the
-same step.
+`create_watch_for_demo_page`, `change_page_and_wait_for_detection`, or `submit_order_and_verify_side_effects`; put the
+waits and assertions for that outcome inside the same step unless an agent would independently target them.
 Put retry on the operation whose rerun semantics match real recovery, not on many tiny follow-up checks.
 
 Use `branch(...)` for alternate user paths after shared setup. Use `branch(start_from=step_result)` when later branch

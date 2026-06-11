@@ -12,6 +12,11 @@ external system, but disposable enough for tests. Instead of building a temporar
 mailbox, the journey asks Journey Cloud for a handle, passes that handle to the service under test, then waits for the
 effect at a later step.
 
+The small examples in this chapter are tutorial-sized so each touchpoint helper is visible. They are not the recommended
+production shape for agent inner loops. In production journeys, prefer coarse user-flow steps: acquire/configure the
+cloud touchpoint, drive the user action, wait for the side effect, and assert the payload inside one step when those
+pieces recover together.
+
 Journey Cloud touchpoints available in the SDK today:
 
 - hosted webhook endpoints
@@ -35,6 +40,9 @@ export JOURNEY_CLOUD_BASE_URL=https://<cloud-base-url>
 ## Cloud-Hosted Webhooks
 
 Read `docs/cloud_webhook_journey/cloud_webhook_journey.py`.
+
+This first example splits acquisition, triggering, waiting, and assertion into separate steps only to teach the helper
+APIs.
 
 ```python
 from journeysdk import journey, step
@@ -87,9 +95,57 @@ Execution
   Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
+### Coarse Production Shape
+
+For an agent loop, avoid turning every touchpoint helper into its own replay boundary. If the webhook endpoint,
+application configuration, browser action, webhook wait, and payload assertion recover together, keep them in one
+branch-level verification step:
+
+```python
+from journeysdk import branch, journey, step
+from journeysdk.touchpoints.browser import open_page
+from journeysdk.touchpoints.webhook import get_webhook_endpoint, wait_for_webhook_request
+
+
+def prepare_configured_billing_app():
+    endpoint = get_webhook_endpoint(path="/invoice-paid")()
+    app = start_billing_app(webhook_url=endpoint.url)
+    return ConfiguredBillingApp(app=app, webhook_endpoint=endpoint)
+
+
+def pay_invoice_and_verify_webhook(context):
+    page = open_page(context.app_url)
+    page.locator("[data-testid='pay-invoice']").click()
+    page.wait_for_url("**/paid")
+
+    request_payload = wait_for_webhook_request(
+        path="/invoice-paid",
+        timeout=30,
+        poll_interval=0.5,
+    )(context.webhook_endpoint)
+    assert_invoice_paid_webhook(request_payload)
+
+
+@journey
+def billing_journey() -> None:
+    context = step(prepare_configured_billing_app)
+
+    if branch(start_from=context):
+        step(pay_invoice_and_verify_webhook, context)
+```
+
+`ConfiguredBillingApp` should be serializable or implement Journey rehydration if it crosses the branch replay
+boundary. The important boundary decision is that `wait_for_webhook_request(...)` and
+`assert_invoice_paid_webhook(...)` are helpers inside the verification step, not standalone steps, unless an agent would
+target or branch from them independently.
+
 ## Cloud-Hosted Email
 
 Read `docs/cloud_email_journey/cloud_email_journey.py`.
+
+As with the webhook tutorial, this example exposes each helper as a separate step for readability. In a production
+agent loop, `wait_for_email(...)` and the email assertions can live inside the same coarse step that triggers the email
+when the intermediate message is not independently targetable.
 
 ```python
 from journeysdk import journey, step

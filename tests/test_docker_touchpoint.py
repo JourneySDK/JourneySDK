@@ -481,6 +481,12 @@ def test_run_docker_validates_arguments(tmp_path: Path):
         journey_docker.run_docker(wait_timeout=0)
     with pytest.raises(TypeError):
         journey_docker.run_docker(wait_for_logs=[object()])
+    with pytest.raises(TypeError):
+        journey_docker.run_docker(build=1)
+    with pytest.raises(TypeError):
+        journey_docker.run_docker(pull_policy=object())
+    with pytest.raises(ValueError):
+        journey_docker.run_docker(pull_policy="sometimes")
     with pytest.raises(ValueError):
         journey_docker.DockerLogMatcher(service_name="[", message="ready")
     with pytest.raises(ValueError):
@@ -582,6 +588,45 @@ def test_run_docker_executes_compose_config_and_up(
     assert "Docker" in log_output
     assert "starting Docker Compose stack" in log_output
     assert "Docker Compose stack started" in log_output
+
+
+def test_run_docker_can_build_and_disable_pulls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    compose_file = _write_compose_file(tmp_path)
+    runtime = _FakeDockerRuntime()
+    monkeypatch.setattr(journey_docker, "_CACHE_ROOT", tmp_path / "cache")
+    monkeypatch.setattr(journey_docker, "_run_cli", runtime)
+
+    stack = journey_docker.run_docker(
+        compose_file=compose_file,
+        project_name="demo-project",
+        build=True,
+        pull_policy="never",
+    )
+
+    up_commands = [
+        command
+        for owner, command in runtime.commands
+        if owner == "run_docker" and "up" in command
+    ]
+    assert up_commands == [
+        [
+            "docker",
+            "compose",
+            "-f",
+            stack.resolved_compose_file,
+            "-p",
+            "demo-project",
+            "up",
+            "-d",
+            "--wait",
+            "--build",
+            "--pull",
+            "never",
+        ]
+    ]
 
 
 def test_docker_stack_case_exit_stops_compose_without_removing_volumes(

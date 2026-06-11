@@ -259,6 +259,11 @@ def test_agent_instruction_template_defines_step_scope_by_boundary_value() -> No
         "Do not split merely to freeze intermediate state for assertion or prompt tuning",
         "Put retry on the operation whose rerun semantics match real recovery",
         "Split only when the intermediate result is independently useful",
+        "step boundary checklist",
+        "touchpoint helpers may be called inside a coarse step",
+        "do not split wait/assert helpers into separate steps unless independently targetable",
+        "Common anti-pattern: separate steps for `get_webhook_endpoint(...)`, app startup, checkout, database assertion, email assertion, webhook wait, and webhook assertion",
+        "one branch-specific late-flow verification step",
     )
 
     for phrase in required_phrases:

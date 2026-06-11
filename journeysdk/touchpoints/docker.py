@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from types import TracebackType
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlunsplit
 from uuid import uuid4
 
@@ -30,6 +30,7 @@ from journeysdk.session import _allocate_log_artifact, _register_case_exit_objec
 _CACHE_ROOT = Path(tempfile.gettempdir()) / "journey-sdk-docker"
 _CURRENT_SNAPSHOT_FORMAT = 4
 _VOLUME_COPY_IMAGE = "debian:bookworm-slim"
+_DOCKER_PULL_POLICIES = {"always", "missing", "never"}
 _SUPPORTED_CONTAINER_STATES = {"running", "restarting", "created", "exited"}
 _STARTED_CONTAINER_STATES = {"running", "restarting"}
 _UNSUPPORTED_CONTAINER_STATES = {"paused", "removing", "dead"}
@@ -466,6 +467,8 @@ def run_docker(
     wait_timeout: int | None = None,
     wait_for_logs: Sequence[DockerLogMatcher] = (),
     wait_for_http: Sequence[DockerHttpCheck] = (),
+    build: bool = False,
+    pull_policy: Literal["always", "missing", "never"] | None = None,
 ) -> DockerComposeStack:
     """Start one local Docker Compose app."""
 
@@ -494,6 +497,16 @@ def run_docker(
         field="wait_for_http",
         value=wait_for_http,
     )
+    normalized_build = _normalize_bool(
+        owner="run_docker",
+        field="build",
+        value=build,
+    )
+    normalized_pull_policy = _normalize_optional_pull_policy(
+        owner="run_docker",
+        field="pull_policy",
+        value=pull_policy,
+    )
 
     compose_started_at = time.monotonic()
     original_compose_path = _resolve_compose_file(normalized_compose_file)
@@ -507,6 +520,8 @@ def run_docker(
         compose_file=original_compose_path,
         project=resolved_project_name,
         wait_timeout=normalized_wait_timeout,
+        build=normalized_build,
+        pull_policy=normalized_pull_policy,
     )
     project_cache_dir = _project_cache_dir(
         cache_root=_CACHE_ROOT,
@@ -526,6 +541,10 @@ def run_docker(
     resolved_compose_path.write_text(resolved_yaml, encoding="utf-8")
 
     up_command = ["up", "-d", "--wait"]
+    if normalized_build:
+        up_command.append("--build")
+    if normalized_pull_policy is not None:
+        up_command.extend(["--pull", normalized_pull_policy])
     if normalized_wait_timeout is not None:
         up_command.extend(["--wait-timeout", str(normalized_wait_timeout)])
     log_artifact_metadata = _allocate_log_artifact(
@@ -605,6 +624,8 @@ def run_docker(
                         ("compose", stack.compose_file),
                         ("resolved", stack.resolved_compose_file),
                         ("wait_timeout", normalized_wait_timeout),
+                        ("build", normalized_build),
+                        ("pull_policy", normalized_pull_policy),
                     ]
                 )
             ),
@@ -613,6 +634,8 @@ def run_docker(
         resolved_compose_file=stack.resolved_compose_file,
         project=stack.project_name,
         wait_timeout=normalized_wait_timeout,
+        build=normalized_build,
+        pull_policy=normalized_pull_policy,
         **duration,
     )
     return stack
@@ -2033,6 +2056,41 @@ def _normalize_optional_positive_int(
     if value <= 0:
         raise ValueError(f"{owner}(..., {field}=...) expects a positive integer.")
     return value
+
+
+def _normalize_bool(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{owner}(..., {field}=...) expects a boolean.")
+    return value
+
+
+def _normalize_optional_pull_policy(
+    *,
+    owner: str,
+    field: str,
+    value: object,
+) -> Literal["always", "missing", "never"] | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{owner}(..., {field}=...) expects 'always', 'missing', 'never', or None."
+        )
+    normalized = value.strip().lower()
+    if normalized not in _DOCKER_PULL_POLICIES:
+        raise ValueError(
+            f"{owner}(..., {field}=...) expects 'always', 'missing', 'never', or None."
+        )
+    if normalized == "always":
+        return "always"
+    if normalized == "missing":
+        return "missing"
+    return "never"
 
 
 def _normalize_positive_int(

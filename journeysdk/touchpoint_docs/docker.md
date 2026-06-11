@@ -5,7 +5,7 @@ reference before writing Docker-backed journeys.
 
 ## Public API
 
-- `run_docker(compose_file=None, project_name=None, wait_timeout=None, wait_for_logs=(), wait_for_http=()) -> DockerComposeStack`
+- `run_docker(compose_file=None, project_name=None, wait_timeout=None, wait_for_logs=(), wait_for_http=(), build=False, pull_policy=None) -> DockerComposeStack`
 - `DockerComposeStack`: rehydratable handle for one Compose project.
 - `DockerComposeStack.statuses`: live `DockerContainerStatus` values grouped by service.
 - `DockerComposeStack.logs`: live combined logs grouped by service.
@@ -32,6 +32,8 @@ def start_app_with_docker():
     stack = run_docker(
         compose_file="docker-compose.yml",
         project_name="checkout-journey",
+        build=True,
+        pull_policy="never",
         wait_timeout=120,
         wait_for_http=[
             DockerHttpCheck(service_name="web", port=8000, path="/healthz"),
@@ -50,6 +52,9 @@ run_docker(
     ],
 )
 ```
+
+Set `build=True` when source edits must be included in the Compose app before verification. Set
+`pull_policy="never"` for local benchmark/demo apps that should rebuild local images without contacting a registry.
 
 ## Replay, lifecycle, and cleanup
 

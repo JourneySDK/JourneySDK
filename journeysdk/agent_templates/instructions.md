@@ -95,6 +95,10 @@ def changedetection_core_journey() -> None:
 - Do not split merely to freeze intermediate state for assertion or prompt tuning. Keep the suffix with the operation when it only completes or verifies the outcome produced by that operation.
 - Put retry on the operation whose rerun semantics match real recovery, not on a trailing wait or assertion suffix carved away from the action that produced the state.
 - Split only when the intermediate result is independently useful as a target, retry point, branch replay anchor, or durable value passed to later operations.
+- Apply this step boundary checklist before every new `step(...)`: add a step only when an agent would target it, retry from it, branch from it, or when storing/restoring its result is cheaper than rerunning the work.
+- In short, touchpoint helpers may be called inside a coarse step when their intermediate values are not useful replay boundaries.
+- In short, do not split wait/assert helpers into separate steps unless independently targetable.
+- Common anti-pattern: separate steps for `get_webhook_endpoint(...)`, app startup, checkout, database assertion, email assertion, webhook wait, and webhook assertion. Prefer one expensive setup step, then one branch-specific late-flow verification step that performs the browser action and all side-effect assertions that recover together.
 - Prefer explicit top-level step functions over lambdas or nested closures.
 - Step function names are stable CLI labels used by `--step`, `--develop-step`, state files, retries, and branch replay. Rename them only when updating those references intentionally.
 - Pass concrete dependencies and previous step results as explicit arguments.
@@ -121,9 +125,9 @@ def changedetection_core_journey() -> None:
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles only when later steps need touchpoint state.
 - Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, keep logs enabled unless sensitive data requires `--no-logs`, and use `--no-browser-recording` only to skip trace/video capture. Prompt memory files live next to the journey's `.journey` directory. If `page.prompt(...)` reaches max steps, loops on the wrong page, or wanders after a rejected action, treat that as a deterministic step implementation failure: inspect the app route, selectors, current URL/title, prompt memory replay errors, and browser artifacts, then make the step or prompt more precise before rerunning. Use `--no-memory` to bypass stale AI prompt memory during diagnosis.
-- Email: use `step(get_email_inbox())`, `step(send_email(...))`, and `step(wait_for_email(...), inbox, retry=..., retry_delay=...)`; set `JOURNEY_CLOUD_API_KEY` and `JOURNEY_CLOUD_BASE_URL`.
-- Webhook: use `step(get_webhook_endpoint(path=...))`, pass `endpoint.url` to the app under test, then use `step(wait_for_webhook_request(path=...), endpoint, retry=..., retry_delay=...)`.
-- Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, and use later coarse `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
+- Email: use `get_email_inbox()`, `send_email(...)`, and `wait_for_email(...)`; wrap them as separate steps only when the inbox, send action, or received message is independently targetable.
+- Webhook: use `get_webhook_endpoint(path=...)`, pass `endpoint.url` to the app under test, then use `wait_for_webhook_request(path=...)`; in agent inner loops, keep endpoint acquisition, app configuration, the triggering user action, webhook wait, and payload assertion inside a coarse step unless a returned handle is a real replay anchor.
+- Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, use `build=True` and `pull_policy="never"` when local source edits must be rebuilt without registry access, and use later coarse `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
 - Journey Cloud resources available today are hosted email inboxes and hosted webhook endpoints. Treat phone/SMS, payment cards, voice, and messaging as roadmap resources unless the project has its own concrete helper or touchpoint.
 
 ## Quick Verification Loop
