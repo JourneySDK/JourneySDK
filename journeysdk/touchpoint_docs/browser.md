@@ -54,12 +54,12 @@ console messages, page errors, failed requests, and response status metadata. Us
 trace/video capture should be skipped while keeping other logs. Use `journey --no-logs` only when no local run evidence
 should be written. Journey clears existing logs at the start of a run so the log list reflects the current run.
 
-Use `journey logs` from the project root to browse completed evidence. Pick all cases, one case, a branch scope, or a
+Use `journey evidence` from the project root to browse completed evidence. Pick all cases, one case, a branch scope, or a
 step scope, then choose whether to open a merged Playwright trace, open a merged WebM recording, show text logs, print
 generated artifact paths, go back to the scope list, or quit. Step scopes narrow trace/video artifacts to that step.
 
 ```bash
-journey logs
+journey evidence
 ```
 
 ```console
@@ -86,11 +86,11 @@ only need the generated artifact paths for sharing or later inspection.
 For coding-agent loops, discover scopes and log sources before reading large logs:
 
 ```bash
-journey logs --list-scopes
-journey logs --list-log-sources --case case_1 --step sign_in
-journey logs --show --case case_1 --step sign_in --touchpoint browser --tail 80
-journey logs --paths --step report_issue --touchpoint browser
-journey logs --paths --run 8bc31a94e2f1
+journey evidence --list-scopes
+journey evidence --list-log-sources --case case_1 --step sign_in
+journey evidence --show --case case_1 --step sign_in --touchpoint browser --tail 80
+journey evidence --paths --step report_issue --touchpoint browser
+journey evidence --paths --run 8bc31a94e2f1
 ```
 
 ## Replay

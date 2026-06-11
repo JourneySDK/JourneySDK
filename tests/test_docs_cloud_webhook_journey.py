@@ -42,10 +42,7 @@ def test_cloud_webhook_docs_compiles_without_touching_the_network(
 
     expected_labels = [
         [
-            "get_webhook_invoice_paid",
-            "send_invoice_paid_webhook_later",
-            "receive_webhook_invoice_paid",
-            "assert_invoice_paid_webhook",
+            "send_invoice_payment_and_verify_webhook",
         ]
     ]
     assert _case_labels(first_plan) == expected_labels
@@ -63,8 +60,6 @@ def test_cloud_webhook_docs_executes_against_local_journey_cloud(
         report = journey.execute(cloud_webhook_docs.cloud_webhook_journey)
 
     assert [case.case_id for case in report.case_reports] == ["case_1"]
-    assert cloud_webhook_docs.EVENTS == [
-        "send_invoice_paid_webhook_later:"
-        + report.case_reports[0].records[0].result.url,  # type: ignore[union-attr]
-        "assert_invoice_paid_webhook",
-    ]
+    assert len(cloud_webhook_docs.EVENTS) == 2
+    assert cloud_webhook_docs.EVENTS[0].startswith("send_invoice_paid_webhook_later:")
+    assert cloud_webhook_docs.EVENTS[1] == "assert_invoice_paid_webhook"

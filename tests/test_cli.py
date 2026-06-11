@@ -17,8 +17,10 @@ from journeysdk.cli import (
     _active_environment_python,
     _read_pause_choice,
     build_agent_parser,
+    build_loop_parser,
     build_logs_parser,
     build_parser,
+    build_verify_parser,
     main,
 )
 from journeysdk.logger import configure_logging
@@ -211,8 +213,10 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     capsys: pytest.CaptureFixture[str],
 ):
     parser = build_parser()
+    loop_parser = build_loop_parser()
+    verify_parser = build_verify_parser()
 
-    execute_args = parser.parse_args(
+    verify_args = verify_parser.parse_args(
         [
             "--file",
             "journeys.py",
@@ -225,24 +229,22 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
             "--log-level",
             "debug",
             "--fail-fast",
-            "--no-state",
-            "--no-state-update",
+            "--reuse-state",
             "--no-memory",
             "--no-memory-update",
             "--no-browser-recording",
         ]
     )
-    assert execute_args.file == "journeys.py"
-    assert execute_args.journey == "alpha"
-    assert execute_args.step == "target"
-    assert execute_args.output == "jsonl"
-    assert execute_args.log_level == "debug"
-    assert execute_args.fail_fast is True
-    assert execute_args.no_state is True
-    assert execute_args.no_state_update is True
-    assert execute_args.no_memory is True
-    assert execute_args.no_memory_update is True
-    assert execute_args.no_browser_recording is True
+    assert verify_args.file == "journeys.py"
+    assert verify_args.journey == "alpha"
+    assert verify_args.step == "target"
+    assert verify_args.output == "jsonl"
+    assert verify_args.log_level == "debug"
+    assert verify_args.fail_fast is True
+    assert verify_args.reuse_state is True
+    assert verify_args.no_memory is True
+    assert verify_args.no_memory_update is True
+    assert verify_args.no_browser_recording is True
 
     with pytest.raises(SystemExit) as exc_info:
         parser.parse_args(["--plan-only"])
@@ -268,18 +270,18 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     alias_args = parser.parse_args(["--level", "warning"])
     assert alias_args.log_level == "warning"
 
-    pause_args = parser.parse_args(
+    loop_args = loop_parser.parse_args(
         [
+            "target",
             "--file",
             "journeys.py",
-            "--develop-step",
-            "target",
             "--interactive",
+            "--no-state-update",
         ]
     )
-    assert pause_args.develop_step == "target"
-    assert pause_args.interactive is True
-    assert pause_args.step is None
+    assert loop_args.step_label == "target"
+    assert loop_args.interactive is True
+    assert loop_args.no_state_update is True
 
     with pytest.raises(SystemExit):
         parser.parse_args(["plan"])
@@ -294,7 +296,9 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     with pytest.raises(SystemExit):
         parser.parse_args(["--case-id", "case_1"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["--step", "target", "--develop-step", "target"])
+        parser.parse_args(["--step", "target"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--develop-step", "target"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--json"])
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
@@ -323,16 +327,19 @@ def test_help_outputs_include_agentic_command_manual():
     logs_help = build_logs_parser().format_help()
     agent_help = build_agent_parser().format_help()
 
-    assert "Coding-agent command manual" in root_help
-    assert "Self-healing loop" in root_help
-    assert "journey logs --help" in root_help
+    assert "replay and verify real user journeys for agentic coding loops" in root_help
+    assert "Self-healing agent loop" in root_help
+    assert "journey loop <step_label>" in root_help
+    assert "journey verify --step <step_label>" in root_help
+    assert "journey evidence --help" in root_help
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
     assert removed_plan_inspection_flag not in root_help
-    assert "Coding-agent log loop" in logs_help
-    assert "journey logs --list-scopes" in logs_help
+    assert "browse Journey evidence from completed runs" in logs_help
+    assert "journey evidence --list-scopes" in logs_help
     assert "Recovery:" in logs_help
-    assert "Coding-agent guidance loop" in agent_help
-    assert "journey --help" in agent_help
+    assert "Agent verification packet" in agent_help
+    assert "journey loop --help" in agent_help
+    assert "journey verify --help" in agent_help
     assert "journey agent <target>" in agent_help
 
 
@@ -386,7 +393,7 @@ def test_touchpoint_docs_prints_reference_without_discovery(
         fake_render_touchpoint_docs,
     )
 
-    exit_code = main(["--touchpoint-docs", "docker"])
+    exit_code = main(["touchpoints", "docker"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -411,7 +418,7 @@ def test_touchpoint_docs_all_prints_index_and_references(
         fake_render_touchpoint_docs,
     )
 
-    exit_code = main(["--touchpoint-docs", "all"])
+    exit_code = main(["touchpoints", "all"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -508,12 +515,12 @@ def test_execute_structured_output_is_rejected(
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit) as exc_info:
-        main(["--file", "missing.py", "--output", "structured"])
+        main(["verify", "--reuse-state", "--file", "missing.py", "--output", "structured"])
 
     output = capsys.readouterr().out
     assert exc_info.value.code == 2
     assert "invalid choice: 'structured'" in output
-    assert "What happened: journey: error: argument --output: invalid choice" in output
+    assert "What happened: journey verify: error: argument --output: invalid choice" in output
     assert "Try this:" in output
     assert "Next commands:" in output
     assert "journey --help" in output
@@ -539,7 +546,7 @@ def test_execute_develop_step_rejects_json_mode(
     capsys: pytest.CaptureFixture[str],
 ):
     with pytest.raises(SystemExit) as exc_info:
-        main(["--develop-step", "target", "--json"])
+        main(["loop", "target", "--json"])
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
@@ -588,7 +595,7 @@ def test_execute_forwards_no_memory_update_flag(
     monkeypatch.setattr("journeysdk.cli._execute_all_targets", fake_execute_all_targets)
     monkeypatch.chdir(tmp_path)
 
-    exit_code = main(["--file", "flow.py", "--no-memory-update", "--log-level", "off"])
+    exit_code = main(["verify", "--reuse-state", "--file", "flow.py", "--no-memory-update", "--log-level", "off"])
 
     assert exit_code == 0
     assert captured_flags == [True]
@@ -614,23 +621,23 @@ def test_execute_uses_journey_state_parent_for_nested_prompt_memory(
     captured_roots = _capture_prompt_memory_roots(monkeypatch)
     monkeypatch.chdir(tmp_path)
 
-    exit_code = main(["--file", "pkg/flow.py", "--log-level", "off"])
+    exit_code = main(["verify", "--reuse-state", "--file", "pkg/flow.py", "--log-level", "off"])
 
     assert exit_code == 0
     assert captured_roots == [tmp_path.resolve() / "pkg"]
 
 
 @pytest.mark.parametrize(
-    "target_args",
+    "argv",
     [
-        ["--step", "target"],
-        ["--develop-step", "target"],
+        ["verify", "--reuse-state", "--file", "pkg/flow.py", "--step", "target", "--log-level", "off"],
+        ["loop", "target", "--file", "pkg/flow.py", "--log-level", "off"],
     ],
 )
 def test_targeted_execute_uses_journey_state_parent_for_nested_prompt_memory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    target_args: list[str],
+    argv: list[str],
 ):
     _write(
         tmp_path / "pkg" / "flow.py",
@@ -648,7 +655,7 @@ def test_targeted_execute_uses_journey_state_parent_for_nested_prompt_memory(
     captured_roots = _capture_prompt_memory_roots(monkeypatch)
     monkeypatch.chdir(tmp_path)
 
-    exit_code = main(["--file", "pkg/flow.py", *target_args, "--log-level", "off"])
+    exit_code = main(argv)
 
     assert exit_code == 0
     assert captured_roots == [tmp_path.resolve() / "pkg"]
@@ -694,7 +701,7 @@ def test_execute_forwards_no_browser_recording_flag(
     monkeypatch.chdir(tmp_path)
 
     exit_code = main(
-        ["--file", "flow.py", "--no-browser-recording", "--log-level", "off"]
+        ["verify", "--reuse-state", "--file", "flow.py", "--no-browser-recording", "--log-level", "off"]
     )
 
     assert exit_code == 0
@@ -709,7 +716,7 @@ def test_execute_interactive_requires_develop_step(
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 2
-    assert "--interactive requires --develop-step" in captured.out
+    assert "unrecognized arguments: --interactive" in captured.out
     assert captured.err == ""
 
 
@@ -757,7 +764,7 @@ def test_main_reexecs_with_uv_active_environment_python(
         calls.append((path, args, env))
         raise Reexec
 
-    monkeypatch.setattr(sys, "argv", ["journey", "--develop-step", "first"])
+    monkeypatch.setattr(sys, "argv", ["journey", "loop", "first"])
     monkeypatch.setattr(sys, "prefix", str(wrong_env))
     monkeypatch.setattr(sys, "executable", str(wrong_python))
     monkeypatch.setenv("UV_RUN_RECURSION_DEPTH", "1")
@@ -770,7 +777,7 @@ def test_main_reexecs_with_uv_active_environment_python(
     assert calls == [
         (
             str(active_python),
-            [str(active_python), "-m", "journeysdk.cli", "--develop-step", "first"],
+            [str(active_python), "-m", "journeysdk.cli", "loop", "first"],
             {**os.environ, "JOURNEY_ACTIVE_ENV_REEXEC": "1"},
         )
     ]
@@ -827,7 +834,7 @@ def test_execute_output_jsonl_emits_parseable_log_events(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--output", "jsonl"])
+    exit_code = main(["verify", "--reuse-state", "--file", "flow.py", "--output", "jsonl"])
 
     captured = capsys.readouterr()
     events = _jsonl_events(captured.out)
@@ -920,7 +927,7 @@ def test_execute_discovers_decorated_journeys_recursively_and_via_aliases(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--output", "jsonl"])
+    exit_code = main(["verify", "--reuse-state", "--output", "jsonl"])
 
     payload = _execute_result_payload(capsys.readouterr().out)
     assert exit_code == 0
@@ -962,7 +969,7 @@ def test_execute_prints_all_selected_plans_before_any_journey_runs(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main([])
+    exit_code = main(["verify", "--reuse-state"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -1002,7 +1009,7 @@ def test_execute_log_level_off_suppresses_diagnostics(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--log-level", "off"])
+    exit_code = main(["verify", "--reuse-state", "--file", "flow.py", "--log-level", "off"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -1030,7 +1037,7 @@ def test_execute_output_jsonl_keeps_stdout_parseable(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--output", "jsonl"])
+    exit_code = main(["verify", "--reuse-state", "--file", "flow.py", "--output", "jsonl"])
 
     captured = capsys.readouterr()
     payload = _execute_result_payload(captured.out)
@@ -1071,7 +1078,7 @@ def test_execute_branch_anchor_status_visible_in_pretty_and_jsonl(
 
     monkeypatch.chdir(tmp_path)
 
-    pretty_exit = main(["--file", "flow.py"])
+    pretty_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     pretty_output = capsys.readouterr().out
     case_2_output = pretty_output.split("case_2  branches={bg_1=branch_2}", 1)[1]
     assert pretty_exit == 0
@@ -1080,7 +1087,7 @@ def test_execute_branch_anchor_status_visible_in_pretty_and_jsonl(
     assert "finish_b" in case_2_output
     assert "executed attempt=1 duration=" in case_2_output
 
-    jsonl_exit = main(["--file", "flow.py", "--output", "jsonl"])
+    jsonl_exit = main(["verify", "--reuse-state", "--file", "flow.py", "--output", "jsonl"])
     jsonl_output = capsys.readouterr().out
     jsonl_events = _jsonl_events(jsonl_output)
     payload = _execute_result_payload(jsonl_output)
@@ -1133,7 +1140,7 @@ def test_execute_output_jsonl_reports_state_invalidation(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(["--file", "flow.py", "--develop-step", "target"])
+    first_exit = main(["loop", "target", "--file", "flow.py"])
     capsys.readouterr()
     assert first_exit == 0
 
@@ -1164,7 +1171,7 @@ def test_execute_output_jsonl_reports_state_invalidation(
         """,
     )
 
-    second_exit = main(["--file", "flow.py", "--develop-step", "target", "--output", "jsonl"])
+    second_exit = main(["loop", "target", "--file", "flow.py", "--output", "jsonl"])
     events = _jsonl_events(capsys.readouterr().out)
     validity_events = [
         event for event in events if event["event"] == "state_validity"
@@ -1216,7 +1223,7 @@ def test_execute_file_and_journey_filters_limit_selection(
 
     monkeypatch.chdir(tmp_path)
     exit_code = main(
-        ["--file", "pkg/first.py", "--journey", "alpha", "--output", "jsonl"]
+        ["verify", "--reuse-state", "--file", "pkg/first.py", "--journey", "alpha", "--output", "jsonl"]
     )
 
     payload = _execute_result_payload(capsys.readouterr().out)
@@ -1245,7 +1252,7 @@ def test_execute_errors_when_journey_name_is_ambiguous(
     _write(tmp_path / "nested" / "b.py", content)
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--journey", "shared"])
+    exit_code = main(["verify", "--reuse-state", "--journey", "shared"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -1268,7 +1275,7 @@ def test_execute_errors_when_no_decorated_journeys_are_found(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main([])
+    exit_code = main(["verify", "--reuse-state"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -1282,7 +1289,7 @@ def test_cli_renders_user_friendly_missing_file_error(
     capsys: pytest.CaptureFixture[str],
 ):
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "missing.py"])
+    exit_code = main(["verify", "--reuse-state", "--file", "missing.py"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -1322,7 +1329,7 @@ def test_execute_step_runs_only_the_unique_matching_journey(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--step", "target", "--output", "jsonl"])
+    exit_code = main(["verify", "--step", "target", "--output", "jsonl"])
 
     payload = _execute_result_payload(capsys.readouterr().out)
     assert exit_code == 0
@@ -1349,7 +1356,7 @@ def test_execute_step_errors_when_label_is_ambiguous_across_journeys(
     _write(tmp_path / "b.py", content.replace("def flow()", "def other_flow()"))
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--step", "shared"])
+    exit_code = main(["verify", "--step", "shared"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -1377,7 +1384,7 @@ def test_execute_output_jsonl_errors_include_hint_for_missing_step(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "alpha.py", "--step", "missing", "--output", "jsonl"])
+    exit_code = main(["verify", "--step", "missing", "--file", "alpha.py", "--output", "jsonl"])
 
     payload = _execute_result_payload(capsys.readouterr().out)
     assert exit_code == 1
@@ -1420,7 +1427,7 @@ def test_execute_streams_live_case_progress_for_all_branches(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py"])
+    exit_code = main(["verify", "--reuse-state", "--file", "flow.py"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -1488,7 +1495,7 @@ def test_execute_step_streams_live_target_progress_and_replay_anchor(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--step", "finish_manual"])
+    exit_code = main(["verify", "--step", "finish_manual", "--file", "flow.py"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -1556,7 +1563,7 @@ def test_execute_develop_step_steps_forward_with_continue(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
     exit_code = main(
-        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+        ["loop", "publish", "--file", "flow.py", "--interactive", "--no-state"]
     )
 
     captured = capsys.readouterr()
@@ -1567,14 +1574,14 @@ def test_execute_develop_step_steps_forward_with_continue(
         output,
         "Plan",
         "Execution",
-        "Development mode paused after step publish attempt=1 executed.",
+        "Loop paused after step publish attempt=1 executed.",
     )
     assert "prepare" in log_output
     assert "publish" in log_output
     assert "executed attempt=1 duration=" in log_output
-    assert "Development mode paused after step publish attempt=1 executed." in output
+    assert "Loop paused after step publish attempt=1 executed." in output
     assert "cleanup" in log_output
-    assert "Development mode paused after step cleanup attempt=1 executed." in output
+    assert "Loop paused after step cleanup attempt=1 executed." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -1605,7 +1612,7 @@ def test_execute_develop_step_exits_after_target_without_prompt(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish"])
+    exit_code = main(["loop", "publish", "--file", "flow.py"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -1614,11 +1621,11 @@ def test_execute_develop_step_exits_after_target_without_prompt(
     assert "prepare" in log_output
     assert "publish" in log_output
     assert "executed attempt=1 duration=" in log_output
-    assert "Development mode stopped after step publish attempt=1 executed." in log_output
+    assert "Loop stopped after step publish attempt=1 executed." in log_output
     assert "cleanup                       executed attempt=1 duration=" not in log_output
     assert "Press c to continue or r to retry" not in output
-    assert "Summary: develop-step publish stopped after target, 0 failed" in output
-    assert "Summary: develop-step publish stopped after target, 0 failed, duration=" in output
+    assert "Summary: loop publish stopped after target, 0 failed" in output
+    assert "Summary: loop publish stopped after target, 0 failed, duration=" in output
 
 
 def test_execute_develop_step_state_retries_same_target_by_default_and_later_target_continues(
@@ -1662,27 +1669,27 @@ def test_execute_develop_step_state_retries_same_target_by_default_and_later_tar
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(["--file", "flow.py", "--develop-step", "publish"])
+    first_exit = main(["loop", "publish", "--file", "flow.py"])
     first_capture = capsys.readouterr()
     first_output = first_capture.out
     first_logs = first_capture.out
 
     assert first_exit == 0
-    assert "Development mode stopped after step publish attempt=1 executed." in first_logs
+    assert "Loop stopped after step publish attempt=1 executed." in first_logs
     assert _event_lines(events_file) == ["prepare", "publish"]
 
-    second_exit = main(["--file", "flow.py", "--develop-step", "publish"])
+    second_exit = main(["loop", "publish", "--file", "flow.py"])
     second_logs = capsys.readouterr().out
 
     assert second_exit == 0
-    assert "Development mode stopped after step publish attempt=2 executed." in second_logs
+    assert "Loop stopped after step publish attempt=2 executed." in second_logs
     assert _event_lines(events_file) == ["prepare", "publish", "prepare", "publish"]
 
-    third_exit = main(["--file", "flow.py", "--develop-step", "cleanup"])
+    third_exit = main(["loop", "cleanup", "--file", "flow.py"])
     third_logs = capsys.readouterr().out
 
     assert third_exit == 0
-    assert "Development mode stopped after step cleanup attempt=1 executed." in third_logs
+    assert "Loop stopped after step cleanup attempt=1 executed." in third_logs
     assert _event_lines(events_file) == [
         "prepare",
         "publish",
@@ -1718,21 +1725,21 @@ def test_execute_after_develop_step_guides_fresh_broad_verification(
     )
 
     monkeypatch.chdir(tmp_path)
-    develop_exit = main(["--file", "flow.py", "--develop-step", "publish"])
+    develop_exit = main(["loop", "publish", "--file", "flow.py"])
     capsys.readouterr()
 
-    broad_exit = main(["--file", "flow.py"])
+    broad_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     broad_output = capsys.readouterr().out
 
     assert develop_exit == 0
     assert broad_exit == 1
     assert "created for develop_step 'publish', not None" in broad_output
     assert (
-        "Rerun the same --develop-step target to keep iterating, or use `--no-state` "
-        "for a fresh --step/full journey verification after a develop-step pause."
+        "Rerun the same `journey loop <step>` target to keep iterating, or use `journey verify --fresh --step <step>` "
+        "or a full fresh journey verification after a loop pause."
     ) in broad_output
 
-    fresh_exit = main(["--file", "flow.py", "--no-state"])
+    fresh_exit = main(["verify", "--fresh", "--file", "flow.py"])
     fresh_output = capsys.readouterr().out
 
     assert fresh_exit == 0
@@ -1786,17 +1793,17 @@ def test_execute_develop_step_retry_allows_unrelated_branch_anchor_snapshots(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(["--file", "flow.py", "--develop-step", "review_thread"])
+    first_exit = main(["loop", "review_thread", "--file", "flow.py"])
     first_output = capsys.readouterr().out
-    second_exit = main(["--file", "flow.py", "--develop-step", "review_thread"])
+    second_exit = main(["loop", "review_thread", "--file", "flow.py"])
     second_output = capsys.readouterr().out
 
     assert first_exit == 0
     assert second_exit == 0
     assert "invalid branch anchor snapshot data" not in first_output
     assert "invalid branch anchor snapshot data" not in second_output
-    assert "Development mode stopped after step review_thread attempt=1 executed." in first_output
-    assert "Development mode stopped after step review_thread attempt=2 executed." in second_output
+    assert "Loop stopped after step review_thread attempt=1 executed." in first_output
+    assert "Loop stopped after step review_thread attempt=2 executed." in second_output
 
 
 def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
@@ -1837,27 +1844,27 @@ def test_execute_develop_step_failed_pause_exits_nonzero_and_can_retry(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(["--file", "flow.py", "--develop-step", "poll"])
+    first_exit = main(["loop", "poll", "--file", "flow.py"])
     first_capture = capsys.readouterr()
     first_output = first_capture.out
     first_logs = first_capture.out
 
     assert first_exit == 1
-    assert "Development mode stopped after step poll attempt=1 failed (pending)." in first_logs
+    assert "Loop stopped after step poll attempt=1 failed (pending)." in first_logs
     assert "retry attempts were exhausted" not in first_output
     assert (
-        "Retry failed step: journey --file flow.py --journey flow --develop-step poll"
+        "Retry failed step: journey loop poll --file flow.py --journey flow"
         in first_output
     )
-    assert "Artifacts: .journey/logs (run `journey logs` to inspect)" in first_output
+    assert "Artifacts: .journey/logs (run `journey evidence` to inspect)" in first_output
     assert "Summary: 0 journeys executed, 0 cases executed, 1 failed, duration=" in first_output
     assert state_file.exists()
 
-    second_exit = main(["--file", "flow.py", "--develop-step", "poll"])
+    second_exit = main(["loop", "poll", "--file", "flow.py"])
     second_logs = capsys.readouterr().out
 
     assert second_exit == 0
-    assert "Development mode stopped after step poll attempt=2 executed." in second_logs
+    assert "Loop stopped after step poll attempt=2 executed." in second_logs
 
 
 def test_execute_develop_step_cannot_continue_later_from_failed_pause(
@@ -1885,12 +1892,12 @@ def test_execute_develop_step_cannot_continue_later_from_failed_pause(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(["--file", "flow.py", "--develop-step", "poll"])
+    first_exit = main(["loop", "poll", "--file", "flow.py"])
     capsys.readouterr()
 
     assert first_exit == 1
 
-    second_exit = main(["--file", "flow.py", "--develop-step", "finish"])
+    second_exit = main(["loop", "finish", "--file", "flow.py"])
     second_output = capsys.readouterr().out
 
     assert second_exit == 1
@@ -1928,7 +1935,7 @@ def test_execute_develop_step_closes_returned_handles_after_continue_prompt(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
     exit_code = main(
-        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+        ["loop", "publish", "--file", "flow.py", "--interactive", "--no-state"]
     )
 
     capsys.readouterr()
@@ -1969,7 +1976,7 @@ def test_execute_develop_step_closes_returned_handles_after_retry_prompt(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
     exit_code = main(
-        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+        ["loop", "publish", "--file", "flow.py", "--interactive", "--no-state"]
     )
 
     capsys.readouterr()
@@ -2014,7 +2021,7 @@ def test_execute_develop_step_closes_returned_handles_when_prompt_is_interrupted
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
     exit_code = main(
-        ["--file", "flow.py", "--develop-step", "publish", "--interactive", "--no-state"]
+        ["loop", "publish", "--file", "flow.py", "--interactive", "--no-state"]
     )
 
     output = capsys.readouterr().out
@@ -2046,7 +2053,7 @@ def test_execute_develop_step_cleanup_failure_after_prompt_stops_before_continue
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(["loop", "publish", "--file", "flow.py", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -2095,30 +2102,18 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
     monkeypatch.setattr("builtins.input", interrupting_input)
 
     first_exit = main(
-        [
-            "--file",
-            "flow.py",
-            "--develop-step",
-            "publish",
-            "--interactive",
-        ]
+        ["loop", "publish", "--file", "flow.py", "--interactive"]
     )
     first_output = capsys.readouterr().out
 
     assert first_exit == 130
     assert state_file.exists()
-    assert "Development mode paused after step publish attempt=1 executed." in first_output
+    assert "Loop paused after step publish attempt=1 executed." in first_output
     assert "Interrupted: Journey execution was interrupted before it finished." in first_output
 
     monkeypatch.setattr("builtins.input", resume_input)
     second_exit = main(
-        [
-            "--file",
-            "flow.py",
-            "--develop-step",
-            "publish",
-            "--interactive",
-        ]
+        ["loop", "publish", "--file", "flow.py", "--interactive"]
     )
     second_capture = capsys.readouterr()
     second_output = second_capture.out
@@ -2126,7 +2121,7 @@ def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
 
     assert second_exit == 0
     assert "case_1 resume" in second_logs
-    assert "Development mode paused after step publish attempt=1 executed." in second_output
+    assert "Loop paused after step publish attempt=1 executed." in second_output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in second_output
 
 
@@ -2178,22 +2173,22 @@ def test_execute_develop_step_retry_same_step_after_failed_pause(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "poll", "--interactive"])
+    exit_code = main(["loop", "poll", "--file", "flow.py", "--interactive"])
 
     captured = capsys.readouterr()
     output = captured.out
     log_output = captured.out
     assert exit_code == 0
     assert "Error: poll failed after" in log_output
-    assert "Development mode paused after step poll attempt=1 failed (pending)." in output
+    assert "Loop paused after step poll attempt=1 failed (pending)." in output
     assert "Error: poll failed after" in log_output
-    assert "Development mode paused after step poll attempt=2 failed (pending)." in output
+    assert "Loop paused after step poll attempt=2 failed (pending)." in output
     assert "poll" in log_output
     assert "executed attempt=3 duration=" in log_output
-    assert "Development mode paused after step poll attempt=3 executed." in output
+    assert "Loop paused after step poll attempt=3 executed." in output
     assert "finish" in log_output
     assert "executed attempt=1 duration=" in log_output
-    assert "Development mode paused after step finish attempt=1 executed." in output
+    assert "Loop paused after step finish attempt=1 executed." in output
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in output
 
 
@@ -2251,7 +2246,7 @@ def test_execute_develop_step_retry_reloads_changed_step(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(["loop", "publish", "--file", "flow.py", "--interactive"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -2342,7 +2337,7 @@ def test_execute_develop_step_continue_reloads_later_step_from_replay_boundary(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(["loop", "publish", "--file", "flow.py", "--interactive"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -2434,7 +2429,7 @@ def test_execute_develop_step_restarts_when_already_run_step_changes(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(["loop", "publish", "--file", "flow.py", "--interactive"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -2537,14 +2532,14 @@ def test_execute_develop_step_accepts_future_plan_changes_after_continue(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "publish", "--interactive"])
+    exit_code = main(["loop", "publish", "--file", "flow.py", "--interactive"])
 
     captured = capsys.readouterr()
     output = captured.out
     log_output = captured.out
     assert exit_code == 0
     assert "restarting case_1" in log_output
-    assert "Development mode paused after step extra attempt=1 executed." in output
+    assert "Loop paused after step extra attempt=1 executed." in output
     assert events_file.read_text(encoding="utf-8").splitlines() == [
         "prepare",
         "publish",
@@ -2611,13 +2606,7 @@ def test_execute_develop_step_state_resume_reloads_future_change(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", interrupting_input)
     first_exit = main(
-        [
-            "--file",
-            "flow.py",
-            "--develop-step",
-            "publish",
-            "--interactive",
-        ]
+        ["loop", "publish", "--file", "flow.py", "--interactive"]
     )
     capsys.readouterr()
 
@@ -2664,13 +2653,7 @@ def test_execute_develop_step_state_resume_reloads_future_change(
 
     monkeypatch.setattr("builtins.input", resume_input)
     second_exit = main(
-        [
-            "--file",
-            "flow.py",
-            "--develop-step",
-            "publish",
-            "--interactive",
-        ]
+        ["loop", "publish", "--file", "flow.py", "--interactive"]
     )
 
     captured = capsys.readouterr()
@@ -2721,11 +2704,11 @@ def test_execute_develop_step_continue_from_failed_pause_exits_with_error(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("builtins.input", fake_input)
-    exit_code = main(["--file", "flow.py", "--develop-step", "poll", "--interactive"])
+    exit_code = main(["loop", "poll", "--file", "flow.py", "--interactive"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
-    assert "Development mode paused after step poll attempt=1 failed (pending)." in output
+    assert "Loop paused after step poll attempt=1 failed (pending)." in output
     assert "Error: CallableExecutionError during execute" in output
     assert "CallableExecutionError" in output
     assert "retry attempts were exhausted" not in output
@@ -2756,7 +2739,7 @@ def test_execute_streams_retry_events_in_pretty_mode(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py"])
+    exit_code = main(["verify", "--reuse-state", "--file", "flow.py"])
 
     captured = capsys.readouterr()
     output = captured.out
@@ -2808,14 +2791,14 @@ def test_execute_continues_and_summarizes_compile_failures_by_default(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main([])
+    exit_code = main(["verify", "--reuse-state"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "good.py:good" in output
     assert "Error:" in output
     assert "Next commands:" in output
-    assert "journey --file broken.py --journey broken" in output
+    assert "journey verify --file broken.py --journey broken" in output
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
     assert removed_plan_inspection_flag not in output
     assert "Summary: 1 journey planned, 1 case planned, 1 failed" in output
@@ -2862,7 +2845,7 @@ def test_execute_continues_and_summarizes_failures_by_default(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main([])
+    exit_code = main(["verify", "--reuse-state"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -2904,7 +2887,7 @@ def test_fail_fast_stops_before_later_journeys_are_processed(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--fail-fast"])
+    exit_code = main(["verify", "--reuse-state", "--fail-fast"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -2945,7 +2928,7 @@ def test_execute_default_state_uses_single_file_after_success(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--log-level", "off"])
+    exit_code = main(["verify", "--reuse-state", "--log-level", "off"])
 
     assert exit_code == 0
     assert _state_path(alpha_file).exists()
@@ -2979,8 +2962,8 @@ def test_execute_default_state_persists_but_reruns_after_completion(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
-    second_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py", "--log-level", "off", "--no-logs"])
+    second_exit = main(["verify", "--reuse-state", "--file", "flow.py", "--log-level", "off", "--no-logs"])
 
     assert first_exit == 0
     assert second_exit == 0
@@ -3007,7 +2990,7 @@ def test_execute_no_state_skips_default_state_file(
     )
 
     monkeypatch.chdir(tmp_path)
-    exit_code = main(["--file", "flow.py", "--no-state", "--log-level", "off"])
+    exit_code = main(["verify", "--file", "flow.py", "--log-level", "off"])
 
     assert exit_code == 0
     assert not _state_path(flow_file).exists()
@@ -3057,12 +3040,12 @@ def test_execute_no_state_update_reads_without_persisting_progress(
     )
 
     monkeypatch.chdir(tmp_path)
-    first_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py", "--log-level", "off", "--no-logs"])
     state_file = _state_path(flow_file)
     before = state_file.read_bytes()
 
     second_exit = main(
-        ["--file", "flow.py", "--no-state-update", "--log-level", "off"]
+        ["verify", "--reuse-state", "--file", "flow.py", "--no-state-update", "--log-level", "off"]
     )
 
     assert first_exit == 130
@@ -3108,7 +3091,7 @@ def test_execute_state_interrupts_and_resumes_via_cli(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     first_output = capsys.readouterr().out
 
     assert first_exit == 130
@@ -3117,12 +3100,7 @@ def test_execute_state_interrupts_and_resumes_via_cli(
     assert state_file.exists()
 
     second_exit = main(
-        [
-            "--file",
-            "flow.py",
-            "--output",
-            "jsonl",
-        ]
+        ["verify", "--reuse-state", "--file", "flow.py", "--output", "jsonl"]
     )
     payload = _execute_result_payload(capsys.readouterr().out)
 
@@ -3177,7 +3155,7 @@ def test_execute_ignores_legacy_default_state_file(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py", "--log-level", "off", "--no-logs"])
     capsys.readouterr()
 
     assert first_exit == 130
@@ -3187,7 +3165,7 @@ def test_execute_ignores_legacy_default_state_file(
     state_file.unlink()
     state_file.parent.rmdir()
 
-    second_exit = main(["--file", "flow.py", "--log-level", "off", "--no-logs"])
+    second_exit = main(["verify", "--reuse-state", "--file", "flow.py", "--log-level", "off", "--no-logs"])
     capsys.readouterr()
 
     assert second_exit == 0
@@ -3262,7 +3240,7 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     first_capture = capsys.readouterr()
 
     assert first_exit == 130
@@ -3278,7 +3256,7 @@ def test_execute_state_first_sigint_finishes_step_and_resumes_after_it(
         "exit",
     ]
 
-    second_exit = main(["--file", "flow.py"])
+    second_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     second_capture = capsys.readouterr()
 
     assert second_exit == 0
@@ -3350,7 +3328,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     first_capture = capsys.readouterr()
 
     assert first_exit == 130
@@ -3367,7 +3345,7 @@ def test_execute_state_second_sigint_interrupts_dirty_step_and_resumes_inputs(
         "after_first_signal",
     ]
 
-    second_exit = main(["--file", "flow.py"])
+    second_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     second_capture = capsys.readouterr()
 
     assert second_exit == 0
@@ -3415,14 +3393,14 @@ def test_execute_state_resume_streams_case_resume_in_pretty_mode(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     first_capture = capsys.readouterr()
     first_logs = first_capture.out
 
     assert first_exit == 130
     assert "Warning: maybe_interrupt interrupted after" in first_logs
 
-    second_exit = main(["--file", "flow.py"])
+    second_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     second_capture = capsys.readouterr()
     second_logs = second_capture.out
 
@@ -3491,7 +3469,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
 
     monkeypatch.chdir(tmp_path)
 
-    first_exit = main(["--file", "flow.py"])
+    first_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     first_capture = capsys.readouterr()
     first_logs = first_capture.out
 
@@ -3499,7 +3477,7 @@ def test_execute_state_resume_rehydrates_same_step_args_and_retries_twice_more(
     assert "Warning: poll interrupted after" in first_logs
     assert state_file.exists()
 
-    second_exit = main(["--file", "flow.py"])
+    second_exit = main(["verify", "--reuse-state", "--file", "flow.py"])
     second_capture = capsys.readouterr()
     second_logs = second_capture.out
 

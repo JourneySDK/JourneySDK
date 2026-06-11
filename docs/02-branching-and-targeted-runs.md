@@ -1,47 +1,23 @@
-# 02 Branching and Targeted Runs
+# 02 Branching And Step Loops
 
-The first real Journey payoff appears when one authored function turns into more than one executable case.
+Journey's core payoff is that one Python user journey can become a replayable agent loop:
 
-This chapter covers three related ideas:
+- develop a single meaningful step with `journey loop`
+- verify one branch target with `journey verify --step`
+- verify the whole journey and its branches with `journey verify`
 
-- step anchors let later cases replay from a known point
-- `branch()` lets one function produce several linear cases
-- `--step` and `--develop-step` let you run only the case that reaches one target label
+## Choose Replayable Step Boundaries
 
-## Choosing Step And Branch Boundaries
+Each `step(...)` should encapsulate one operation an agent would rerun while coding. Good examples are
+`clear_basket_and_add_items`, `submit_order_and_verify_confirmation`, `receive_confirmation_email`, and
+`complete_checkout_and_verify_registration_effects`.
 
-Write journey specs as plain Python files. If the project has no existing convention, place new specs under
-`journeys/<feature>_journey.py`.
+A step is a boundary Journey can target, retry, store, log, invalidate, and replay from. It should earn that cost. Do
+not wrap every click, form fill, poll, wait, touchpoint call, or assertion as its own step. Keep actions together when
+they recover together, and put helper calls inside the step that owns the user-facing outcome.
 
-Journeys should read like a user flow. Keep the `@journey` function short enough to scan as the user's story, with
-technical setup hidden behind fixtures, Docker Compose, touchpoints, or small app-specific helpers. Avoid turning
-journey files into infrastructure harnesses: subprocess management, embedded HTTP servers, raw polling loops, PID
-files, ports, datastore cleanup, and similar plumbing should stay outside the journey spec. Use the shortest
-deterministic route that proves the real user journey.
-
-Each `step(...)` should encapsulate a meaningful, retryable operation in the user journey. A step is a boundary that may
-be targeted, retried, stored, logged, invalidated, or used as a branch replay anchor, so it should earn that cost. Each
-extra step can add state binding, invalidation checks, log scopes, and store/restore work.
-Prefer names like `clear_basket_and_add_items`, `submit_order`, or `receive_confirmation_email` over tiny fragments such
-as `click_button`. Stable step function names become CLI labels used by `--step`, `--develop-step`, state, retries, and
-branch replay.
-
-Use `step(...)` only for meaningful durable boundaries: target labels, retry boundaries, branch replay anchors, or
-values passed to later steps. Do not wrap every click, form fill, setup call, touchpoint wait, poll, or assertion as its
-own step.
-Choose step scope by recovery value: a step should be a useful place to restart from the function start, with stable
-state worth restoring or passing onward. Group actions that recover together into one user-flow step, such as
-`create_watch_for_demo_page`, `change_page_and_wait_for_detection`, or `submit_order_and_verify_side_effects`; put the
-waits and assertions for that outcome inside the same step unless an agent would independently target them.
-Put retry on the operation whose rerun semantics match real recovery, not on many tiny follow-up checks.
-
-Use `branch(...)` for alternate user paths after shared setup. Use `branch(start_from=step_result)` when later branch
-cases should restart from a saved step boundary instead of repeating every shared setup step. Choose `start_from` as the
-durable point you would be comfortable retrying or resuming from while iterating on later branches. Values crossing
-replay boundaries must be pickle-serializable or implement Journey's rehydration protocol.
-Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup.
-For flows like changedetection.io, model shared setup once, then branch from a detected-change anchor to verify diff UI and notification behavior independently.
-Avoid decorative branches when there is only one meaningful path.
+Step function names become CLI labels used by `journey loop`, `journey verify --step`, state files, retries, evidence
+filters, and branch replay. Prefer explicit top-level functions and stable user-flow names.
 
 ## Branch Once, Reuse Shared Setup
 
@@ -58,18 +34,17 @@ def branching_journey() -> None:
 
     if branch():
         step(approve_fast_track_signup, classified)
-    elif branch(start_from=classified):
+    elif branch(replay_from=classified):
         step(queue_manual_review_signup, classified)
 ```
 
 Why this shape matters:
 
-- `load_signup_request` and `classify_signup_request` are shared setup
-- `branch(start_from=classified)` gives later execution a replay anchor at that step's post-exit boundary
-- each `branch(...)` arm becomes its own case
+- `load_signup_request` and `classify_signup_request` are shared setup.
+- `branch(replay_from=classified)` marks `classified` as the replay anchor for later branch cases.
+- each `branch(...)` arm becomes its own executable case.
 
-External system state belongs on step values that cross explicit replay boundaries. If a step result needs custom
-rehydration behavior, define it at module top level and make that value implement the Journey rehydration protocol:
+Values crossing replay boundaries must be pickle-serializable or implement Journey's rehydration protocol:
 
 ```python
 class BrowserSession:
@@ -82,21 +57,45 @@ class BrowserSession:
 
 
 session = step(open_browser_session)
-if branch(start_from=session):
-    ...
+if branch(replay_from=session):
+    step(complete_branch_from_session, session)
 ```
 
-Journey stores and restores replayable step values only when execution truly rewinds to an explicit replay boundary,
-such as a step-started later branch. Touchpoint-specific rehydration behavior is documented in the packaged references
-printed by `journey --touchpoint-docs <name>`.
+Touchpoint-specific rehydration behavior is documented in the packaged references printed by
+`journey touchpoints <name>`.
 
-Journey compiles the branch structure internally before execution. A normal run executes every generated case; a
-targeted run uses the compiled labels to choose one case.
+## Loop One Step While Coding
 
-### Run Only the Branch That Reaches One Step
+Use `journey loop` when you are actively editing one step and want Journey to stop after that target step:
 
 ```bash
-uv run journey --file docs/branching_journey/branching_journey.py --step queue_manual_review_signup
+uv run journey loop queue_manual_review_signup --file docs/branching_journey/branching_journey.py
+```
+
+```console
+Plan
+  docs/branching_journey/branching_journey.py:branching_journey ...
+    case_1  labels: load_signup_request, classify_signup_request, approve_fast_track_signup; branches: {bg_1=branch_1}
+    case_2  labels: load_signup_request, classify_signup_request, queue_manual_review_signup; branches: {bg_1=branch_2}
+  Summary: 1 journey planned, 2 cases planned, 0 failed
+
+Execution
+Loop stopped after step queue_manual_review_signup attempt=1 executed.
+  Summary: loop queue_manual_review_signup stopped after target, 0 failed
+```
+
+Rerun the same command after each edit. Journey keeps its state by default, reloads the selected journey file, and
+retries from the nearest explicit replay boundary or from the case beginning when no boundary exists.
+
+When a command fails, copy the CLI's `Retry failed step: ...` command as the focused loop. Inspect `What happened`,
+`Try this`, and `Next commands` before editing.
+
+## Verify One Branch Target
+
+Use `journey verify --step` when you want the case that reaches one label:
+
+```bash
+uv run journey verify --step queue_manual_review_signup --file docs/branching_journey/branching_journey.py
 ```
 
 ```console
@@ -108,67 +107,39 @@ Plan
 
 Execution
     case_2  branches={bg_1=branch_2}
-      load_signup_request  start executed attempt=1
       load_signup_request  executed attempt=1 duration=...
-      classify_signup_request  start executed attempt=1
       classify_signup_request  executed attempt=1 duration=...
       branch bg_1  branch_2
-      queue_manual_review_signup  start executed attempt=1
       queue_manual_review_signup  executed attempt=1 duration=...
     case_2 done steps=3 duration=... stopped_at=queue_manual_review_signup replay_anchor=classify_signup_request
   Summary: 1 journey executed, 1 case executed, 0 failed
 ```
 
-That output is the reason `--step` is so useful during development: Journey chooses the single case that reaches the
-label you care about. The reported `replay_anchor` names the branch step anchor, but this targeted run still starts
-from the selected case's beginning.
+The reported `replay_anchor` names the branch step anchor. A fresh target verification still executes from the selected
+case's required beginning unless existing state or retry behavior causes replay.
 
-### Stop After the Target Step While You Iterate
+## Broaden Before Finishing
 
-```bash
-uv run journey --file docs/branching_journey/branching_journey.py --develop-step queue_manual_review_signup
-```
-
-```console
-Plan
-  docs/branching_journey/branching_journey.py:branching_journey ...
-    case_1  labels: load_signup_request, classify_signup_request, approve_fast_track_signup; branches: {bg_1=branch_1}
-    case_2  labels: load_signup_request, classify_signup_request, queue_manual_review_signup; branches: {bg_1=branch_2}
-  Summary: 1 journey planned, 2 cases planned, 0 failed
-
-Execution
-Development mode stopped after step queue_manual_review_signup attempt=1 executed.
-  Summary: develop-step queue_manual_review_signup stopped after target, 0 failed
-```
-
-Use `--develop-step` when you are actively editing one branch and want Journey to pause after the step boundary you
-care about. Rerun the same command to retry the paused step after editing code, or target the next step with the same
-state file to continue. Develop-step retry and continue replay from the paused step's nearest explicit replay boundary;
-when no explicit boundary exists, the selected case starts again from the beginning. Add `--interactive` when you want
-Journey to keep the process open and prompt after each paused step. Journey reloads and recompiles the selected journey
-file before each retry or continue, so edits are picked up immediately.
-
-When you are done with the focused loop and want broader verification, run the final `--step` or full journey with
-`--no-state` so release evidence comes from a fresh path instead of a replayed development checkpoint. See
-[Retries And Resume](03-retries-and-resume.md) for the state model and the `fresh`, `replayed`, and `invalidated`
-status lines.
-
-For coding agents, this becomes the default reconciliation loop:
+For coding agents, the verification ladder is:
 
 ```bash
-journey --file journeys/<feature>_journey.py --develop-step <target_step>
-journey --file journeys/<feature>_journey.py --step <target_step> --no-state
-journey --file journeys/<feature>_journey.py --no-state
+journey loop <target_step> --file journeys/<feature>_journey.py
+journey evidence --step <target_step>
+journey verify --step <target_step> --file journeys/<feature>_journey.py --fresh
+journey verify --file journeys/<feature>_journey.py --fresh
 ```
 
-When an agent is fixing a failed journey, it should run the failing command or full journey once, use the first failed
-step and the CLI's `Retry failed step:` command as the focused loop, and rerun that same `--develop-step` command after
-every edit until it passes. The agent should report the exact commands it ran, the target step or journey that passed,
-and any `journey logs` traces, videos, touchpoint payloads, or text logs that prove the end-to-end behavior. When using
-`--output jsonl`, the agent should read `state_validity` events and each report record's `status` before relying on
-replayed evidence.
+Use `--output jsonl` when another tool needs structured results:
 
-## Rehydrate Later Cases from a Step Anchor
+```bash
+journey verify --step <target_step> --file journeys/<feature>_journey.py --output jsonl
+```
+
+In JSONL output, read `state_validity` events and each report record's `status` (`executed`, `replayed`, or `failed`)
+before relying on a run as evidence. Treat replayed state as development-loop evidence, not final confidence. Use
+`--fresh` for final target-step or full-journey verification whenever feasible.
+
+## Rehydrate Later Cases From A Step Anchor
 
 Read `docs/rehydration_journey/rehydration_journey.py`.
 
@@ -183,55 +154,31 @@ def rehydration_journey() -> None:
 
     shared = step(shared_after_anchor, context)
 
-    if branch(start_from=context):
+    if branch(replay_from=context):
         step(complete_branch_a_from_anchor, shared)
-    elif branch(start_from=context):
+    elif branch(replay_from=context):
         step(complete_branch_b_from_anchor, shared)
 ```
 
-This example is intentionally small. It exists to show one idea clearly: in a full multi-case run, later branches can
-restart from a saved step anchor instead of rerunning earlier shared setup.
+In a full multi-case run, later branches can restart from the saved `context` anchor instead of rerunning earlier shared
+setup. If the anchor value implements `__store__` / `__restore__`, Journey restores that external state only when a
+later branch actually starts from the anchor's post-exit boundary.
 
-If a value created by the anchor step implements `__store__` / `__restore__`, Journey restores that external state
-only when a later branch actually starts from the anchor's post-exit boundary.
-
-### Target the Second Branch
+Target the second branch:
 
 ```bash
-uv run journey --file docs/rehydration_journey/rehydration_journey.py --step complete_branch_b_from_anchor
+uv run journey verify --step complete_branch_b_from_anchor --file docs/rehydration_journey/rehydration_journey.py
 ```
-
-```console
-Plan
-  docs/rehydration_journey/rehydration_journey.py:rehydration_journey ...
-    case_1  labels: prepare_context, shared_after_anchor, complete_branch_a_from_anchor; branches: {bg_1=branch_1}
-    case_2  labels: prepare_context, shared_after_anchor, complete_branch_b_from_anchor; branches: {bg_1=branch_2}
-  Summary: 1 journey planned, 2 cases planned, 0 failed
-
-Execution
-    case_2  branches={bg_1=branch_2}
-      prepare_context  executed attempt=1 duration=...
-      shared_after_anchor  executed attempt=1 duration=...
-      branch bg_1  branch_2
-      complete_branch_b_from_anchor  executed attempt=1 duration=...
-    case_2 done steps=3 duration=... stopped_at=complete_branch_b_from_anchor replay_anchor=prepare_context
-  Summary: 1 journey executed, 1 case executed, 0 failed
-```
-
-The `replay_anchor=prepare_context` part tells you which step is the branch replay anchor. For a targeted `--step` run
-it is reported metadata; Journey still executes from the selected case's required beginning unless existing state or
-retry behavior causes replay.
 
 ## What To Notice
 
 - Authoring stays sequential, even when execution becomes multi-case.
-- Branch `start_from` points to an earlier step result, and later branch cases can resume from that step's post-exit
-  boundary.
-- Coarse steps make those boundaries useful. Tiny click/assertion steps add state and recording overhead without giving
-  later branches a better resume point.
-- External replay behavior lives on values themselves through `__store__` / `__restore__`, but those hooks run only
+- `branch(replay_from=...)` points to an earlier step result, and later branch cases can resume from that step's
+  post-exit boundary.
+- Coarse steps make those boundaries useful. Tiny click/assertion steps add state and evidence overhead without giving
+  agents a better replay point.
+- External replay behavior lives on values themselves through `__store__` / `__restore__`, and those hooks run only
   when an explicit replay boundary needs that value.
-- `--step` picks one case. `--develop-step` picks one case and stops after the target so you can iterate faster.
-- Branching does not force you into a new DSL. It is still ordinary Python with `if` and `elif`.
+- `journey loop` is for rapid edit loops. `journey verify --step` and `journey verify` are for broader evidence.
 
 Continue with [03 Retries and Resume](03-retries-and-resume.md) when the path is linear but the world around it is not ready yet.

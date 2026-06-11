@@ -105,7 +105,7 @@ def _browser_manifest(
     )
 
 
-def test_logs_command_interactively_opens_selected_trace(
+def test_evidence_command_interactively_opens_selected_trace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -131,7 +131,7 @@ def test_logs_command_interactively_opens_selected_trace(
     prompts = iter(["1", "t", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -141,7 +141,7 @@ def test_logs_command_interactively_opens_selected_trace(
     assert "skipped bad manifest" in output
 
 
-def test_logs_command_interactively_opens_all_cases_trace(
+def test_evidence_command_interactively_opens_all_cases_trace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -180,7 +180,7 @@ def test_logs_command_interactively_opens_all_cases_trace(
     prompts = iter(["a", "t", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -188,7 +188,7 @@ def test_logs_command_interactively_opens_all_cases_trace(
     assert "a. all cases" in output
 
 
-def test_logs_command_reports_missing_cases(
+def test_evidence_command_reports_missing_cases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -198,7 +198,7 @@ def test_logs_command_reports_missing_cases(
         lambda root: RecordingDiscoveryResult((), ()),
     )
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -206,14 +206,14 @@ def test_logs_command_reports_missing_cases(
     assert "What happened:" in output
     assert "Try this:" in output
     assert "Next commands:" in output
-    assert "journey logs --help" in output
+    assert "journey evidence --help" in output
 
 
-def test_logs_command_invalid_branch_filter_is_instructional(
+def test_evidence_command_invalid_branch_filter_is_instructional(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ):
-    exit_code = main(["logs", "--dir", str(tmp_path), "--branch", "nope", "--list"])
+    exit_code = main(["evidence", "--dir", str(tmp_path), "--branch", "nope", "--list"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
@@ -222,10 +222,10 @@ def test_logs_command_invalid_branch_filter_is_instructional(
     assert "What happened:" in output
     assert "Try this:" in output
     assert "Next commands:" in output
-    assert "journey logs --list-scopes" in output
+    assert "journey evidence --list-scopes" in output
 
 
-def test_logs_command_noninteractive_zero_match_is_instructional(
+def test_evidence_command_noninteractive_zero_match_is_instructional(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -252,17 +252,17 @@ def test_logs_command_noninteractive_zero_match_is_instructional(
         lambda root: RecordingDiscoveryResult((case,), ()),
     )
 
-    exit_code = main(["logs", "--dir", str(tmp_path), "--show", "--case", "missing"])
+    exit_code = main(["evidence", "--dir", str(tmp_path), "--show", "--case", "missing"])
 
     output = capsys.readouterr().out
     assert exit_code == 1
     assert "No Journey logs matched filters: --case missing." in output
     assert "Try this:" in output
     assert "Next commands:" in output
-    assert "journey logs --list-scopes" in output
+    assert "journey evidence --list-scopes" in output
 
 
-def test_logs_command_noninteractively_shows_filtered_log(
+def test_evidence_command_noninteractively_shows_filtered_log(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -296,7 +296,7 @@ def test_logs_command_noninteractively_shows_filtered_log(
 
     exit_code = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--show",
@@ -317,7 +317,7 @@ def test_logs_command_noninteractively_shows_filtered_log(
 
 
 @pytest.mark.parametrize("step_filter", ["node_1", "start_services", "service_setup"])
-def test_logs_command_noninteractively_matches_step_id_label_or_name(
+def test_evidence_command_noninteractively_matches_step_id_label_or_name(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -356,7 +356,7 @@ def test_logs_command_noninteractively_matches_step_id_label_or_name(
 
     exit_code = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--show",
@@ -373,7 +373,7 @@ def test_logs_command_noninteractively_matches_step_id_label_or_name(
     assert "unrelated service log" not in output
 
 
-def test_logs_command_paths_filter_browser_artifacts_by_step_and_touchpoint(
+def test_evidence_command_paths_filter_browser_artifacts_by_step_and_touchpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -422,7 +422,7 @@ def test_logs_command_paths_filter_browser_artifacts_by_step_and_touchpoint(
 
     exit_code = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--paths",
@@ -443,7 +443,7 @@ def test_logs_command_paths_filter_browser_artifacts_by_step_and_touchpoint(
     assert "video-node_1.webm" not in output
 
 
-def test_logs_command_paths_touchpoint_docker_excludes_browser_paths(
+def test_evidence_command_paths_touchpoint_docker_excludes_browser_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -475,7 +475,7 @@ def test_logs_command_paths_touchpoint_docker_excludes_browser_paths(
 
     exit_code = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--paths",
@@ -491,7 +491,7 @@ def test_logs_command_paths_touchpoint_docker_excludes_browser_paths(
     assert "video:" not in output
 
 
-def test_logs_command_list_branch_filter_narrows_counts(
+def test_evidence_command_list_branch_filter_narrows_counts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -539,7 +539,7 @@ def test_logs_command_list_branch_filter_narrows_counts(
 
     exit_code = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--list",
@@ -555,7 +555,7 @@ def test_logs_command_list_branch_filter_narrows_counts(
     assert "case_red" not in output
 
 
-def test_logs_command_interactively_browses_step_and_docker_logs(
+def test_evidence_command_interactively_browses_step_and_docker_logs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -597,7 +597,7 @@ def test_logs_command_interactively_browses_step_and_docker_logs(
     prompts = iter(["s", "1", "l", "3", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -605,7 +605,7 @@ def test_logs_command_interactively_browses_step_and_docker_logs(
     assert "browser target log" not in output
 
 
-def test_logs_command_interactively_browses_branch_for_paths(
+def test_evidence_command_interactively_browses_branch_for_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -653,7 +653,7 @@ def test_logs_command_interactively_browses_branch_for_paths(
     prompts = iter(["b", "1", "p", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -661,7 +661,7 @@ def test_logs_command_interactively_browses_branch_for_paths(
     assert str(red_log.path) not in output
 
 
-def test_logs_command_interactively_all_log_sources_aggregates_scope(
+def test_evidence_command_interactively_all_log_sources_aggregates_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -697,7 +697,7 @@ def test_logs_command_interactively_all_log_sources_aggregates_scope(
     prompts = iter(["1", "l", "a", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -705,7 +705,7 @@ def test_logs_command_interactively_all_log_sources_aggregates_scope(
     assert "browser restored log" in output
 
 
-def test_logs_command_interactively_step_scope_narrows_trace_video_and_paths(
+def test_evidence_command_interactively_step_scope_narrows_trace_video_and_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -755,7 +755,7 @@ def test_logs_command_interactively_step_scope_narrows_trace_video_and_paths(
     prompts = iter(["s", "2", "t", "v", "p", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -765,7 +765,7 @@ def test_logs_command_interactively_step_scope_narrows_trace_video_and_paths(
     assert "target.webm" in output
 
 
-def test_logs_command_interactively_docker_parent_aggregates_services(
+def test_evidence_command_interactively_docker_parent_aggregates_services(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -796,7 +796,7 @@ def test_logs_command_interactively_docker_parent_aggregates_services(
     prompts = iter(["1", "l", "3", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -805,7 +805,7 @@ def test_logs_command_interactively_docker_parent_aggregates_services(
     assert "browser log" not in output
 
 
-def test_logs_command_interactively_multiple_log_sources_are_aggregated(
+def test_evidence_command_interactively_multiple_log_sources_are_aggregated(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -836,7 +836,7 @@ def test_logs_command_interactively_multiple_log_sources_are_aggregated(
     prompts = iter(["1", "l", "2,4", "q"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(prompts))
 
-    exit_code = main(["logs", "--dir", str(tmp_path)])
+    exit_code = main(["evidence", "--dir", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -845,7 +845,7 @@ def test_logs_command_interactively_multiple_log_sources_are_aggregated(
     assert "worker log" not in output
 
 
-def test_logs_command_list_scopes_reports_agent_filters(
+def test_evidence_command_list_scopes_reports_agent_filters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -873,7 +873,7 @@ def test_logs_command_list_scopes_reports_agent_filters(
         lambda root: RecordingDiscoveryResult((case,), ()),
     )
 
-    exit_code = main(["logs", "--dir", str(tmp_path), "--list-scopes"])
+    exit_code = main(["evidence", "--dir", str(tmp_path), "--list-scopes"])
 
     output = capsys.readouterr().out
     assert exit_code == 0
@@ -884,7 +884,7 @@ def test_logs_command_list_scopes_reports_agent_filters(
     assert "filter=--run run123 --step target_step" in output
 
 
-def test_logs_command_list_log_sources_reports_agent_filters(
+def test_evidence_command_list_log_sources_reports_agent_filters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -908,7 +908,7 @@ def test_logs_command_list_log_sources_reports_agent_filters(
 
     exit_code = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--list-log-sources",
@@ -925,7 +925,7 @@ def test_logs_command_list_log_sources_reports_agent_filters(
     assert "docker:worker  filter=--case case_1 --touchpoint docker --source worker logs=1" in output
 
 
-def test_logs_command_noninteractive_repeated_touchpoints_aggregate(
+def test_evidence_command_noninteractive_repeated_touchpoints_aggregate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -962,7 +962,7 @@ def test_logs_command_noninteractive_repeated_touchpoints_aggregate(
 
     exit_code = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--show",
@@ -980,7 +980,7 @@ def test_logs_command_noninteractive_repeated_touchpoints_aggregate(
     assert "http log" not in output
 
 
-def test_logs_command_noninteractive_touchpoint_parent_and_sources(
+def test_evidence_command_noninteractive_touchpoint_parent_and_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1005,7 +1005,7 @@ def test_logs_command_noninteractive_touchpoint_parent_and_sources(
 
     parent_exit = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--show",
@@ -1017,7 +1017,7 @@ def test_logs_command_noninteractive_touchpoint_parent_and_sources(
 
     child_exit = main(
         [
-            "logs",
+            "evidence",
             "--dir",
             str(tmp_path),
             "--show",

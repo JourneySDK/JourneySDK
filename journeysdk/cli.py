@@ -333,23 +333,29 @@ def _pretty_target(*, display_file: str | None, journey: str | None) -> str:
 
 
 def _help_command_for_prog(prog: str) -> str:
-    if prog == "journey logs":
-        return "journey logs --help"
+    if prog == "journey evidence":
+        return f"{prog} --help"
     if prog == "journey agent":
         return "journey agent --help"
+    if prog == "journey loop":
+        return "journey loop --help"
+    if prog == "journey verify":
+        return "journey verify --help"
+    if prog == "journey touchpoints":
+        return "journey touchpoints --help"
     return "journey --help"
 
 
 def _parser_error_instructions(prog: str, message: str) -> str:
-    if prog == "journey logs":
+    if prog == "journey evidence":
         if "--branch" in message:
             return (
-                "Use --branch KEY=VALUE, or run `journey logs --list-scopes` "
-                "to discover branch filters from saved logs."
+                f"Use --branch KEY=VALUE, or run `{prog} --list-scopes` "
+                "to discover branch filters from saved evidence."
             )
         return (
-            "Run `journey logs --help`, then use `journey logs --list-scopes` "
-            "and `journey logs --list-log-sources` to discover valid filters."
+            f"Run `{prog} --help`, then use `{prog} --list-scopes` "
+            f"and `{prog} --list-log-sources` to discover valid filters."
         )
     if prog == "journey agent":
         return (
@@ -358,26 +364,27 @@ def _parser_error_instructions(prog: str, message: str) -> str:
             "writing persistent instructions."
         )
     return (
-        "Run `journey --help`, choose the narrowest command, and use "
-        "`journey agent <target>` or `journey --touchpoint-docs <name>` "
+        "Run `journey --help`, choose `journey loop` for focused replay or "
+        "`journey verify` for fresh confidence, and use "
+        "`journey agent <target>` or `journey touchpoints <name>` "
         "when you need packaged Journey guidance."
     )
 
 
 def _parser_error_next_commands(prog: str, message: str) -> tuple[str, ...]:
-    if prog == "journey logs":
-        commands = ["journey logs --help", "journey logs --list-scopes"]
+    if prog == "journey evidence":
+        commands = [f"{prog} --help", f"{prog} --list-scopes"]
         if "--branch" not in message:
-            commands.append("journey logs --list-log-sources")
+            commands.append(f"{prog} --list-log-sources")
         return tuple(commands)
     if prog == "journey agent":
         return ("journey agent --help", "journey agent codex")
-    return ("journey --help", "journey agent codex", "journey logs --help")
+    return ("journey --help", "journey agent codex", "journey evidence --help")
 
 
 def _default_help_command_for_phase(phase: str) -> str:
     if phase == "logs":
-        return "journey logs --help"
+        return "journey evidence --help"
     if phase == "agent":
         return "journey agent --help"
     return "journey --help"
@@ -394,13 +401,13 @@ def _default_hint_for_error(error: _CommandError) -> str:
     if error.phase == "execute":
         return (
             "Use the first failed step as the source of truth, inspect logs when "
-            "artifacts exist, then rerun the focused `--develop-step` command "
+            "artifacts exist, then rerun the focused `journey loop` command "
             "until it passes."
         )
     if error.phase == "logs":
         return (
-            "Run `journey logs --help`, discover available scopes with "
-            "`journey logs --list-scopes`, then retry with valid filters."
+            "Run `journey evidence --help`, discover available scopes with "
+            "`journey evidence --list-scopes`, then retry with valid filters."
         )
     if error.phase == "agent":
         return (
@@ -422,13 +429,13 @@ def _default_instructions_for_error(error: _CommandError) -> str:
     if error.phase == "execute":
         return (
             "Execution failed at a Journey step. Use `Retry failed step:` when "
-            "present; otherwise select the failing label with `--develop-step`, "
-            "inspect `journey logs`, and broaden to `--step` or a full run after "
+            "present; otherwise select the failing label with `journey loop`, "
+            "inspect `journey evidence`, and broaden to `journey verify --step` or a full fresh run after "
             "the focused loop passes."
         )
     if error.phase == "logs":
         return (
-            "Log inspection failed. Use `journey logs --list-scopes` to discover "
+            "Evidence inspection failed. Use `journey evidence --list-scopes` to discover "
             "case, branch, and step filters, then use `--list-log-sources`, "
             "`--show`, or `--paths` with valid filters."
         )
@@ -441,7 +448,7 @@ def _default_instructions_for_error(error: _CommandError) -> str:
 
 
 def _target_selection_command(root: Path, error: _CommandError, *extra: str) -> str:
-    parts: list[str] = ["journey"]
+    parts: list[str] = ["journey", "verify"]
     if error.file is not None:
         try:
             display_file = _display_path(root, Path(error.file))
@@ -470,7 +477,7 @@ def _default_next_commands_for_error(root: Path, error: _CommandError) -> tuple[
                     shlex.quote(part)
                     for part in (
                         "journey",
-                        "logs",
+                        "evidence",
                         "--list-log-sources",
                         "--step",
                         error.step_label,
@@ -480,13 +487,13 @@ def _default_next_commands_for_error(root: Path, error: _CommandError) -> tuple[
             commands.append(
                 " ".join(
                     shlex.quote(part)
-                    for part in ("journey", "logs", "--paths", "--step", error.step_label)
+                    for part in ("journey", "evidence", "--paths", "--step", error.step_label)
                 )
             )
         else:
-            commands.append("journey logs --list-scopes")
+            commands.append("journey evidence --list-scopes")
     elif error.phase == "logs":
-        commands.extend(("journey logs --list-scopes", "journey logs --list-log-sources"))
+        commands.extend(("journey evidence --list-scopes", "journey evidence --list-log-sources"))
     elif error.phase == "agent":
         commands.append("journey agent --help")
 
@@ -1150,12 +1157,12 @@ def _retry_command_for_error(root: Path, error: _CommandError) -> str | None:
         shlex.quote(part)
         for part in (
             "journey",
+            "loop",
+            error.step_label,
             "--file",
             display_file,
             "--journey",
             error.journey_name,
-            "--develop-step",
-            error.step_label,
         )
     )
 
@@ -1172,7 +1179,7 @@ def _artifact_hint_for_file(root: Path, file_path: str | Path) -> str | None:
     logs_root = Path(file_path).resolve().parent / ".journey" / "logs"
     if not logs_root.exists():
         return None
-    return f"{_display_path(root, logs_root)} (run `journey logs` to inspect)"
+    return f"{_display_path(root, logs_root)} (run `journey evidence` to inspect)"
 
 
 def _discover_targets(
@@ -1337,17 +1344,17 @@ def _step_stop_status(paused: _PausedExecution, *, verb: str) -> str:
     step_name = paused.paused_step.label or paused.paused_step.node_id
     if paused.paused_step.ok:
         return (
-            f"Development mode {action} after step "
+            f"Loop {action} after step "
             f"{step_name} attempt={paused.paused_step.attempt} executed."
         )
     if paused.paused_step.error:
         return (
-            f"Development mode {action} after step "
+            f"Loop {action} after step "
             f"{step_name} attempt={paused.paused_step.attempt} "
             f"failed ({paused.paused_step.error})."
         )
     return (
-        f"Development mode {action} after step "
+        f"Loop {action} after step "
         f"{step_name} attempt={paused.paused_step.attempt} failed."
     )
 
@@ -1481,7 +1488,7 @@ def _infer_develop_pause_action(
                     f"{develop_step!r}."
                 ),
                 hint=(
-                    "Rerun the same --develop-step target to retry the failed step, "
+                    "Rerun the same journey loop target to retry the failed step, "
                     "or delete the state file to start fresh."
                 ),
             )
@@ -1493,7 +1500,7 @@ def _infer_develop_pause_action(
             f"{develop_step!r}."
         ),
         hint=(
-            "Rerun the paused --develop-step target to retry it, target the next "
+            "Rerun the paused journey loop target to retry it, target the next "
             "later step to continue, or delete the state file to start fresh."
         ),
     )
@@ -1830,7 +1837,7 @@ def _execute_target_pause(
 
             _CLI_LOGGER.info(
                 "execution_success",
-                "develop-step execution succeeded",
+                "loop execution succeeded",
                 pretty=False,
                 file=str(selected.file_path),
                 journey=selected.journey_name,
@@ -1914,7 +1921,7 @@ def _execute_target_pause(
             report = outcome
             _CLI_LOGGER.info(
                 "execution_success",
-                "develop-step execution succeeded",
+                "loop execution succeeded",
                 pretty=False,
                 file=str(selected.file_path),
                 journey=selected.journey_name,
@@ -1932,7 +1939,7 @@ def _execute_target_pause(
     except Exception as exc:
         _CLI_LOGGER.error(
             "execution_failure",
-            "develop-step execution failed",
+            "loop execution failed",
             pretty=(
                 f"{_pretty_target(display_file=_display_path(root, selected.file_path), journey=selected.journey_name)} "
                 f"failed: {_format_exception(exc)}"
@@ -2069,7 +2076,7 @@ def _emit_execute_output(
         "errors": [_command_error_payload(root, error) for error in payload_errors],
     }
     summary = (
-        f"Summary: develop-step {develop_step_stopped} stopped after target, {failed} failed"
+        f"Summary: loop {develop_step_stopped} stopped after target, {failed} failed"
         if develop_step_stopped is not None
         else (
             "Summary: "
@@ -2324,6 +2331,17 @@ def _cmd_agent(args: argparse.Namespace) -> int:
 def _cmd_touchpoint_docs(args: argparse.Namespace) -> int:
     sys.stdout.write(render_touchpoint_docs(args.touchpoint_docs))
     return 0
+
+
+def _cmd_loop(args: argparse.Namespace) -> int:
+    args.develop_step = args.step_label
+    args.step = None
+    return _cmd_execute(args)
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    args.no_state = not args.reuse_state
+    return _cmd_execute(args)
 
 
 def _read_recordings_choice(prompt: str) -> str:
@@ -3431,12 +3449,12 @@ def _logs_command_error(
         message=message,
         hint=hint,
         instructions=(
-            "Use `journey logs --help` for the log-inspection command manual, "
-            "then discover valid filters with `journey logs --list-scopes` and "
-            "`journey logs --list-log-sources` before reading large artifacts."
+            "Use `journey evidence --help` for the evidence-inspection command manual, "
+            "then discover valid filters with `journey evidence --list-scopes` and "
+            "`journey evidence --list-log-sources` before reading large artifacts."
         ),
         next_commands=next_commands,
-        help_command="journey logs --help",
+        help_command="journey evidence --help",
     )
 
 
@@ -3560,12 +3578,12 @@ def _cmd_logs_noninteractive(
                 _logs_command_error(
                     f"No Journey logs matched filters: {_format_filter_cli(filters)}.",
                     hint=(
-                        "Run `journey logs --list-scopes` without those filters to "
+                        "Run `journey evidence --list-scopes` without those filters to "
                         "discover available run, case, branch, and step values."
                     ),
                     next_commands=(
-                        "journey logs --list-scopes",
-                        "journey logs --list-log-sources",
+                        "journey evidence --list-scopes",
+                        "journey evidence --list-log-sources",
                     ),
                 )
             ],
@@ -3612,10 +3630,10 @@ def _cmd_recordings(args: argparse.Namespace) -> int:
                     str(exc),
                     hint=(
                         "Use `--branch KEY=VALUE`, or run "
-                        "`journey logs --list-scopes` to copy a branch filter "
+                        "`journey evidence --list-scopes` to copy a branch filter "
                         "printed by Journey."
                     ),
-                    next_commands=("journey logs --help", "journey logs --list-scopes"),
+                    next_commands=("journey evidence --help", "journey evidence --list-scopes"),
                 )
             ],
         )
@@ -3638,11 +3656,11 @@ def _cmd_recordings(args: argparse.Namespace) -> int:
                     f"No Journey logs found under {root}.",
                     hint=(
                         "Run a Journey command with logs enabled, then run "
-                        "`journey logs` from that project root or pass `--dir` "
+                        "`journey evidence` from that project root or pass `--dir` "
                         "to the directory containing `.journey/logs`. Do not use "
                         "`--no-logs` when you need artifacts."
                     ),
-                    next_commands=("journey --help", "journey logs --help"),
+                    next_commands=("journey --help", "journey evidence --help"),
                 )
             ],
         )
@@ -3669,27 +3687,75 @@ def _cmd_recordings(args: argparse.Namespace) -> int:
             return 0
 
 
-def build_logs_parser() -> argparse.ArgumentParser:
+def _add_execution_scope_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--file", help="Journey file to execute")
+    parser.add_argument(
+        "--journey",
+        help="Decorated journey function name to execute",
+    )
+
+
+def _add_runtime_output_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--output",
+        choices=("pretty", "jsonl"),
+        default="pretty",
+        help="Set Journey output format (default: pretty)",
+    )
+    parser.add_argument(
+        "--log-level",
+        "--level",
+        dest="log_level",
+        choices=("debug", "info", "warning", "error", "off"),
+        default="info",
+        help="Set Journey diagnostic logging level (default: info)",
+    )
+
+
+def _add_runtime_control_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="Disable prompt-memory reads and writes for this run",
+    )
+    parser.add_argument(
+        "--no-memory-update",
+        action="store_true",
+        help="Disable prompt-memory writes while still allowing reads for this run",
+    )
+    parser.add_argument(
+        "--no-browser-recording",
+        action="store_true",
+        help="Disable browser trace and video artifacts for this run",
+    )
+    parser.add_argument(
+        "--no-logs",
+        action="store_true",
+        help="Disable Journey evidence artifacts for this run",
+    )
+
+
+def build_logs_parser(*, prog: str = "journey evidence") -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
-        prog="journey logs",
-        description="browse Journey logs, browser traces, and videos from completed runs",
+        prog=prog,
+        description="browse Journey evidence from completed runs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Coding-agent log loop:\n"
-            "  1. Run `journey logs --help` when log usage is unclear.\n"
+            "Coding-agent evidence loop:\n"
+            f"  1. Run `{prog} --help` when evidence usage is unclear.\n"
             "  2. Discover filters before reading large artifacts:\n"
-            "     journey logs --list-scopes\n"
-            "     journey logs --list-log-sources --case <case_id> --step <step_label>\n"
+            f"     {prog} --list-scopes\n"
+            f"     {prog} --list-log-sources --case <case_id> --step <step_label>\n"
             "  3. Inspect focused evidence:\n"
-            "     journey logs --show --case <case_id> --step <step_label> --touchpoint docker --source <service> --tail 80\n"
-            "     journey logs --paths --step <step_label> --touchpoint browser\n"
+            f"     {prog} --show --case <case_id> --step <step_label> --touchpoint docker --source <service> --tail 80\n"
+            f"     {prog} --paths --step <step_label> --touchpoint browser\n"
             "\n"
             "Recovery:\n"
-            "  - If no logs are found, rerun the Journey without --no-logs, then run `journey logs` from that project root or pass --dir.\n"
-            "  - If a filter returns no matches, rerun `journey logs --list-scopes` and copy the printed run/case/branch/step values.\n"
+            f"  - If no evidence is found, rerun the Journey without --no-logs, then run `{prog}` from that project root or pass --dir.\n"
+            f"  - If a filter returns no matches, rerun `{prog} --list-scopes` and copy the printed run/case/branch/step values.\n"
             "  - Use --branch KEY=VALUE exactly as printed by --list-scopes.\n"
             "\n"
-            "Related CLI commands: `journey --help`, `journey --file <file> --develop-step <step>`, `journey agent <target>`."
+            "Related CLI commands: `journey loop <step> --file <file>`, `journey verify --file <file>`, `journey agent <target>`."
         ),
     )
     parser.add_argument(
@@ -3749,40 +3815,145 @@ def build_logs_parser() -> argparse.ArgumentParser:
         "--grep",
         help="Print only matching log lines with --show",
     )
+    _add_runtime_output_arguments(parser)
+    return parser
+
+
+def build_loop_parser() -> argparse.ArgumentParser:
+    parser = _JourneyArgumentParser(
+        prog="journey loop",
+        description="rerun one replayable journey step while editing code",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Agent loop:\n"
+            "  1. Run the failing journey once, or use the `Retry failed step:` command Journey prints.\n"
+            "  2. Rerun the same `journey loop <step>` command after every edit.\n"
+            "  3. Finish with `journey verify --step <step> --file <file>` or `journey verify --file <file>`.\n"
+            "\n"
+            "Examples:\n"
+            "  journey loop receive_confirmation_email --file journeys/checkout_journey.py\n"
+            "  journey loop complete_checkout_and_verify_registration_effects --file journeys/agentic_loop_journey.py --output jsonl\n"
+            "\n"
+            "Related CLI commands: `journey verify --help`, `journey evidence --help`, `journey agent <target>`."
+        ),
+    )
+    parser.add_argument("step_label", help="Replayable step label to rerun")
+    _add_execution_scope_arguments(parser)
     parser.add_argument(
-        "--output",
-        choices=("pretty", "jsonl"),
-        default="pretty",
-        help="Set Journey output format (default: pretty)",
+        "--interactive",
+        action="store_true",
+        help="Prompt to continue or retry after each loop pause",
     )
     parser.add_argument(
-        "--log-level",
-        "--level",
-        dest="log_level",
-        choices=("debug", "info", "warning", "error", "off"),
-        default="info",
-        help="Set Journey diagnostic logging level (default: info)",
+        "--no-state",
+        action="store_true",
+        help="Use temporary state for this loop run",
     )
+    parser.add_argument(
+        "--no-state-update",
+        action="store_true",
+        help="Read existing state but do not update the default loop checkpoint",
+    )
+    _add_runtime_control_arguments(parser)
+    _add_runtime_output_arguments(parser)
+    parser.set_defaults(step=None, develop_step=None, fail_fast=False)
+    return parser
+
+
+def build_verify_parser() -> argparse.ArgumentParser:
+    parser = _JourneyArgumentParser(
+        prog="journey verify",
+        description="freshly verify a full journey or one selected step case",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Verification loop:\n"
+            "  journey verify --file journeys/<feature>_journey.py\n"
+            "      Run the full journey from a fresh path.\n"
+            "  journey verify --step <step_label> --file journeys/<feature>_journey.py\n"
+            "      Verify the selected case from a fresh path after the focused loop passes.\n"
+            "  journey verify --reuse-state --step <step_label> --file journeys/<feature>_journey.py\n"
+            "      Opt into existing state when investigating replay behavior.\n"
+            "\n"
+            "Related CLI commands: `journey loop <step> --file <file>`, `journey evidence --help`, `journey agent <target>`."
+        ),
+    )
+    _add_execution_scope_arguments(parser)
+    parser.add_argument(
+        "--step",
+        help="Verify only the case that reaches one step label",
+    )
+    state_group = parser.add_mutually_exclusive_group()
+    state_group.add_argument(
+        "--fresh",
+        dest="reuse_state",
+        action="store_false",
+        default=False,
+        help="Run from temporary state without reading or writing reusable checkpoints (default)",
+    )
+    state_group.add_argument(
+        "--reuse-state",
+        dest="reuse_state",
+        action="store_true",
+        help="Allow persistent state reuse; fresh verification is the default",
+    )
+    parser.add_argument(
+        "--no-state-update",
+        action="store_true",
+        help="Read reusable state when --reuse-state is set, but do not update checkpoints",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop at the first discovery, compilation, or execution failure",
+    )
+    _add_runtime_control_arguments(parser)
+    _add_runtime_output_arguments(parser)
+    parser.set_defaults(develop_step=None, interactive=False)
+    return parser
+
+
+def build_touchpoints_parser() -> argparse.ArgumentParser:
+    parser = _JourneyArgumentParser(
+        prog="journey touchpoints",
+        description="print packaged touchpoint reference docs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Touchpoints are systems a replayable step talks to: browser, Docker, HTTP, email, and webhooks.\n"
+            "Use these references before inventing polling, subprocess, inbox, or webhook plumbing.\n"
+            "\n"
+            "Examples:\n"
+            "  journey touchpoints browser\n"
+            "  journey touchpoints all"
+        ),
+    )
+    parser.add_argument(
+        "touchpoint_docs",
+        choices=supported_touchpoint_doc_targets(),
+        metavar="name",
+        help="Reference to print: docker, browser, email, webhook, http, or all",
+    )
+    _add_runtime_output_arguments(parser)
     return parser
 
 
 def build_agent_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey agent",
-        description="print or install Journey SDK coding-agent guidance",
+        description="print or install Journey SDK agent verification guidance",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Coding-agent guidance loop:\n"
-            "  1. Run `journey agent <target>` to print the full installed Journey guidance packet.\n"
-            "  2. Inside that loop, use `journey --help` for execution commands and `journey logs --help` for artifact inspection.\n"
-            "  3. Use `journey agent <target> --install` only when persistent project instructions should be written.\n"
+            "Agent verification packet:\n"
+            "  1. Run `journey agent <target>` to print the complete agent guidance packet.\n"
+            "  2. Inside that loop, use `journey loop` while editing and `journey verify` before finishing.\n"
+            "  3. Use `journey evidence --help` for traces, videos, structured logs, and touchpoint payloads.\n"
+            "  4. Use `journey agent <target> --install` only when persistent project instructions should be written.\n"
             "\n"
             "Targets: codex, claude, cursor, generic.\n"
             "Recovery:\n"
             "  - If --force is rejected, add it only together with --install.\n"
             "  - If install refuses to overwrite an existing file, rerun with --install --force only after deciding replacement is intended.\n"
             "\n"
-            "Related CLI commands: `journey --help`, `journey logs --help`, `journey --touchpoint-docs all`."
+            "Related CLI commands: `journey loop --help`, `journey verify --help`, `journey evidence --help`, `journey touchpoints all`."
         ),
     )
     parser.add_argument(
@@ -3820,79 +3991,27 @@ def build_agent_parser() -> argparse.ArgumentParser:
 def build_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey",
-        description="execute decorated journey workflows",
+        description="replay and verify real user journeys for agentic coding loops",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Coding-agent command manual:\n"
-            "  - Start with `journey --help` when command usage or recovery is unclear.\n"
-            "  - For a new loop, run `journey agent <target>` where target is codex, claude, cursor, or generic.\n"
-            "  - For touchpoint APIs, run `journey --touchpoint-docs browser|docker|email|webhook|http|all`.\n"
+            "Core commands:\n"
+            "  journey loop <step_label> --file journeys/<feature>_journey.py\n"
+            "      Rerun one replayable journey step while an agent edits code.\n"
+            "  journey verify --step <step_label> --file journeys/<feature>_journey.py\n"
+            "      Freshly verify the selected case after the focused loop passes.\n"
+            "  journey verify --file journeys/<feature>_journey.py\n"
+            "      Freshly verify the whole journey before finishing.\n"
+            "  journey evidence --step <step_label>\n"
+            "      Inspect traces, videos, structured logs, and touchpoint payloads.\n"
+            "  journey touchpoints browser|docker|email|webhook|http|all\n"
+            "      Print packaged touchpoint references for helpers used inside steps.\n"
             "\n"
-            "Command selection:\n"
-            "  journey --file journeys/<feature>_journey.py --develop-step <step_label>\n"
-            "      Focus the edit loop on one target step and reuse default persistent state.\n"
-            "  journey --file journeys/<feature>_journey.py --step <step_label> --no-state\n"
-            "      Verify the selected case from a fresh path after the focused loop passes.\n"
-            "  journey --file journeys/<feature>_journey.py --no-state\n"
-            "      Run the full journey from a fresh path before finishing when feasible.\n"
-            "\n"
-            "Self-healing loop:\n"
+            "Self-healing agent loop:\n"
             "  - Read `What happened`, `Try this`, `Next commands`, and `Retry failed step:` lines.\n"
-            "  - Copy `Retry failed step:` when present; otherwise use --develop-step with the first failed label.\n"
-            "  - Inspect artifacts with `journey logs --help`, `journey logs --list-scopes`, and `journey logs --paths` or `--show`.\n"
-            "  - Rerun the focused command until it passes, then broaden to --step or a full --no-state run.\n"
-            "\n"
-            "Related CLI commands: `journey logs --help`, `journey agent --help`, `journey --touchpoint-docs all`."
+            "  - Copy `Retry failed step:` when present; otherwise use `journey loop <failed_label>`.\n"
+            "  - Inspect artifacts with `journey evidence --help`, `journey evidence --list-scopes`, and `journey evidence --paths` or `--show`.\n"
+            "  - Rerun the focused loop command until it passes, then broaden to fresh `journey verify`."
         ),
-    )
-    parser.add_argument("--file", help="Execute journeys defined in one Python file")
-    parser.add_argument(
-        "--journey",
-        help="Execute one decorated journey by function name",
-    )
-    target_group = parser.add_mutually_exclusive_group()
-    target_group.add_argument(
-        "--step",
-        help="Execute only the flow that reaches one step label",
-    )
-    target_group.add_argument(
-        "--develop-step",
-        help="Run one target step label in development mode and pause after it",
-    )
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Prompt to continue or retry after each --develop-step pause",
-    )
-    parser.add_argument(
-        "--no-state",
-        action="store_true",
-        help="Disable execution-state reads and writes for this run",
-    )
-    parser.add_argument(
-        "--no-state-update",
-        action="store_true",
-        help="Disable execution-state writes while still allowing reads for this run",
-    )
-    parser.add_argument(
-        "--no-memory",
-        action="store_true",
-        help="Disable prompt-memory reads and writes for this run",
-    )
-    parser.add_argument(
-        "--no-memory-update",
-        action="store_true",
-        help="Disable prompt-memory writes while still allowing reads for this run",
-    )
-    parser.add_argument(
-        "--no-browser-recording",
-        action="store_true",
-        help="Disable browser trace and video artifacts for this run",
-    )
-    parser.add_argument(
-        "--no-logs",
-        action="store_true",
-        help="Disable Journey log artifacts for this run",
     )
     parser.add_argument(
         "--output",
@@ -3907,16 +4026,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("debug", "info", "warning", "error", "off"),
         default="info",
         help="Set Journey diagnostic logging level (default: info)",
-    )
-    parser.add_argument(
-        "--fail-fast",
-        action="store_true",
-        help="Stop at the first discovery, compilation, or execution failure",
-    )
-    parser.add_argument(
-        "--touchpoint-docs",
-        choices=supported_touchpoint_doc_targets(),
-        help="Print packaged touchpoint reference docs and exit",
     )
 
     return parser
@@ -3987,11 +4096,26 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         _reexec_with_active_environment(raw_argv)
     _preconfigure_logging(raw_argv)
-    if raw_argv and raw_argv[0] == "logs":
-        parser = build_logs_parser()
+    if raw_argv and raw_argv[0] == "evidence":
+        parser = build_logs_parser(prog="journey evidence")
         args = parser.parse_args(raw_argv[1:])
         configure_logging(args.log_level, output_format=args.output)
         return _cmd_recordings(args)
+    if raw_argv and raw_argv[0] == "touchpoints":
+        parser = build_touchpoints_parser()
+        args = parser.parse_args(raw_argv[1:])
+        configure_logging(args.log_level, output_format=args.output)
+        return _cmd_touchpoint_docs(args)
+    if raw_argv and raw_argv[0] == "loop":
+        parser = build_loop_parser()
+        args = parser.parse_args(raw_argv[1:])
+        configure_logging(args.log_level, output_format=args.output)
+        return _cmd_loop(args)
+    if raw_argv and raw_argv[0] == "verify":
+        parser = build_verify_parser()
+        args = parser.parse_args(raw_argv[1:])
+        configure_logging(args.log_level, output_format=args.output)
+        return _cmd_verify(args)
     if raw_argv and raw_argv[0] == "agent":
         parser = build_agent_parser()
         args = parser.parse_args(raw_argv[1:])
@@ -4002,11 +4126,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.log_level, output_format=args.output)
-    if args.touchpoint_docs is not None:
-        return _cmd_touchpoint_docs(args)
-    if args.interactive and getattr(args, "develop_step", None) is None:
-        parser.error("--interactive requires --develop-step")
-    return _cmd_execute(args)
+    parser.error(
+        "missing command: use journey loop, journey verify, journey evidence, "
+        "journey touchpoints, or journey agent"
+    )
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

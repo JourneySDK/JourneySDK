@@ -64,13 +64,16 @@ these commands as the self-contained command manuals before choosing flags or re
 
 ```bash
 journey --help
-journey logs --help
+journey loop --help
+journey verify --help
+journey evidence --help
 journey agent --help
 ```
 
-`journey --help` explains the execution loop, targeted `--develop-step` and `--step` commands, state flags, touchpoint
-reference commands, and recovery commands. `journey logs --help` explains how to discover scopes and sources before
-reading artifacts. `journey agent --help` explains print/install modes for packaged assistant guidance.
+`journey --help` is the short command index. `journey loop --help` explains the focused replay loop for one step.
+`journey verify --help` explains branch and full-journey verification. `journey evidence --help` explains how to
+discover scopes and sources before reading artifacts. `journey agent --help` explains print/install modes for packaged
+assistant guidance.
 
 When a Journey command fails, the CLI prints an instructional block:
 
@@ -98,14 +101,14 @@ With persistent state, Ctrl-C has two levels:
   Press Ctrl-C again to stop now.`, lets the active step reach post-exit, saves progress, and stops.
 - Second Ctrl-C is forceful. Journey prints `Ctrl-C received again. Stopping now; this step will restart from the
   nearest replay boundary on resume.`, stops the dirty step as soon as it can, and resumes later from the nearest
-  explicit `branch(start_from=...)` or positive `retry=...` boundary. If there is no explicit boundary, the case starts
+  explicit `branch(replay_from=...)` or positive `retry=...` boundary. If there is no explicit boundary, the case starts
   again from the beginning.
 
 Journey checks saved state before reuse and labels the decision as `fresh`, `replayed`, or `invalidated`. See
-[Retries And Resume](03-retries-and-resume.md) for the state model and when to use `--no-state` for fresh-path evidence.
+[Retries And Resume](03-retries-and-resume.md) for the state model and when to use `--fresh` for fresh-path evidence.
 
-With `--no-state`, Ctrl-C stops the run immediately and Journey cannot resume it. Use `--no-state-update` when a run
-should read existing state but leave the state file unchanged.
+With `journey verify --fresh`, Ctrl-C stops the run immediately and Journey cannot resume it. Use `--reuse-state` when
+a verification run should read existing state instead of starting fresh.
 
 ## Browser Setup
 
@@ -114,10 +117,10 @@ downloads Chromium in the active environment. That first launch needs network ac
 Journey stores run evidence under `.journey/logs/`: structured Journey events, touchpoint logs, browser traces,
 browser videos, and browser console/network events. Use `--no-logs` only when a run should not write any local
 debugging artifacts. Use `--no-browser-recording` when browser console/network logs should still be kept but
-Playwright trace/video capture should be skipped. Journey clears existing logs at the start of a run so `journey logs`
+Playwright trace/video capture should be skipped. Journey clears existing logs at the start of a run so `journey evidence`
 shows the current run's cases.
 
-After a run, use `journey logs` from the project root to browse recorded evidence interactively. Choose all cases, one
+After a run, use `journey evidence` from the project root to browse recorded evidence interactively. Choose all cases, one
 case, or browse branch and step scopes; then open a merged Playwright trace, open a merged WebM recording, print raw
 text logs, or print artifact paths. The log browser lists touchpoints and touchpoint-defined sources such as Docker
 Compose service names, and selecting a parent touchpoint aggregates all child logs.
@@ -125,10 +128,10 @@ Compose service names, and selecting a parent touchpoint aggregates all child lo
 For agent loops, discover filters before reading large logs:
 
 ```bash
-journey logs --list-scopes
-journey logs --list-log-sources --case case_1 --step start_services
-journey logs --show --case case_1 --step start_services --touchpoint docker --source web --source worker --tail 80
-journey logs --paths --step report_issue --touchpoint browser
+journey evidence --list-scopes
+journey evidence --list-log-sources --case case_1 --step start_services
+journey evidence --show --case case_1 --step start_services --touchpoint docker --source web --source worker --tail 80
+journey evidence --paths --step report_issue --touchpoint browser
 ```
 
 ## Local Development Installs
@@ -174,12 +177,12 @@ journey agent generic
 ```
 
 The default output includes the shared assistant-specific Journey guidance from the packaged instruction template, then
-appends packaged touchpoint references. The targeted verification loop, touchpoint discovery, and log-browsing commands
+appends packaged touchpoint references. The step replay loop, touchpoint discovery, and evidence commands
 live in that shared instruction body so the user prompt can stay short. The default command is print-only and does not
 write files.
 
 When an agent is asked to fix a failing Journey file, it should run the failing command or full journey once, use the
-first failed step and any `Retry failed step:` command as the focused `--develop-step` loop, inspect correlated
+first failed step and any `Retry failed step:` command as the focused `journey loop` command, inspect correlated
 `.journey/logs` evidence, and rerun until executable Journey evidence passes.
 
 Install assistant-specific guidance when a project-level agent file or skill should be available persistently:
@@ -197,10 +200,10 @@ Install mode writes the selected guidance to its default project path and refuse
 Agents can also print detailed packaged touchpoint references before using official helpers:
 
 ```bash
-journey --touchpoint-docs docker
-journey --touchpoint-docs browser
-journey --touchpoint-docs email
-journey --touchpoint-docs webhook
-journey --touchpoint-docs http
-journey --touchpoint-docs all
+journey touchpoints docker
+journey touchpoints browser
+journey touchpoints email
+journey touchpoints webhook
+journey touchpoints http
+journey touchpoints all
 ```

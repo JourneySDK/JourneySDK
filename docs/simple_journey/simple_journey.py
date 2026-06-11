@@ -90,9 +90,9 @@ def _assert_local_file_contents(file_info: dict[str, str]) -> None:
 
 
 def trigger_endpoint_a_and_verify_webhook() -> bool:
-    endpoint: CloudWebhookEndpoint = get_webhook_endpoint(path="/endpoint-a")()
+    endpoint: CloudWebhookEndpoint = get_webhook_endpoint(path="/endpoint-a")
     _click_trigger_endpoint_a(endpoint.url)
-    request_payload = wait_for_webhook_request(path="/endpoint-a")(endpoint)
+    request_payload = wait_for_webhook_request(endpoint)
     _assert_endpoint_a_webhook(request_payload)
     return True
 
@@ -107,7 +107,7 @@ def store_local_file_and_verify_contents() -> bool:
 def simple_journey() -> None:
     homepage = step(demo_homepage_ready)
 
-    if branch(start_from=homepage):
+    if branch(replay_from=homepage):
         step(trigger_endpoint_a_and_verify_webhook)
-    elif branch(start_from=homepage):
+    elif branch(replay_from=homepage):
         step(store_local_file_and_verify_contents)

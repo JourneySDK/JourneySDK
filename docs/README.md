@@ -9,13 +9,13 @@ otherwise.
    Ctrl-C behavior, and assistant/touchpoint documentation commands.
 2. [Getting Started](01-getting-started.md): the first Journey spec, running one file, selecting one journey, and JSON
    Lines output.
-3. [Branching And Targeted Runs](02-branching-and-targeted-runs.md): adding journey specs, choosing coarse durable step
-   and branch boundaries, `branch(start_from=...)`, `--step`, and `--develop-step`.
+3. [Branching And Step Loops](02-branching-and-targeted-runs.md): adding journey specs, choosing coarse durable step
+   and branch boundaries, `branch(replay_from=...)`, `journey loop`, and `journey verify --step`.
 4. [Retries And Resume](03-retries-and-resume.md): state management, retry loops, replay boundaries, and resumable runs.
 5. [Browser And Local Touchpoints](04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
    browser prompt tutorials.
 6. [Journey Cloud Touchpoints](05-journey-cloud-integrations.md): hosted webhook and email examples.
-7. [Debugging And Failure Modes](06-debugging-and-failure-modes.md): failure reports, logs, fail-fast runs, and
+7. [Debugging And Failure Modes](06-debugging-and-failure-modes.md): failure reports, evidence, fail-fast runs, and
    troubleshooting.
 
 ## Packaged References
@@ -25,19 +25,21 @@ before choosing or repairing CLI usage:
 
 ```bash
 journey --help
-journey logs --help
+journey loop --help
+journey verify --help
+journey evidence --help
 journey agent --help
 ```
 
 Detailed touchpoint API references are packaged with the SDK and available from any installed `journey` CLI:
 
 ```bash
-journey --touchpoint-docs browser
-journey --touchpoint-docs docker
-journey --touchpoint-docs email
-journey --touchpoint-docs webhook
-journey --touchpoint-docs http
-journey --touchpoint-docs all
+journey touchpoints browser
+journey touchpoints docker
+journey touchpoints email
+journey touchpoints webhook
+journey touchpoints http
+journey touchpoints all
 ```
 
 AI coding assistant guidance is packaged separately:
@@ -60,9 +62,9 @@ journey agent generic --install
 Give the one-line prompt to the assistant and let it run `journey agent <target>` itself. Use the default print mode
 when an agent needs the complete verification loop plus touchpoint references in one response.
 Use `journey agent <target> --install` when the project should receive a persistent assistant instruction file or skill.
-Agents fixing a failure should run the failed journey or the focused `--develop-step` retry until executable evidence
+Agents fixing a failure should run the failed journey or focused `journey loop <step>` retry until executable evidence
 passes. Agents adding new branching journeys should execute every requested branch target and finish with fresh
-`--no-state` evidence when infrastructure permits; generated code, import checks, lint, or test discovery alone are not
+`journey verify --fresh` evidence when infrastructure permits; generated code, import checks, lint, or test discovery alone are not
 Journey verification. If a local app is not running, agents should follow documented startup commands before declaring
 the run environment-blocked, and should inspect configuration without printing secret values or dumping secret-bearing
 files. For auth, seed data, payments, and similar setup, agents should inspect existing E2E helpers before guessing

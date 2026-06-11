@@ -52,5 +52,5 @@ def branching_journey() -> None:
 
     if branch():
         step(approve_fast_track_signup, classified)
-    elif branch(start_from=classified):
+    elif branch(replay_from=classified):
         step(queue_manual_review_signup, classified)

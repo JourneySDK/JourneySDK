@@ -58,17 +58,17 @@ Set `build=True` when source edits must be included in the Compose app before ve
 
 ## Replay, lifecycle, and cleanup
 
-`DockerComposeStack` implements Journey rehydration. When a later `branch(start_from=...)` or `retry_from=...` boundary
+`DockerComposeStack` implements Journey rehydration. When a later `branch(replay_from=...)` or `retry_from=...` boundary
 needs to replay Docker state, Journey stores and restores Docker-managed volume contents. Keep durable app state in
-Docker-managed volumes when branch replay matters, and put `branch(start_from=...)` only on checkpoints worth restoring
+Docker-managed volumes when branch replay matters, and put `branch(replay_from=...)` only on checkpoints worth restoring
 from.
 
 Journey captures `docker compose logs --timestamps` per service under `.journey/logs/` before stopping the Compose
 project at case exit with `docker compose down --remove-orphans`. Volumes are preserved by default. Snapshot payloads
 live under `.journey` with other Journey state.
 
-Use `journey logs --list-log-sources --case <case_id> --step start_services` to discover Docker service filters. Use
-`journey logs --show --case <case_id> --step start_services --touchpoint docker` to inspect all persisted Compose
+Use `journey evidence --list-log-sources --case <case_id> --step start_services` to discover Docker service filters. Use
+`journey evidence --show --case <case_id> --step start_services --touchpoint docker` to inspect all persisted Compose
 output after a failure, or add one or more `--source <service>` flags to aggregate selected services.
 
 ## Limits

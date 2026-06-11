@@ -212,10 +212,7 @@ def test_cloud_webhook_example_compiles_and_executes(
 
         assert _case_labels(plan) == [
             [
-                "get_webhook_invoice_paid",
-                "send_invoice_paid_webhook_later",
-                "receive_webhook_invoice_paid",
-                "assert_invoice_paid_webhook",
+                "send_invoice_payment_and_verify_webhook",
             ]
         ]
 

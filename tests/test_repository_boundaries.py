@@ -139,12 +139,12 @@ def test_agent_instruction_template_fetches_references_through_cli() -> None:
 
     required_phrases = (
         "journey agent <target>",
-        "journey --touchpoint-docs all",
-        "journey --touchpoint-docs browser",
-        "journey --touchpoint-docs docker",
-        "journey --touchpoint-docs email",
-        "journey --touchpoint-docs webhook",
-        "journey --touchpoint-docs http",
+        "journey touchpoints all",
+        "journey touchpoints browser",
+        "journey touchpoints docker",
+        "journey touchpoints email",
+        "journey touchpoints webhook",
+        "journey touchpoints http",
     )
 
     for phrase in required_phrases:
@@ -178,16 +178,14 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
     )
 
     required_phrases = (
-        "do not stop after static review or a plausible code edit",
-        "Run the failing Journey command or the full journey once",
-        "use the first failing step as the source of truth",
-        "the CLI's `Retry failed step:` command",
-        "current URL/title for browser failures",
-        "the last rejected browser action",
-        "correlated `.journey/logs` artifacts",
-        "Rerun the same `--develop-step` command after every edit",
-        "If `page.prompt(...)` reaches max steps",
-        "treat that as a deterministic step implementation failure",
+        "Do not stop after code generation, import checks, lint, type checks, or test discovery.",
+        "Use the first failing Journey step as the source of truth.",
+        "If the CLI prints `Retry failed step: ...`, copy that command as the focused loop.",
+        "journey loop target_step --file journeys/<feature>_journey.py",
+        "journey evidence --step target_step",
+        "journey verify --step target_step --file journeys/<feature>_journey.py --fresh",
+        "inspect `journey evidence` traces or videos when browser behavior is unclear.",
+        "Treat `replayed` state as development-loop evidence, not final release evidence.",
     )
 
     for phrase in required_phrases:
@@ -213,32 +211,32 @@ def test_agent_instruction_template_requires_execution_for_new_journeys() -> Non
 
     required_phrases = (
         "When asked to write, add, or extend a Journey spec",
-        "A new or changed Journey is unfinished until you have run at least one executable `journey --file ...` command",
-        "For a new branching journey, run the shared setup and every requested branch target",
+        "A new or changed Journey is not",
+        "For a new branching journey, run every requested branch target",
         "Do not ask the user whether to run the journey when verification is the requested task",
-        "start the required services or request tool approval for that command",
+        "start the required services or",
         "Do not print secret values from `.env`, credentials files, or CLI output",
         "Do not `cat`, `sed`, `nl`, `head`, `tail`, or `Read` `.env*`, `journeys/.env`, credentials files",
-        "list variable names or presence only",
-        "load needed values directly into the process environment without echoing them",
-        "inspect existing E2E helpers and setup scripts before guessing credentials",
-        "request approval or report the setup as the explicit environment blocker",
+        "List variable names or key presence only",
+        "Load needed values directly into the process environment without echoing them",
+        "inspect existing E2E helpers and setup scripts before guessing",
+        "request approval or report the setup as the explicit environment",
         "If a shared setup step label appears in multiple branch cases and is ambiguous as a CLI target",
-        "do not comment out or disable other branches just to make it selectable",
-        "Target a branch-specific step that depends on the shared setup",
+        "Do not comment out or disable other branches",
+        "branch-specific step that depends on the shared setup",
         "If the spec needs a fixture, create or locate the fixture before running the journey",
-        "Static checks only prove syntax, not the user journey",
-        "If the Journey cannot connect to the app, inspect repository-provided local startup commands",
-        "Do not describe a Journey as tested, verified, or complete if the strongest evidence is only generated code",
-        "list every branch target that was executed",
-        "If no executable Journey run completed because infrastructure was unavailable, say `environment-blocked`",
+        "Static checks only prove",
+        "If the app is not running and the repository provides a normal local startup command",
+        "Do not describe a Journey as tested, verified, or complete",
+        "list every branch target executed",
+        "If no executable Journey run completed because infrastructure",
     )
 
     for phrase in required_phrases:
         assert phrase in body
 
     claude = render_agent_instructions("claude")
-    assert "finish with executable Journey CLI evidence whenever infrastructure permits" in claude
+    assert "replay one meaningful user-journey step while coding" in claude
     for phrase in required_phrases:
         assert phrase in claude
 
@@ -253,17 +251,17 @@ def test_agent_instruction_template_defines_step_scope_by_boundary_value() -> No
     required_phrases = (
         "intentional replay boundary",
         "Choose step scope by recovery value, not by function-name patterns",
-        "would this be a meaningful place to restart from the function start",
+        "would this be a meaningful",
         "Every step boundary has a cost",
-        "state binding, log scope, invalidation/replay decision, and possible rehydration",
+        "state binding, log scope, invalidation/replay decision",
         "Do not split merely to freeze intermediate state for assertion or prompt tuning",
         "Put retry on the operation whose rerun semantics match real recovery",
         "Split only when the intermediate result is independently useful",
         "step boundary checklist",
         "touchpoint helpers may be called inside a coarse step",
         "do not split wait/assert helpers into separate steps unless independently targetable",
-        "Common anti-pattern: separate steps for `get_webhook_endpoint(...)`, app startup, checkout, database assertion, email assertion, webhook wait, and webhook assertion",
-        "one branch-specific late-flow verification step",
+        "Common anti-pattern: separate steps for `get_webhook_endpoint(...)`",
+        "one branch-specific late-flow",
     )
 
     for phrase in required_phrases:

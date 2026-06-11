@@ -34,21 +34,22 @@ def assert_welcome_email(
     return True
 
 
+def send_welcome_email_and_verify_delivery() -> bool:
+    inbox = get_email_inbox()
+    receipt = send_email(
+        inbox,
+        subject="Welcome to Journey",
+        text_body="Hello from Journey Cloud",
+    )
+    message = wait_for_email(
+        inbox,
+        subject_contains="Welcome",
+        timeout=60,
+        poll_interval=0.5,
+    )
+    return assert_welcome_email(inbox, receipt, message)
+
+
 @journey
 def cloud_email_journey() -> None:
-    inbox = step(get_email_inbox())
-    receipt = step(
-        send_email(
-            subject="Welcome to Journey",
-            text_body="Hello from Journey Cloud",
-        )
-    )
-    message = step(
-        wait_for_email(
-            subject_contains="Welcome",
-            timeout=60,
-            poll_interval=0.5,
-        ),
-        inbox,
-    )
-    step(assert_welcome_email, inbox, receipt, message)
+    step(send_welcome_email_and_verify_delivery)

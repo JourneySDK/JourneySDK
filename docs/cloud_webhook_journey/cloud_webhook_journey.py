@@ -60,18 +60,21 @@ def assert_invoice_paid_webhook(request_payload: dict[str, object]) -> bool:
     return True
 
 
+def send_invoice_payment_and_verify_webhook() -> bool:
+    endpoint = get_webhook_endpoint(path="/invoice-paid")
+    send_invoice_paid_webhook_later(endpoint.url, delay=0.01)
+    request_payload = wait_for_webhook_request(
+        endpoint,
+        timeout=0.5,
+        poll_interval=0.01,
+    )
+    return assert_invoice_paid_webhook(request_payload)
+
+
 @journey
 def cloud_webhook_journey() -> None:
-    endpoint = step(get_webhook_endpoint(path="/invoice-paid"))
-    step(send_invoice_paid_webhook_later, endpoint.url)
-    request_payload = step(
-        wait_for_webhook_request(
-            path="/invoice-paid",
-            timeout=0.05,
-            poll_interval=0.01,
-        ),
-        endpoint,
+    step(
+        send_invoice_payment_and_verify_webhook,
         retry=3,
         retry_delay=0,
     )
-    step(assert_invoice_paid_webhook, request_payload)

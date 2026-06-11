@@ -1,53 +1,108 @@
 # Journey SDK Agent Instructions
 
-Use Journey SDK as the project's end-to-end test layer for real user journeys. When implementing a feature that changes
-a user flow, add or extend the journey specs for that flow, then run the narrowest Journey CLI command that verifies the
-affected journey or step.
+Use Journey SDK to verify real user journeys while you code. A Journey step is a replay boundary: the smallest
+meaningful slice an agent should rerun repeatedly while implementing a feature, fixing a bug, or checking an
+integration.
 
 ## When To Use Journey
 
-- Always use Journey SDK when a change should be verified against a real user journey, treating it like an end-to-end test for that flow.
-- When implementing new features, extend existing journey specs or add new ones so the new user behavior is covered.
-- Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks, payments, Docker-managed local services, third-party systems, or delayed side effects.
-- Use it for fast partial verification: run only the case that reaches one step, or pause after one target step and retry it repeatedly while editing code.
-- If you need the complete Journey guidance packet and have not already received it, run `journey agent <target>` where `<target>` is `codex`, `claude`, `cursor`, or `generic`.
+- Use Journey SDK whenever a code change should be proven through a user flow, not only unit tests or static checks.
+- Use it for long, branching, async, or cross-system flows that touch browsers, APIs, background jobs, email, webhooks,
+  payments, Docker-managed local services, third-party systems, or delayed side effects.
+- Prefer Journey when you need to rerun one late-flow step repeatedly without restarting the whole journey from the
+  beginning.
+- If this installed guidance is not enough, run `journey agent <target>` where `<target>` is `codex`, `claude`,
+  `cursor`, or `generic`.
 
-## Working From A One-Line Prompt
+## Core Loop
 
-- If this guidance came from installed assistant instructions and the complete bootstrap packet is not already in context, run and read `journey agent <target>` yourself.
-- Proceed autonomously: inspect the project, find or create the relevant journey spec, fetch touchpoint references with the Journey CLI as needed, run the targeted verification loop, and report the exact Journey commands and evidence before finishing.
-- When asked to write, add, or extend a Journey spec, do not stop after code generation, import checks, lint, or type checks. A new or changed Journey is unfinished until you have run at least one executable `journey --file ...` command against it, unless the app infrastructure is genuinely unavailable.
-- For a new branching journey, run the shared setup and every requested branch target with Journey selection commands such as `--develop-step <branch_step>` or `--step <branch_step>`; then finish with a broader fresh run such as `--step <target> --no-state` or full `--no-state` when infrastructure permits.
-- When asked to fix a Journey file, do not stop after static review or a plausible code edit. Run the failing Journey command or the full journey once, use the first failing step as the source of truth, then iterate with the CLI's `Retry failed step:` command or the narrowest equivalent `--develop-step` command until it passes.
-- Do not ask the user whether to run the journey when verification is the requested task. If the app is not running and the repository provides a normal local startup command, start the required services or request tool approval for that command; classify the run as `environment-blocked` only after the repo-provided startup path is missing or fails.
-- Do not print secret values from `.env`, credentials files, or CLI output. Do not `cat`, `sed`, `nl`, `head`, `tail`, or `Read` `.env*`, `journeys/.env`, credentials files, or other secret-bearing files wholesale. When checking configuration, list variable names or presence only, load needed values directly into the process environment without echoing them, and redact values before writing logs, memory, summaries, or final answers.
+1. Find or create the Journey spec for the changed user flow.
+2. Run the failing command from the user, or run the narrowest verification target that reaches the changed behavior.
+3. Use the first failing Journey step as the source of truth.
+4. Rerun that step with `journey loop <step_label> --file journeys/<feature>_journey.py` after every edit.
+5. Inspect correlated artifacts with `journey evidence` when the step output is not enough.
+6. Broaden before finishing: run `journey verify --step <step_label> --file ... --fresh` for a fresh target-step check,
+   then run `journey verify --file ... --fresh` when infrastructure permits.
 
-## Fetch More Journey Guidance
+Do not stop after code generation, import checks, lint, type checks, or test discovery. A new or changed Journey is not
+verified until at least one executable Journey CLI command has run, unless the app infrastructure is genuinely
+unavailable.
 
-- Use the installed Journey CLI to fetch Journey reference material.
-- Run `journey --help` before choosing or repairing Journey execution commands when command usage is unclear.
-- Run `journey logs --help` before inspecting artifacts when log filters, trace paths, or text logs are unclear.
-- Run `journey agent --help` before installing or replacing persistent assistant guidance.
-- Run `journey --touchpoint-docs all` to inspect every packaged touchpoint reference before choosing helpers for a new flow.
-- Run `journey --touchpoint-docs browser`, `journey --touchpoint-docs docker`, `journey --touchpoint-docs email`, `journey --touchpoint-docs webhook`, or `journey --touchpoint-docs http` for focused helper guidance.
-- Do not ask the user for Journey reference material that can be printed by the installed CLI.
+When asked to write, add, or extend a Journey spec, make the first draft executable quickly. Static checks only prove
+syntax, not the user journey. If the spec needs a fixture, create or locate the fixture before running the journey.
 
-## Add Journey Specs
+## Commands
 
-- Inspect existing journey files, tests, fixtures, and local helper APIs before adding a new spec.
-- For sign-in, seed data, payments, email, or other test setup, inspect existing E2E helpers and setup scripts before guessing credentials, magic codes, or UI flows. If the repo-supported setup mutates an external service, request approval or report the setup as the explicit environment blocker instead of brute-forcing credentials.
-- Follow the project's existing journey location and naming convention when one exists.
-- If there is no convention, add new specs under `journeys/<feature>_journey.py`.
-- Keep journey specs close to the behavior they verify, but do not add public/private cross-repo dependencies.
-- If the spec needs a fixture, create or locate the fixture before running the journey; do not leave required image, PDF, or data files as placeholders.
+Run help when usage is unclear:
 
-## Keep Journeys User-Centered
+```bash
+journey --help
+journey loop --help
+journey verify --help
+journey evidence --help
+journey touchpoints browser
+journey touchpoints docker
+journey touchpoints email
+journey touchpoints webhook
+journey touchpoints http
+journey touchpoints all
+journey agent --help
+```
 
-- Journeys should read like a user flow. The `@journey` function should stay short and describe the story in a few clear, durable steps.
-- Use user-journey step names, such as `create_watch`, `change_watched_page`, or `deliver_change_notification`, instead of technical implementation actions.
-- Avoid turning journey files into infrastructure harnesses. Put subprocess management, embedded HTTP servers, raw polling loops, PID files, ports, datastore cleanup, and similar plumbing in helpers, fixtures, Docker Compose, or touchpoints.
-- Technical helpers are acceptable only when they make the Journey spec simpler to read.
-- Use the shortest deterministic route that proves the real user journey. Do not model every setup detail in the journey when a fixture, helper, or touchpoint can provide a readable boundary.
+Use these commands while working:
+
+```bash
+journey loop target_step --file journeys/<feature>_journey.py
+journey evidence --step target_step
+journey verify --step target_step --file journeys/<feature>_journey.py --fresh
+journey verify --file journeys/<feature>_journey.py --fresh
+journey verify --step target_step --file journeys/<feature>_journey.py --output jsonl
+```
+
+If the CLI prints `Retry failed step: ...`, copy that command as the focused loop. Read every `What happened`,
+`Try this`, and `Next commands` block before editing.
+
+## Step Boundaries
+
+- Each `step(...)` is an intentional replay boundary for one whole operation in the user journey, such as `submit_order_and_verify_confirmation`,
+  `receive_confirmation_email`, or `complete_checkout_and_verify_registration_effects`.
+- Choose step scope by recovery value, not by function-name patterns. Before splitting, ask: would this be a meaningful
+  place to restart from the function start, is the state stable and durable enough to restore, and is restoring it
+  cheaper or more correct than recreating it?
+- Every step boundary has a cost: another label, state binding, log scope, invalidation/replay decision, and possible
+  rehydration.
+- If clicks, form fills, polls, waits, and assertions must recover together, keep them in one step or in helpers called
+  by that step.
+- Do not split every browser action, setup call, poll, or assertion into its own step.
+- Do not split merely to freeze intermediate state for assertion or prompt tuning.
+- Put retry on the operation whose rerun semantics match real recovery, not on a trailing wait or assertion suffix
+  carved away from the action that produced the state.
+- Split only when the intermediate result is independently useful as a loop target, retry point, branch replay anchor,
+  or durable value passed to later operations.
+- Apply this step boundary checklist before every new `step(...)`: add a step only when an agent would target it, retry
+  from it, branch from it, or when storing/restoring its result is cheaper than rerunning the work.
+- touchpoint helpers may be called inside a coarse step when their intermediate values are not useful replay boundaries.
+- do not split wait/assert helpers into separate steps unless independently targetable.
+- Common anti-pattern: separate steps for `get_webhook_endpoint(...)`, app startup, checkout, database assertion, email
+  assertion, webhook wait, and webhook assertion. Prefer one expensive setup step, then one branch-specific late-flow
+  verification step that performs the browser action and all side-effect assertions that recover together.
+- Prefer explicit top-level step functions over lambdas or nested closures.
+- Step function names are stable CLI labels used by `journey loop`, `journey verify --step`, state files, retries, and
+  branch replay. Rename them only when updating those references intentionally.
+- Keep planning side-effect free. Acquire browsers, cloud resources, services, and handles inside step execution.
+
+## Branches
+
+- Use `branch(...)` to model alternative user paths after shared setup.
+- Use `branch(replay_from=step_result)` when later branch cases should replay from a saved shared setup step instead of
+  rebuilding the entire journey.
+- Choose the replay anchor as a durable point you would be comfortable restoring while iterating on later branches.
+- For a new branching journey, run every requested branch target with `journey verify --step <branch_step> --file ...`
+  and finish with a broader fresh run when infrastructure permits.
+- If a shared setup step label appears in multiple branch cases and is ambiguous as a CLI target, target a
+  branch-specific step that depends on the shared setup. Do not comment out or disable other branches just to make it
+  selectable.
+- Keep values that cross replay boundaries pickle-serializable or implement Journey's rehydration protocol.
 
 ```python
 from journeysdk import branch, journey, step
@@ -80,102 +135,65 @@ def changedetection_core_journey() -> None:
     watch = step(create_watch_for_demo_page, app)
     detected = step(change_page_and_wait_for_detection, watch, retry=30, retry_delay=2)
 
-    if branch(start_from=detected):
+    if branch(replay_from=detected):
         step(review_detected_diff, detected)
-    elif branch(start_from=detected):
+    elif branch(replay_from=detected):
         step(deliver_change_notification, detected)
 ```
 
-## Use Steps
+## Touchpoints
 
-- Each `step(...)` is an intentional replay boundary for one whole operation in the user journey, such as `clear_basket_and_add_items`, `submit_order_and_verify_confirmation`, or `receive_confirmation_email`.
-- Choose step scope by recovery value, not by function-name patterns. Before splitting, ask: would this be a meaningful place to restart from the function start, is the state stable and durable enough to restore, and is restoring it cheaper or more correct than recreating it?
-- Every step boundary has a cost: another label, state binding, log scope, invalidation/replay decision, and possible rehydration. External or rehydratable state makes the cost more visible, but the rule applies to all steps.
-- Do not wrap every click, form fill, setup call, poll, or assertion as its own step. If actions must recover together, keep them in one step or in helpers called by that step.
-- Do not split merely to freeze intermediate state for assertion or prompt tuning. Keep the suffix with the operation when it only completes or verifies the outcome produced by that operation.
-- Put retry on the operation whose rerun semantics match real recovery, not on a trailing wait or assertion suffix carved away from the action that produced the state.
-- Split only when the intermediate result is independently useful as a target, retry point, branch replay anchor, or durable value passed to later operations.
-- Apply this step boundary checklist before every new `step(...)`: add a step only when an agent would target it, retry from it, branch from it, or when storing/restoring its result is cheaper than rerunning the work.
-- In short, touchpoint helpers may be called inside a coarse step when their intermediate values are not useful replay boundaries.
-- In short, do not split wait/assert helpers into separate steps unless independently targetable.
-- Common anti-pattern: separate steps for `get_webhook_endpoint(...)`, app startup, checkout, database assertion, email assertion, webhook wait, and webhook assertion. Prefer one expensive setup step, then one branch-specific late-flow verification step that performs the browser action and all side-effect assertions that recover together.
-- Prefer explicit top-level step functions over lambdas or nested closures.
-- Step function names are stable CLI labels used by `--step`, `--develop-step`, state files, retries, and branch replay. Rename them only when updating those references intentionally.
-- Pass concrete dependencies and previous step results as explicit arguments.
-- Keep planning side-effect free; acquire browsers, cloud resources, services, and handles inside step execution.
-
-## Use Branches
-
-- Use `branch(...)` to model alternative user paths after shared setup, such as card checkout versus wallet checkout.
-- Use `branch(start_from=step_result)` when later branch cases should restart from a saved step boundary instead of repeating all shared setup.
-- Use `branch(start_from=...)` for alternate paths or independent postconditions after shared setup.
-- For flows like changedetection.io, model shared setup once, then branch from a detected-change anchor to verify diff UI and notification behavior independently.
-- Avoid decorative branches when there is only one meaningful path.
-- Choose the `start_from` step as the durable point you would be comfortable retrying or resuming from while iterating on later branches.
-- If a shared setup step label appears in multiple branch cases and is ambiguous as a CLI target, do not comment out or disable other branches just to make it selectable. Target a branch-specific step that depends on the shared setup, or run the full journey until a branch target; any temporary narrowing must be restored before final evidence and called out explicitly.
-- Keep values that cross replay boundaries pickle-serializable or implement Journey's rehydration protocol.
-
-## Use Touchpoints
-
-- Touchpoints are systems a step talks to; steps remain the coarse durable retry/replay boundary.
-- Before using an official touchpoint, run `journey --touchpoint-docs <name>` and follow that reference. For Docker-backed apps, run `journey --touchpoint-docs docker`.
-- Use official helpers from `journeysdk.touchpoints` for browser, email, webhook, and Docker Compose touchpoints; write app-specific touchpoints as plain Python helper functions when the SDK has no generic helper.
-- Use touchpoints and app-specific helpers to keep specs readable; they should hide low-level setup while Journey steps keep meaningful user-flow boundaries.
-- Prefer official touchpoint helpers over hand-written `urlopen`, `time.sleep`, Docker port plumbing, raw selectors, or custom polling.
+- Touchpoints are systems a step talks to; steps remain the durable retry/replay boundary.
+- Before using an official touchpoint, run `journey touchpoints <name>` or `journey touchpoints all`.
+- Prefer official helpers from `journeysdk.touchpoints` for browser, Docker Compose, hosted email, hosted webhooks, and
+  HTTP checks before writing raw polling or plumbing.
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles only when later steps need touchpoint state.
-- Browser: call `open_page(...)` inside step functions, reopen saved `JourneyBrowserPage` with `open_page(saved_page)` only when a later step needs that browser state, use `page.prompt(..., memory=...)` for bounded UI tasks, keep logs enabled unless sensitive data requires `--no-logs`, and use `--no-browser-recording` only to skip trace/video capture. Prompt memory files live next to the journey's `.journey` directory. If `page.prompt(...)` reaches max steps, loops on the wrong page, or wanders after a rejected action, treat that as a deterministic step implementation failure: inspect the app route, selectors, current URL/title, prompt memory replay errors, and browser artifacts, then make the step or prompt more precise before rerunning. Use `--no-memory` to bypass stale AI prompt memory during diagnosis.
-- Email: use `get_email_inbox()`, `send_email(...)`, and `wait_for_email(...)`; wrap them as separate steps only when the inbox, send action, or received message is independently targetable.
-- Webhook: use `get_webhook_endpoint(path=...)`, pass `endpoint.url` to the app under test, then use `wait_for_webhook_request(path=...)`; in agent inner loops, keep endpoint acquisition, app configuration, the triggering user action, webhook wait, and payload assertion inside a coarse step unless a returned handle is a real replay anchor.
-- Docker: wrap `run_docker(...)` in a named step, wait with `DockerLogMatcher`, keep durable replay state in Docker-managed volumes, use `build=True` and `pull_policy="never"` when local source edits must be rebuilt without registry access, and use later coarse `branch(start_from=...)` anchors to restore Docker-managed state while iterating on branches.
-- Journey Cloud resources available today are hosted email inboxes and hosted webhook endpoints. Treat phone/SMS, payment cards, voice, and messaging as roadmap resources unless the project has its own concrete helper or touchpoint.
+- Browser: call `open_page(...)` inside step functions, keep logs enabled unless sensitive data requires `--no-logs`,
+  and inspect `journey evidence` traces or videos when browser behavior is unclear.
+- Email: call `get_email_inbox()`, `send_email(...)`, and `wait_for_email(...)` inside the step that triggers and
+  verifies the email.
+- Webhook: call `get_webhook_endpoint(path=...)`, pass `endpoint.url` to the app under test, then call
+  `wait_for_webhook_request(endpoint, ...)` inside the step that triggers and verifies the webhook.
+- Docker: wrap `run_docker(...)` in a named setup step, keep durable replay state in Docker-managed volumes, and use
+  later `branch(replay_from=...)` anchors to restore Docker-managed state while iterating on branches.
+- Journey Cloud touchpoints available today are hosted email inboxes and hosted webhook endpoints. Treat phone/SMS,
+  payment cards, voice, and messaging as roadmap resources unless the project has its own concrete helper.
 
-## Quick Verification Loop
+## Evidence
 
-1. Run from the project that owns the journey.
-2. When authoring a new journey, make the first draft executable quickly. After the file imports, run the full journey or the narrowest target that reaches the first requested branch; for branching flows, run each requested branch target before claiming coverage. Static checks only prove syntax, not the user journey.
-3. If the Journey cannot connect to the app, inspect repository-provided local startup commands and bring up the smallest required frontend/backend/dependency stack. After startup, rerun the same Journey command that exposed the connection failure.
-4. When fixing an existing failure, run the failing command from the user or the full journey once, read the first failing step, and copy the CLI's `Retry failed step:` command as the focused loop when it appears. Read every `What happened`, `Try this`, and `Next commands` block; if command usage is unclear, run the relevant `--help` command printed by the CLI. Before editing, inspect the failing step label, attempt output, current URL/title for browser failures, the last rejected browser action, and correlated `.journey/logs` artifacts.
+- Use `journey evidence --list-scopes` to discover run, case, branch, and step filters.
+- Use `journey evidence --list-log-sources --case <case_id> --step <step_label>` before reading large logs.
+- Use `journey evidence --paths --step <step_label> --touchpoint browser` for trace/video paths.
+- Use `journey evidence --show --case <case_id> --step <step_label> --touchpoint docker --source <service> --tail 80`
+  for text logs.
+- In JSONL output, read `state_validity` events and each report record's `status` field (`executed`, `replayed`, or
+  `failed`) before relying on evidence.
+- Treat `replayed` state as development-loop evidence, not final release evidence. Use `--fresh` for final confidence
+  whenever feasible.
 
-5. Use the narrowest useful Journey command while editing:
+## Environment And Secrets
 
-```bash
-journey --file journeys/<feature>_journey.py --develop-step target_label
-```
+- Do not ask the user whether to run the journey when verification is the requested task. Run it, or start the
+  repo-supported app stack first when needed.
+- If the app is not running and the repository provides a normal local startup command, start the required services or
+  request tool approval for that command.
+- Say `environment-blocked` only after the repo-provided startup path is missing or fails.
+- Do not print secret values from `.env`, credentials files, or CLI output. List variable names or key presence only.
+- Do not `cat`, `sed`, `nl`, `head`, `tail`, or `Read` `.env*`, `journeys/.env`, credentials files, or other
+  secret-bearing files wholesale.
+- Load needed values directly into the process environment without echoing them.
+- For auth, seed data, payments, email, or other setup, inspect existing E2E helpers and setup scripts before guessing
+  credentials, magic codes, or UI flows.
+- If repo-supported setup mutates an external service, request approval or report the setup as the explicit environment
+  blocker.
 
-6. Rerun the same `--develop-step` command after every edit to retry the paused step with Journey's default persistent state. Keep iterating until the target step passes.
-7. Broaden verification before finishing:
+## Reporting Standard
 
-```bash
-journey --file journeys/<feature>_journey.py --step target_label --no-state
-journey --file journeys/<feature>_journey.py --no-state
-```
-
-State checklist:
-
-- Read `state_validity` events in JSONL output or the `State:` lines in pretty output, and read each report record's
-  `status` field (`executed`, `replayed`, or `failed`) before relying on a step as fresh evidence.
-- Treat `replayed` state as development-loop evidence, not final release evidence.
-- Treat `invalidated` as normal after journey, source, runtime, or workspace changes; Journey reran from a safe boundary.
-- Use `--no-state` for the final target-step or full journey confidence run whenever feasible.
-- Do not ask the user to delete Journey state after normal edits; Journey invalidates stale state automatically.
-
-8. Use JSON Lines output when another tool or script needs to parse results:
-
-```bash
-journey --file journeys/<feature>_journey.py --step target_label --output jsonl
-```
-
-- Avoid `--interactive` for non-human agent runs; noninteractive `--develop-step` is designed for coding agents.
-- Use `journey logs --list-scopes` and `journey logs --list-log-sources --case <case_id> --step <step_label>` before reading large logs. Then use `journey logs --paths --step <step_label> --touchpoint browser` or `journey logs --show --case <case_id> --step <step_label> --touchpoint docker --source <service> --tail 80` to inspect correlated evidence without prompting.
-- Use `--no-memory` only when AI prompt memory must be ignored for a run.
-- Use `--no-state` only for one-off runs that should not resume.
-- Do not pass `None` or placeholder objects into constructors; resolve concrete dependencies first.
-
-## Verification Standard
-
-Before wrapping up, report the exact Journey command you ran, the targeted step or full journey that passed, and any broader tests that still need to run.
-Do not describe a Journey as tested, verified, or complete if the strongest evidence is only generated code, `py_compile`, import success, lint, or test discovery.
-For new branching journeys, list every branch target that was executed, whether each relevant step status was `executed` or `replayed`, and which final `--no-state` command produced fresh confidence. If no executable Journey run completed because infrastructure was unavailable, say `environment-blocked` and name the missing dependency instead of inferring product behavior.
-For browser, Docker, or other touchpoint journeys, also report relevant `journey logs` traces, videos, text logs, or paths when they help a human reviewer verify what happened.
-For cloud touchpoint journeys, report the email, webhook, or other payload evidence asserted by the Journey step.
+Before finishing, report the exact Journey command you ran, the targeted step or full journey that passed, and any
+broader tests that still need to run. For new branching journeys, list every branch target executed, whether each
+relevant step status was `executed` or `replayed`, and which final `--fresh` command produced fresh confidence. For
+browser, Docker, email, webhook, or other touchpoint journeys, report the relevant evidence paths or payload assertions
+that prove what happened. Do not describe a Journey as tested, verified, or complete if the strongest evidence is only
+generated code, import success, lint, or test discovery. If no executable Journey run completed because infrastructure
+was unavailable, say `environment-blocked` and name the missing dependency.

@@ -9,6 +9,7 @@ from pathlib import Path
 import journeysdk as journey_sdk
 import pytest
 
+from journeysdk.errors import CallableExecutionError
 from journeysdk.touchpoints._webhook_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
     JOURNEY_CLOUD_BASE_URL_ENV,
@@ -46,6 +47,18 @@ def _configure_cloud_env(monkeypatch: pytest.MonkeyPatch, *, api_key: str, base_
     monkeypatch.setenv(JOURNEY_CLOUD_BASE_URL_ENV, base_url)
 
 
+def reserve_invoice_paid_webhook_endpoint() -> CloudWebhookEndpoint:
+    return get_webhook_endpoint(path="/invoice-paid")
+
+
+def receive_invoice_paid_webhook(endpoint: CloudWebhookEndpoint) -> dict[str, object]:
+    return wait_for_webhook_request(
+        endpoint,
+        timeout=0.05,
+        poll_interval=0.01,
+    )
+
+
 def test_cloud_webhook_planning_does_not_require_env_or_network(monkeypatch: pytest.MonkeyPatch):
     original_urlopen = urllib.request.urlopen
 
@@ -57,30 +70,48 @@ def test_cloud_webhook_planning_does_not_require_env_or_network(monkeypatch: pyt
     monkeypatch.delenv(JOURNEY_CLOUD_BASE_URL_ENV, raising=False)
 
     def journey():
-        endpoint = get_webhook_endpoint(path="/invoice-paid")
-        wait_for_invoice = wait_for_webhook_request(path="/invoice-paid")
-        handle = journey_sdk.step(endpoint)
-        journey_sdk.step(wait_for_invoice, handle)
+        endpoint = journey_sdk.step(reserve_invoice_paid_webhook_endpoint)
+        journey_sdk.step(receive_invoice_paid_webhook, endpoint)
 
     plan = journey_sdk.compile_journey(journey)
     labels = [node.label for node in plan.case_plans[0].nodes if getattr(node, "label", None)]
 
-    assert labels == ["get_webhook_invoice_paid", "receive_webhook_invoice_paid"]
+    assert labels == [
+        "reserve_invoice_paid_webhook_endpoint",
+        "receive_invoice_paid_webhook",
+    ]
     monkeypatch.setattr(urllib.request, "urlopen", original_urlopen)
 
 
 def test_cloud_webhook_helpers_validate_inputs_and_endpoint_handles():
-    with pytest.raises(TypeError):
-        get_webhook_endpoint(path=object())  # type: ignore[arg-type]
+    def invalid_path_type():
+        return get_webhook_endpoint(path=object())  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError):
-        get_webhook_endpoint(path="/")
+    def invalid_path_value():
+        return get_webhook_endpoint(path="/")
 
-    with pytest.raises(TypeError):
-        wait_for_webhook_request(path="/invoice-paid", timeout=True)  # type: ignore[arg-type]
+    def invalid_timeout(endpoint: CloudWebhookEndpoint):
+        return wait_for_webhook_request(endpoint, path="/invoice-paid", timeout=True)  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError):
-        wait_for_webhook_request(path="/invoice-paid", poll_interval=0)
+    def invalid_poll_interval(endpoint: CloudWebhookEndpoint):
+        return wait_for_webhook_request(endpoint, path="/invoice-paid", poll_interval=0)
+
+    def wrong_endpoint_path(endpoint: CloudWebhookEndpoint):
+        return wait_for_webhook_request(endpoint, path="/invoice-paid")
+
+    def execute_step(fn, *args):
+        def journey():
+            journey_sdk.step(fn, *args)
+
+        return journey_sdk.execute(journey)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        execute_step(invalid_path_type)
+    assert isinstance(exc_info.value.__cause__, TypeError)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        execute_step(invalid_path_value)
+    assert isinstance(exc_info.value.__cause__, ValueError)
 
     endpoint = CloudWebhookEndpoint(
         endpoint_id="endpoint-1",
@@ -88,11 +119,19 @@ def test_cloud_webhook_helpers_validate_inputs_and_endpoint_handles():
         url="http://example.test/webhooks/endpoint-1/wrong",
         api_base_url="http://example.test",
     )
-    receive_webhook = wait_for_webhook_request(path="/invoice-paid")
 
-    with pytest.raises(ValueError) as exc_info:
-        receive_webhook(endpoint)
+    with pytest.raises(CallableExecutionError) as exc_info:
+        execute_step(invalid_timeout, endpoint)
+    assert isinstance(exc_info.value.__cause__, TypeError)
 
+    with pytest.raises(CallableExecutionError) as exc_info:
+        execute_step(invalid_poll_interval, endpoint)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        execute_step(wrong_endpoint_path, endpoint)
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
     assert "expected '/invoice-paid'" in str(exc_info.value)
 
 
@@ -100,15 +139,18 @@ def test_cloud_webhook_helpers_fail_clearly_when_env_is_missing(monkeypatch: pyt
     monkeypatch.delenv(JOURNEY_CLOUD_API_KEY_ENV, raising=False)
     monkeypatch.delenv(JOURNEY_CLOUD_BASE_URL_ENV, raising=False)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        get_webhook_endpoint(path="/invoice-paid")()
+    def journey():
+        journey_sdk.step(reserve_invoice_paid_webhook_endpoint)
+
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
 
     assert "JOURNEY_CLOUD_API_KEY" in str(exc_info.value)
 
     monkeypatch.setenv(JOURNEY_CLOUD_API_KEY_ENV, "test-key")
 
-    with pytest.raises(RuntimeError) as exc_info:
-        get_webhook_endpoint(path="/invoice-paid")()
+    with pytest.raises(CallableExecutionError) as exc_info:
+        journey_sdk.execute(journey)
 
     assert "JOURNEY_CLOUD_BASE_URL" in str(exc_info.value)
 
@@ -116,11 +158,20 @@ def test_cloud_webhook_helpers_fail_clearly_when_env_is_missing(monkeypatch: pyt
 def test_cloud_webhook_payload_has_expected_shape(monkeypatch: pytest.MonkeyPatch):
     with serve_in_background() as cloud:
         _configure_cloud_env(monkeypatch, api_key=cloud.api_key, base_url=cloud.base_url)
-        endpoint = get_webhook_endpoint(path="/invoice-paid")()
 
-        _post_json(f"{endpoint.url}?source=test", {"sequence": 1})
+        def post_sequence_webhook(endpoint: CloudWebhookEndpoint) -> bool:
+            _post_json(f"{endpoint.url}?source=test", {"sequence": 1})
+            return True
 
-        received = wait_for_webhook_request(path="/invoice-paid")(endpoint)
+        def journey():
+            endpoint = journey_sdk.step(reserve_invoice_paid_webhook_endpoint)
+            journey_sdk.step(post_sequence_webhook, endpoint)
+            journey_sdk.step(receive_invoice_paid_webhook, endpoint)
+
+        report = journey_sdk.execute(journey)
+
+    endpoint = report.case_reports[0].records[0].result
+    received = report.case_reports[0].records[2].result
 
     assert set(received) == {
         "method",
@@ -157,14 +208,10 @@ def test_cloud_webhook_retries_until_background_sender_posts(monkeypatch: pytest
             return True
 
         def journey():
-            endpoint = journey_sdk.step(get_webhook_endpoint(path="/invoice-paid"))
+            endpoint = journey_sdk.step(reserve_invoice_paid_webhook_endpoint)
             journey_sdk.step(_send_cloud_webhook_later, endpoint.url, 0.08)
             request_payload = journey_sdk.step(
-                wait_for_webhook_request(
-                    path="/invoice-paid",
-                    timeout=0.05,
-                    poll_interval=0.01,
-                ),
+                receive_invoice_paid_webhook,
                 endpoint,
                 retry=2,
                 retry_delay=0,
@@ -174,9 +221,9 @@ def test_cloud_webhook_retries_until_background_sender_posts(monkeypatch: pytest
         plan = journey_sdk.compile_journey(journey)
         labels = [node.label for node in plan.case_plans[0].nodes if getattr(node, "label", None)]
         assert labels == [
-            "get_webhook_invoice_paid",
+            "reserve_invoice_paid_webhook_endpoint",
             "_send_cloud_webhook_later",
-            "receive_webhook_invoice_paid",
+            "receive_invoice_paid_webhook",
             "assert_webhook",
         ]
 
@@ -201,27 +248,23 @@ def test_cloud_webhook_journey_supports_targeted_execution(monkeypatch: pytest.M
             return True
 
         def journey():
-            endpoint = journey_sdk.step(get_webhook_endpoint(path="/invoice-paid"))
-            if journey_sdk.branch(start_from=endpoint):
+            endpoint = journey_sdk.step(reserve_invoice_paid_webhook_endpoint)
+            if journey_sdk.branch(replay_from=endpoint):
                 journey_sdk.step(_send_cloud_webhook_later, endpoint.url, 0.01)
                 request_payload = journey_sdk.step(
-                    wait_for_webhook_request(
-                        path="/invoice-paid",
-                        timeout=0.05,
-                        poll_interval=0.01,
-                    ),
+                    receive_invoice_paid_webhook,
                     endpoint,
                     retry=2,
                     retry_delay=0,
                 )
                 journey_sdk.step(assert_webhook, request_payload)
-            elif journey_sdk.branch(start_from=endpoint):
+            elif journey_sdk.branch(replay_from=endpoint):
                 journey_sdk.step(noop)
 
-        targeted_report = journey_sdk.execute(journey, step="assert_webhook")
+        targeted_report = journey_sdk.execute(journey, target_step="assert_webhook")
         assert len(targeted_report.case_reports) == 1
         assert targeted_report.case_reports[0].stopped_at_label == "assert_webhook"
-        assert targeted_report.case_reports[0].replay_anchor == "get_webhook_invoice_paid"
+        assert targeted_report.case_reports[0].replay_anchor == "reserve_invoice_paid_webhook_endpoint"
 
 
 def test_cloud_webhook_endpoint_reruns_without_explicit_replay_boundary(
@@ -246,15 +289,11 @@ def test_cloud_webhook_endpoint_reruns_without_explicit_replay_boundary(
             return True
 
         def journey():
-            endpoint = journey_sdk.step(get_webhook_endpoint(path="/invoice-paid"))
+            endpoint = journey_sdk.step(reserve_invoice_paid_webhook_endpoint)
             journey_sdk.step(_send_cloud_webhook_later, endpoint.url, 0.01)
             journey_sdk.step(pause_once, endpoint)
             request_payload = journey_sdk.step(
-                wait_for_webhook_request(
-                    path="/invoice-paid",
-                    timeout=0.05,
-                    poll_interval=0.01,
-                ),
+                receive_invoice_paid_webhook,
                 endpoint,
                 retry=3,
                 retry_delay=0,
@@ -276,10 +315,10 @@ def test_cloud_webhook_endpoint_reruns_without_explicit_replay_boundary(
         ]
 
         assert record_labels == [
-            "get_webhook_invoice_paid",
+            "reserve_invoice_paid_webhook_endpoint",
             "_send_cloud_webhook_later",
             "pause_once",
-            "receive_webhook_invoice_paid",
+            "receive_invoice_paid_webhook",
             "assert_webhook",
         ]
         assert len(seen_endpoint_ids) == 2

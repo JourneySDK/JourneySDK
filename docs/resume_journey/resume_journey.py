@@ -62,7 +62,7 @@ def assert_resumed_ticket(ticket: dict[str, str]) -> bool:
     _tutorial_note(
         "The journey finished. This demo has no explicit replay boundary, so an "
         "interrupted run restarts the case from the beginning. Add "
-        "branch(start_from=...) or positive retry when a step value should be saved "
+        "branch(replay_from=...) or positive retry when a step value should be saved "
         "and reused."
     )
     return True

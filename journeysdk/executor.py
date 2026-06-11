@@ -1929,8 +1929,8 @@ class _StateController:
             hint = None
             if state.develop_step is not None and self.develop_step is None:
                 hint = (
-                    "Rerun the same --develop-step target to keep iterating, or use "
-                    "`--no-state` for a fresh --step/full journey verification after a develop-step pause."
+                    "Rerun the same `journey loop <step>` target to keep iterating, or use "
+                    "`journey verify --fresh --step <step>` or a full fresh journey verification after a loop pause."
                 )
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' was created for develop_step "
@@ -2745,7 +2745,7 @@ class _RunSession:
         node_ids = self._runtime_step_result_ids.get(id(value))
         if not node_ids:
             raise TypeError(
-                "branch(start_from=...) accepts a value returned by an earlier step() call. Omit start_from to start from scratch."
+                "branch(replay_from=...) accepts a value returned by an earlier step() call. Omit replay_from to start from scratch."
             )
         return _RuntimeStepAnchor(frozenset(node_ids))
 
@@ -3617,8 +3617,8 @@ class _RunSession:
             start_from_matches_plan = node.start_from in start_from.node_ids
         if not start_from_matches_plan:
             raise InvalidBranchUsageError(
-                "journey.branch(start_from=...) used a step that does not match the compiled plan.",
-                hint="Make sure each journey.branch(start_from=...) points to the same earlier step result it used during planning.",
+                "journey.branch(replay_from=...) used a step that does not match the compiled plan.",
+                hint="Make sure each journey.branch(replay_from=...) points to the same earlier step result it used during planning.",
             )
 
         if marker_index >= self.replay_from_index:
@@ -4930,6 +4930,8 @@ def execute(
     journey_fn: JourneyEntrypoint,
     *,
     step: str | None = None,
+    target_step: str | None = None,
+    fresh: bool = False,
     state: str | Path | None = None,
     no_state: bool = False,
     no_state_update: bool = False,
@@ -4944,7 +4946,9 @@ def execute(
 
     Args:
         journey_fn: Journey entrypoint to compile and execute.
-        step: Optional target step label.
+        step: Compatibility spelling for ``target_step``.
+        target_step: Optional target step label for focused verification.
+        fresh: Disable persistent state reads and writes for this verification run.
         state: Optional custom state file for replay and resume.
         no_state: Disable persistent state reads and writes for this run.
         no_state_update: Disable persistent state writes while still allowing reads.
@@ -4956,13 +4960,18 @@ def execute(
         clean_logs: Remove existing Journey logs before this run.
     """
 
+    if step is not None and target_step is not None:
+        raise TypeError("execute(...) accepts either step=... or target_step=..., not both.")
+    selected_step = target_step if target_step is not None else step
+    selected_no_state = no_state or fresh
+
     plan = compile_journey(journey_fn)
     return _execute_plan(
         journey_fn,
         plan=plan,
-        step=step,
+        step=selected_step,
         state=state,
-        no_state=no_state,
+        no_state=selected_no_state,
         no_state_update=no_state_update,
         no_memory=no_memory,
         no_memory_update=no_memory_update,

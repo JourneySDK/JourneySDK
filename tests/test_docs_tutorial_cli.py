@@ -51,7 +51,7 @@ def test_first_journey_readme_commands(
     monkeypatch.chdir(_repo_root())
     first_docs.reset_demo_state()
 
-    execute_exit = main(["--file", "docs/first_journey/first_journey.py"])
+    execute_exit = main(["verify", "--fresh", "--file", "docs/first_journey/first_journey.py"])
     execute_capture = capsys.readouterr()
     execute_output = execute_capture.out
     execute_logs = execute_capture.out
@@ -74,6 +74,8 @@ def test_selection_readme_commands_use_journey_and_jsonl(
 
     exit_code = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/selection_journeys/selection_journeys.py",
             "--journey",
@@ -90,6 +92,8 @@ def test_selection_readme_commands_use_journey_and_jsonl(
 
     exit_code = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/selection_journeys/selection_journeys.py",
             "--journey",
@@ -115,6 +119,8 @@ def test_branching_readme_target_command_reports_replay_anchor(
 
     exit_code = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/branching_journey/branching_journey.py",
             "--step",
@@ -139,10 +145,10 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
 
     exit_code = main(
         [
+            "loop",
+            "queue_manual_review_signup",
             "--file",
             "docs/branching_journey/branching_journey.py",
-            "--develop-step",
-            "queue_manual_review_signup",
         ]
     )
     capture = capsys.readouterr()
@@ -150,8 +156,8 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
     logs = capture.out
 
     assert exit_code == 0
-    assert "Development mode stopped after step queue_manual_review_signup attempt=1 executed." in logs
-    assert "Summary: develop-step queue_manual_review_signup stopped after target, 0 failed" in output
+    assert "Loop stopped after step queue_manual_review_signup attempt=1 executed." in logs
+    assert "Summary: loop queue_manual_review_signup stopped after target, 0 failed" in output
 
 
 def test_retry_readme_commands_show_retry_behavior(
@@ -163,6 +169,8 @@ def test_retry_readme_commands_show_retry_behavior(
 
     exit_code = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/retry_journey/retry_journey.py",
             "--journey",
@@ -177,6 +185,8 @@ def test_retry_readme_commands_show_retry_behavior(
 
     exit_code = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/retry_journey/retry_journey.py",
             "--journey",
@@ -191,6 +201,8 @@ def test_retry_readme_commands_show_retry_behavior(
 
     exit_code = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/retry_journey/retry_journey.py",
             "--journey",
@@ -224,6 +236,8 @@ def test_resume_readme_commands_interrupt_then_resume(
     try:
         first_exit = main(
             [
+                "verify",
+                "--reuse-state",
                 "--file",
                 "docs/resume_journey/resume_journey.py",
             ]
@@ -248,6 +262,8 @@ def test_resume_readme_commands_interrupt_then_resume(
 
     second_exit = main(
         [
+            "verify",
+            "--reuse-state",
             "--file",
             "docs/resume_journey/resume_journey.py",
         ]
@@ -279,6 +295,8 @@ def test_cloud_webhook_readme_commands(
 
         execute_exit = main(
             [
+                "verify",
+                "--fresh",
                 "--file",
                 "docs/cloud_webhook_journey/cloud_webhook_journey.py",
             ]
@@ -289,8 +307,7 @@ def test_cloud_webhook_readme_commands(
 
     assert execute_exit == 0
     assert "docs/cloud_webhook_journey/cloud_webhook_journey.py:cloud_webhook_journey" in execute_output
-    assert "get_webhook_invoice_paid" in execute_logs
-    assert "receive_webhook_invoice_paid" in execute_logs
+    assert "send_invoice_payment_and_verify_webhook" in execute_logs
     assert "executed attempt=1 duration=" in execute_logs
     assert "Summary: 1 journey executed, 1 case executed, 0 failed" in execute_output
 
@@ -327,9 +344,11 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
     try:
         try:
             first_exit = main(
-                [
-                    "--file",
-                    "docs/browser_resume_journey/browser_resume_journey.py",
+                    [
+                        "verify",
+                        "--reuse-state",
+                        "--file",
+                        "docs/browser_resume_journey/browser_resume_journey.py",
                 ]
             )
         finally:
@@ -351,6 +370,8 @@ def test_browser_resume_readme_commands_interrupt_then_resume(
 
         second_exit = main(
             [
+                "verify",
+                "--reuse-state",
                 "--file",
                 "docs/browser_resume_journey/browser_resume_journey.py",
             ]
@@ -378,6 +399,8 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
 
     default_exit = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/fail_fast_journeys/fail_fast_journeys.py",
         ]
@@ -390,6 +413,8 @@ def test_fail_fast_readme_commands_show_default_and_fail_fast_modes(
 
     fail_fast_exit = main(
         [
+            "verify",
+            "--fresh",
             "--file",
             "docs/fail_fast_journeys/fail_fast_journeys.py",
             "--fail-fast",

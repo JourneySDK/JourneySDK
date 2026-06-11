@@ -42,10 +42,7 @@ def test_cloud_email_docs_compiles_without_touching_the_network(
 
     expected_labels = [
         [
-            "get_email_inbox",
-            "send_email",
-            "receive_email",
-            "assert_welcome_email",
+            "send_welcome_email_and_verify_delivery",
         ]
     ]
     assert _case_labels(first_plan) == expected_labels

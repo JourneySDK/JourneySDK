@@ -276,7 +276,7 @@ def read_restored_counter_and_assert_branch(
 def docker_compose_journey() -> None:
     stack = step(start_docker_stack)
     baseline = step(counter_baseline_ready, stack)
-    if branch(start_from=baseline):
+    if branch(replay_from=baseline):
         step(increment_counter_and_assert_branch, stack, baseline)
-    elif branch(start_from=baseline):
+    elif branch(replay_from=baseline):
         step(read_restored_counter_and_assert_branch, stack, baseline)

@@ -12,7 +12,7 @@ one journey when you need script-friendly JSONL output.
 - Add steps with `step(...)`.
 - Pass step results explicitly into later steps.
 - Treat every step as an execution boundary. Only explicit replay boundaries store rehydratable state:
-  `branch(start_from=...)` and steps with a positive `retry=...`.
+  `branch(replay_from=...)` and steps with a positive `retry=...`.
 - A step is an intentional replay boundary with cost. Each extra step can add state binding, invalidation checks, log
   scopes, and store/restore work. Do not make a step for every click, form fill, poll, helper call, touchpoint wait, or
   assertion.
@@ -22,7 +22,7 @@ one journey when you need script-friendly JSONL output.
 - Use touchpoints when a step needs to interact with another system, such as a browser, inbox, webhook endpoint, CRM,
   payment provider, or back-office process.
 - Use `journey` to compile and run the authored flow as linear executable cases.
-- Use selection flags when you want one file, one journey, or one target case.
+- Use `journey loop` when you want one replayable step, and `journey verify --step` when you want one target case.
 
 If you remember only one thing, remember this: Journey does not ask you to stop writing Python. It compiles ordinary
 Python step calls into a runnable plan, and long-running work stays manageable because explicit replay boundaries can
@@ -48,15 +48,15 @@ command itself:
 journey agent codex
 ```
 
-The command is print-only by default. It gives the agent the installed Journey instructions, the targeted verification
+The command is print-only by default. It gives the agent the installed Journey instructions, the step replay
 loop, and the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or
 polling helpers. To make the guidance persistent for future prompts, run `journey agent codex --install` once from the
-project root. When debugging a journey, the agent should run the failing journey or the focused `--develop-step` retry
+project root. When debugging a journey, the agent should run the failing journey or focused `journey loop <step>` retry
 until executable evidence passes. If the agent is unsure which flags to use or how to recover, it should run
-`journey --help`, `journey logs --help`, or `journey agent --help` and follow the CLI's `Next commands` block.
+`journey --help`, `journey evidence --help`, or `journey agent --help` and follow the CLI's `Next commands` block.
 When adding a new journey, import checks, lint, and type checks are only setup hygiene. The agent should still run
-`journey --file ...`, execute each requested branch target with `--develop-step` or `--step`, and finish with fresh
-`--no-state` evidence whenever the app infrastructure is available.
+`journey loop ...` or `journey verify ...`, execute each requested branch target with `journey verify --step`, and
+finish with fresh `journey verify --fresh` evidence whenever the app infrastructure is available.
 If the app is not running, the agent should follow the repository's documented local startup path before declaring the
 run environment-blocked. When inspecting `.env` or credential files, it should report key presence only, never print
 secret values, and avoid dumping secret-bearing files wholesale. For sign-in and seed data, it should inspect existing
@@ -85,7 +85,7 @@ That is the whole authored flow. The helper functions in the same file do the re
 ### Run It
 
 ```bash
-uv run journey --file docs/first_journey/first_journey.py
+uv run journey verify --fresh --file docs/first_journey/first_journey.py
 ```
 
 Expected pretty stdout includes:
@@ -131,7 +131,7 @@ This is the first time Journey's CLI selection flags matter:
 ### Execute One Journey as JSONL
 
 ```bash
-uv run journey --file docs/selection_journeys/selection_journeys.py --journey invoice_reminder_journey --output jsonl
+uv run journey verify --fresh --file docs/selection_journeys/selection_journeys.py --journey invoice_reminder_journey --output jsonl
 ```
 
 ```jsonl

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "journey-sdk"
 version = "0.1.0"
-description = "Workflow-as-code journey testing compiler"
+description = "Replay one user-journey step while agents code, then verify branches and full flows"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

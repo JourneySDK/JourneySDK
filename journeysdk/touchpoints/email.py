@@ -6,9 +6,10 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from email.utils import make_msgid
-from typing import Literal, Protocol, TypeAlias, TypedDict
+from typing import Literal, TypeAlias, TypedDict
 
 from journeysdk.logger import PrettyLine, get_logger, pretty_row
+from journeysdk.session import _require_executing_step
 
 from ._email_cloud import (
     JOURNEY_CLOUD_API_KEY_ENV,
@@ -58,61 +59,40 @@ class EmailInbox:
     api_base_url: str
 
 
-class GetEmailInboxStep(Protocol):
-    def __call__(self) -> EmailInbox:
-        ...
-
-
-class SendEmailStep(Protocol):
-    def __call__(self, email_inbox: EmailInbox | None = None) -> EmailSendReceipt:
-        ...
-
-
-class WaitForEmailStep(Protocol):
-    def __call__(self, email_inbox: EmailInbox | None = None) -> EmailReceivedMessage:
-        ...
-
-
-def get_email_inbox() -> GetEmailInboxStep:
+def get_email_inbox() -> EmailInbox:
     """Resolve the active Journey Cloud-hosted default inbox."""
 
-    def acquire_email_inbox() -> EmailInbox:
-        _LOGGER.info(
-            "inbox_resolve_start",
-            "resolving cloud email inbox",
-            pretty=_email_row("resolving cloud email inbox"),
-        )
-        inbox = _load_cloud_email_inbox(owner="get_email_inbox", api_base_url=None)
-        _LOGGER.info(
-            "inbox_resolve_success",
-            "resolved cloud email inbox",
-            pretty=_email_row("resolved cloud email inbox"),
-            transport=inbox.transport,
-            address=inbox.address,
-            mailbox=inbox.mailbox,
-            api_base_url=inbox.api_base_url,
-        )
-        return inbox
-
-    _set_step_metadata(
-        acquire_email_inbox,
-        label="get_email_inbox",
-        owner="get_email_inbox",
-        attrs={},
+    _require_executing_step("get_email_inbox")
+    _LOGGER.info(
+        "inbox_resolve_start",
+        "resolving cloud email inbox",
+        pretty=_email_row("resolving cloud email inbox"),
     )
-    return acquire_email_inbox
+    inbox = _load_cloud_email_inbox(owner="get_email_inbox", api_base_url=None)
+    _LOGGER.info(
+        "inbox_resolve_success",
+        "resolved cloud email inbox",
+        pretty=_email_row("resolved cloud email inbox"),
+        transport=inbox.transport,
+        address=inbox.address,
+        mailbox=inbox.mailbox,
+        api_base_url=inbox.api_base_url,
+    )
+    return inbox
 
 
 def send_email(
+    email_inbox: EmailInbox | None = None,
     *,
     to: str | Sequence[str] | None = None,
     subject: str,
     text_body: str | None = None,
     html_body: str | None = None,
     from_address: str | None = None,
-) -> SendEmailStep:
+) -> EmailSendReceipt:
     """Send one email through Journey Cloud."""
 
+    _require_executing_step("send_email")
     recipients = _normalize_recipient_addresses(
         owner="send_email",
         field="to",
@@ -143,52 +123,43 @@ def send_email(
         field="from_address",
         value=from_address,
     )
-
-    def perform_send(email_inbox: EmailInbox | None = None) -> EmailSendReceipt:
-        inbox = _resolve_cloud_inbox(owner="send_email", email_inbox=email_inbox)
-        _LOGGER.info(
-            "email_send_start",
-            "sending email",
-            pretty=_email_row("sending email"),
-            transport=inbox.transport,
-            address=inbox.address,
-            subject=normalized_subject,
-        )
-        resolved_recipients = recipients or [inbox.address]
-        sender = normalized_from_address or inbox.address
-        message_id = _build_message_id(sender)
-        receipt = send_cloud_message(
-            payload={
-                "to": resolved_recipients,
-                "subject": normalized_subject,
-                "text_body": normalized_text_body,
-                "html_body": normalized_html_body,
-                "from_address": sender,
-                "message_id": message_id,
-            },
-            api_base_url=inbox.api_base_url,
-        )
-        validated_receipt = _validate_send_receipt(receipt)
-        _LOGGER.info(
-            "email_send_success",
-            "email sent",
-            pretty=_email_row("email sent"),
-            transport="cloud",
-            message_id=validated_receipt["message_id"],
-            to_count=len(validated_receipt["to"]),
-        )
-        return validated_receipt
-
-    _set_step_metadata(
-        perform_send,
-        label="send_email",
-        owner="send_email",
-        attrs={},
+    inbox = _resolve_cloud_inbox(owner="send_email", email_inbox=email_inbox)
+    _LOGGER.info(
+        "email_send_start",
+        "sending email",
+        pretty=_email_row("sending email"),
+        transport=inbox.transport,
+        address=inbox.address,
+        subject=normalized_subject,
     )
-    return perform_send
+    resolved_recipients = recipients or [inbox.address]
+    sender = normalized_from_address or inbox.address
+    message_id = _build_message_id(sender)
+    receipt = send_cloud_message(
+        payload={
+            "to": resolved_recipients,
+            "subject": normalized_subject,
+            "text_body": normalized_text_body,
+            "html_body": normalized_html_body,
+            "from_address": sender,
+            "message_id": message_id,
+        },
+        api_base_url=inbox.api_base_url,
+    )
+    validated_receipt = _validate_send_receipt(receipt)
+    _LOGGER.info(
+        "email_send_success",
+        "email sent",
+        pretty=_email_row("email sent"),
+        transport="cloud",
+        message_id=validated_receipt["message_id"],
+        to_count=len(validated_receipt["to"]),
+    )
+    return validated_receipt
 
 
 def wait_for_email(
+    email_inbox: EmailInbox | None = None,
     *,
     timeout: float = 1.0,
     poll_interval: float = 0.1,
@@ -196,9 +167,10 @@ def wait_for_email(
     from_address: str | None = None,
     to_address: str | None = None,
     unread_only: bool = True,
-) -> WaitForEmailStep:
+) -> EmailReceivedMessage:
     """Poll the Journey Cloud-hosted inbox until one matching email arrives."""
 
+    _require_executing_step("wait_for_email")
     timeout_seconds = _validate_nonnegative_number(
         owner="wait_for_email",
         field="timeout",
@@ -226,69 +198,59 @@ def wait_for_email(
     )
     if not isinstance(unread_only, bool):
         raise TypeError("wait_for_email(..., unread_only=...) expects a boolean.")
-
-    def receive_email(email_inbox: EmailInbox | None = None) -> EmailReceivedMessage:
-        inbox = _resolve_cloud_inbox(owner="wait_for_email", email_inbox=email_inbox)
-        _LOGGER.info(
-            "email_wait_start",
-            "waiting for email",
-            pretty=_email_row("waiting for email"),
-            transport=inbox.transport,
-            address=inbox.address,
-            mailbox=inbox.mailbox,
-            timeout=timeout_seconds,
-        )
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            payload = fetch_next_message(
-                payload={
-                    "subject_contains": normalized_subject_filter,
-                    "from_address": normalized_from_filter,
-                    "to_address": normalized_to_filter,
-                    "unread_only": unread_only,
-                },
-                api_base_url=inbox.api_base_url,
-            )
-            if payload is not None:
-                message = _validate_received_message(payload)
-                _LOGGER.info(
-                    "email_wait_success",
-                    "received email",
-                    pretty=_email_row("received email"),
-                    transport=inbox.transport,
-                    message_id=message["message_id"],
-                    subject=message["subject"],
-                )
-                return message
-
-            if time.monotonic() >= deadline:
-                descriptor = inbox.address or inbox.mailbox
-                _LOGGER.warning(
-                    "email_wait_timeout",
-                    "timed out waiting for email",
-                    pretty="Email timed out waiting for message",
-                    transport=inbox.transport,
-                    descriptor=descriptor,
-                    timeout=timeout_seconds,
-                )
-                raise TimeoutError(
-                    f"Timed out waiting for email in {descriptor} after {timeout} seconds."
-                )
-            _LOGGER.debug(
-                "email_wait_poll_empty",
-                "email poll returned no matching message",
-                transport=inbox.transport,
-                poll_interval=poll_interval_seconds,
-            )
-            time.sleep(poll_interval_seconds)
-
-    _set_step_metadata(
-        receive_email,
-        label="receive_email",
-        owner="wait_for_email",
-        attrs={},
+    inbox = _resolve_cloud_inbox(owner="wait_for_email", email_inbox=email_inbox)
+    _LOGGER.info(
+        "email_wait_start",
+        "waiting for email",
+        pretty=_email_row("waiting for email"),
+        transport=inbox.transport,
+        address=inbox.address,
+        mailbox=inbox.mailbox,
+        timeout=timeout_seconds,
     )
-    return receive_email
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        payload = fetch_next_message(
+            payload={
+                "subject_contains": normalized_subject_filter,
+                "from_address": normalized_from_filter,
+                "to_address": normalized_to_filter,
+                "unread_only": unread_only,
+            },
+            api_base_url=inbox.api_base_url,
+        )
+        if payload is not None:
+            message = _validate_received_message(payload)
+            _LOGGER.info(
+                "email_wait_success",
+                "received email",
+                pretty=_email_row("received email"),
+                transport=inbox.transport,
+                message_id=message["message_id"],
+                subject=message["subject"],
+            )
+            return message
+
+        if time.monotonic() >= deadline:
+            descriptor = inbox.address or inbox.mailbox
+            _LOGGER.warning(
+                "email_wait_timeout",
+                "timed out waiting for email",
+                pretty="Email timed out waiting for message",
+                transport=inbox.transport,
+                descriptor=descriptor,
+                timeout=timeout_seconds,
+            )
+            raise TimeoutError(
+                f"Timed out waiting for email in {descriptor} after {timeout} seconds."
+            )
+        _LOGGER.debug(
+            "email_wait_poll_empty",
+            "email poll returned no matching message",
+            transport=inbox.transport,
+            poll_interval=poll_interval_seconds,
+        )
+        time.sleep(poll_interval_seconds)
 
 
 def _resolve_cloud_inbox(
@@ -473,19 +435,6 @@ def _is_missing_cloud_config_error(exc: RuntimeError) -> bool:
     )
 
 
-def _set_step_metadata(
-    fn: object,
-    *,
-    label: str,
-    owner: str,
-    attrs: Mapping[str, object],
-) -> None:
-    setattr(fn, "__name__", label)
-    setattr(fn, "__qualname__", f"{owner}.<locals>.{label}")
-    for key, value in attrs.items():
-        setattr(fn, key, value)
-
-
 def _validate_nonnegative_number(*, owner: str, field: str, value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{owner}(..., {field}=...) expects a number.")
@@ -559,9 +508,6 @@ __all__ = [
     "EmailInbox",
     "EmailSendReceipt",
     "EmailTransport",
-    "GetEmailInboxStep",
-    "SendEmailStep",
-    "WaitForEmailStep",
     "get_email_inbox",
     "send_email",
     "wait_for_email",

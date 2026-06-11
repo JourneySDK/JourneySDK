@@ -39,7 +39,7 @@ def _touchpoint_index() -> str:
     return (
         "# Journey SDK Touchpoint Reference\n\n"
         f"Available touchpoint references: {targets}.\n\n"
-        "Use `journey --touchpoint-docs <name>` to print one reference."
+        "Use `journey touchpoints <name>` to print one reference."
     )
 
 

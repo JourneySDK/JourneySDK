@@ -39,8 +39,8 @@ mkdir -p "$INSTALL_PROJECT"
   "$VENV_DIR/bin/journey" agent codex --install >/dev/null
 )
 test -f "$INSTALL_PROJECT/AGENTS.md"
-"$VENV_DIR/bin/journey" --touchpoint-docs docker >/dev/null
-"$VENV_DIR/bin/journey" --touchpoint-docs all >/dev/null
+"$VENV_DIR/bin/journey" touchpoints docker >/dev/null
+"$VENV_DIR/bin/journey" touchpoints all >/dev/null
 
 echo "Smoke testing persistent uv CLI install from the wheel..."
 CLI_HOME="$TMP_DIR/cli-home"
@@ -55,13 +55,13 @@ fi
 
 PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --help >/dev/null
 PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey agent codex >/dev/null
-PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --touchpoint-docs docker >/dev/null
-PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey --touchpoint-docs all >/dev/null
+PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey touchpoints docker >/dev/null
+PATH="$(dirname "$JOURNEY_BIN"):$PATH" journey touchpoints all >/dev/null
 
 echo "Smoke testing one-off uv CLI run from the wheel..."
 HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --help >/dev/null
 HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey agent codex >/dev/null
-HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --touchpoint-docs docker >/dev/null
-HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey --touchpoint-docs all >/dev/null
+HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey touchpoints docker >/dev/null
+HOME="$CLI_HOME" uv tool run --from "$WHEEL_PATH" journey touchpoints all >/dev/null
 
 echo "Package smoke tests passed."

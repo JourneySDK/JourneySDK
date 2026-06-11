@@ -58,10 +58,10 @@ Use the modes this way:
 
 | Command shape | Use it for | State behavior |
 | --- | --- | --- |
-| `--develop-step <label>` | Fast edit loop for one target step. | Reads and writes state. |
-| `--step <label>` | Targeted verification of the case that reaches one step. | May replay valid state unless combined with `--no-state`. |
-| `--no-state` | Fresh-path confidence before review, merge, or release. | Does not read or write reusable state. |
-| `--no-state-update` | Inspect or replay existing state without changing it. | Reads state but leaves the file unchanged. |
+| `journey loop <label>` | Fast edit loop for one target step. | Reads and writes state. |
+| `journey verify --step <label>` | Fresh verification of the case that reaches one step. | Fresh by default; add `--reuse-state` for stateful diagnostics. |
+| `journey verify --fresh` | Fresh-path confidence before review, merge, or release. | Does not read or write reusable state. |
+| `journey verify --reuse-state --no-state-update` | Inspect or replay existing state without changing it. | Reads state but leaves the file unchanged. |
 | `--output jsonl` | Agent-readable execution evidence. | Emits `state_validity` events and per-record `status`. |
 
 ## Three Retry Shapes
@@ -148,7 +148,7 @@ after the replay boundary are rerun instead of restored.
 ### Retry the Current Step
 
 ```bash
-uv run journey --file docs/retry_journey/retry_journey.py --journey retry_current_step_journey
+uv run journey verify --fresh --file docs/retry_journey/retry_journey.py --journey retry_current_step_journey
 ```
 
 ```console
@@ -172,7 +172,7 @@ Warning: wait_for_same_step retry after ... (RuntimeError: still waiting for the
 ### Retry from an Earlier Step Result
 
 ```bash
-uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_step_result_journey
+uv run journey verify --fresh --file docs/retry_journey/retry_journey.py --journey retry_from_step_result_journey
 ```
 
 ```console
@@ -199,7 +199,7 @@ Warning: wait_for_report retry after ... (RuntimeError: report not ready yet)
 ### Retry from an Earlier Setup Step
 
 ```bash
-uv run journey --file docs/retry_journey/retry_journey.py --journey retry_from_step_anchor_journey
+uv run journey verify --fresh --file docs/retry_journey/retry_journey.py --journey retry_from_step_anchor_journey
 ```
 
 ```console
@@ -258,8 +258,8 @@ def resume_journey() -> None:
 The key rule is that Journey resumes at a step boundary, not in the middle of a function body. In CLI runs with
 persistent state, first Ctrl-C is graceful: Journey lets the active step finish, exit returned handles, and stop at
 post-exit. Press Ctrl-C a second time to stop now; Journey interrupts the dirty step, and on the next run restarts from
-the nearest explicit replay boundary. With no `branch(start_from=...)` or positive `retry=...` boundary, that means the
-case starts from the beginning. With `--no-state`, Ctrl-C stops immediately and cannot resume.
+the nearest explicit replay boundary. With no `branch(replay_from=...)` or positive `retry=...` boundary, that means the
+case starts from the beginning. With `journey verify --fresh`, Ctrl-C stops immediately and cannot resume.
 
 ### Reset the Demo State
 
@@ -270,7 +270,7 @@ uv run python -c "from docs.resume_journey import reset_demo_state; reset_demo_s
 ### First Run: Graceful Ctrl-C
 
 ```bash
-uv run journey --file docs/resume_journey/resume_journey.py
+uv run journey verify --reuse-state --file docs/resume_journey/resume_journey.py
 ```
 
 Press `Ctrl-C` once when the tutorial note tells you to. The command stops after the active step completes; press it a
@@ -304,7 +304,7 @@ Press Ctrl-C once during the next 2.0 seconds to stop gracefully after this step
 ### Second Run After Graceful Ctrl-C: Restart From the Case Boundary
 
 ```bash
-uv run journey --file docs/resume_journey/resume_journey.py
+uv run journey verify --reuse-state --file docs/resume_journey/resume_journey.py
 ```
 
 Expected pretty stdout:
@@ -328,7 +328,7 @@ Additional pretty stdout:
 
 ```console
 The journey finished. This demo has no explicit replay boundary, so an interrupted run restarts the case from the
-beginning. Add `branch(start_from=...)` or a positive `retry=...` when a step value should be saved and reused.
+beginning. Add `branch(replay_from=...)` or a positive `retry=...` when a step value should be saved and reused.
 ```
 
 ### If You Press Ctrl-C Twice
@@ -365,8 +365,8 @@ Execution
 - Retries are explicit. Journey does not silently retry behind your back.
 - `retry=0` is the default. `retry_from=` or `retry_delay=` without a positive `retry` does not create a replay
   boundary.
-- Step anchors define replay boundaries only when used by `branch(start_from=...)` or a step with positive `retry`.
-  Retry from a step reruns the anchor step; branch `start_from` resumes from the anchor step's completed post-exit
+- Step anchors define replay boundaries only when used by `branch(replay_from=...)` or a step with positive `retry`.
+  Retry from a step reruns the anchor step; branch `replay_from` resumes from the anchor step's completed post-exit
   state.
 - Keep those boundaries coarse. A step that only clicks one button or checks one line of text usually adds storage,
   restore, and recording overhead without making retries or later branches faster.
@@ -375,6 +375,6 @@ Execution
   rerun from the nearest boundary instead of restored.
 - First Ctrl-C in a default CLI run stops after the completed step; second Ctrl-C interrupts the dirty step. The next
   run restarts from the nearest explicit replay boundary, or from the case beginning when there is no such boundary.
-  With `--no-state`, Ctrl-C cannot resume. Journey never jumps into the middle of the function.
+  With `journey verify --fresh`, Ctrl-C cannot resume. Journey never jumps into the middle of the function.
 
 Continue with [04 Browser and Local Integrations](04-browser-and-local-integrations.md) when your steps need to open real pages, receive webhooks, or inspect local files.

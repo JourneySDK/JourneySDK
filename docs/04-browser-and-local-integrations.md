@@ -5,11 +5,11 @@ integration. This chapter keeps the tutorial examples in one place. For full hel
 limits, print the packaged reference for the touchpoint you are about to use:
 
 ```bash
-uv run journey --touchpoint-docs browser
-uv run journey --touchpoint-docs docker
-uv run journey --touchpoint-docs webhook
-uv run journey --touchpoint-docs http
-uv run journey --touchpoint-docs all
+uv run journey touchpoints browser
+uv run journey touchpoints docker
+uv run journey touchpoints webhook
+uv run journey touchpoints http
+uv run journey touchpoints all
 ```
 
 The canonical touchpoint reference source is `journeysdk/touchpoint_docs/*.md`.
@@ -33,19 +33,19 @@ from journeysdk import branch, journey, step
 def simple_journey() -> None:
     homepage = step(demo_homepage_ready)
 
-    if branch(start_from=homepage):
+    if branch(replay_from=homepage):
         step(trigger_endpoint_a_and_verify_webhook)
-    elif branch(start_from=homepage):
+    elif branch(replay_from=homepage):
         step(store_local_file_and_verify_contents)
 ```
 
 Run only the file branch:
 
 ```bash
-uv run journey --file docs/simple_journey/simple_journey.py --step store_local_file_and_verify_contents
+uv run journey verify --step store_local_file_and_verify_contents --file docs/simple_journey/simple_journey.py
 ```
 
-Use `journey --touchpoint-docs browser` and `journey --touchpoint-docs webhook` for full `open_page(...)`,
+Use `journey touchpoints browser` and `journey touchpoints webhook` for full `open_page(...)`,
 recording, replay, `get_webhook_endpoint(...)`, and `wait_for_webhook_request(...)` details.
 
 ## Docker Compose Snapshot Tutorial
@@ -74,25 +74,25 @@ def docker_compose_journey() -> None:
     stack = step(start_docker_stack)
     baseline = step(counter_baseline_ready, stack)
 
-    if branch(start_from=baseline):
+    if branch(replay_from=baseline):
         step(increment_counter_and_assert_branch, stack, baseline)
-    elif branch(start_from=baseline):
+    elif branch(replay_from=baseline):
         step(read_restored_counter_and_assert_branch, stack, baseline)
 ```
 
 Run both Docker branches:
 
 ```bash
-uv run journey --file docs/docker_compose_journey/docker_compose_journey.py
+uv run journey verify --file docs/docker_compose_journey/docker_compose_journey.py
 ```
 
 Target the restore branch while iterating:
 
 ```bash
-uv run journey --file docs/docker_compose_journey/docker_compose_journey.py --step read_restored_counter_and_assert_branch
+uv run journey loop read_restored_counter_and_assert_branch --file docs/docker_compose_journey/docker_compose_journey.py
 ```
 
-Use `journey --touchpoint-docs docker` for `run_docker`, `DockerLogMatcher`, `DockerHttpCheck`,
+Use `journey touchpoints docker` for `run_docker`, `DockerLogMatcher`, `DockerHttpCheck`,
 `DockerComposeStack.service_url(...)`, lifecycle, snapshot, and rehydration limits.
 
 ## Browser Session Resume Tutorial
@@ -124,16 +124,16 @@ Reset the demo, then run and interrupt it once after the saved session is availa
 
 ```bash
 uv run python -c "from docs.browser_resume_journey import reset_demo_state; reset_demo_state()"
-uv run journey --file docs/browser_resume_journey/browser_resume_journey.py
+uv run journey verify --reuse-state --file docs/browser_resume_journey/browser_resume_journey.py
 ```
 
 Run the same command again to resume from saved state:
 
 ```bash
-uv run journey --file docs/browser_resume_journey/browser_resume_journey.py
+uv run journey verify --reuse-state --file docs/browser_resume_journey/browser_resume_journey.py
 ```
 
-Use `journey --touchpoint-docs browser` for `JourneyBrowserPage`, page rehydration, lifecycle, logs, and
+Use `journey touchpoints browser` for `JourneyBrowserPage`, page rehydration, lifecycle, evidence, and
 `open_page(saved_page)` details.
 
 ## Browser Prompt Tutorial
@@ -157,20 +157,20 @@ def capture_popup_title() -> dict[str, object]:
 Run the prompt journey:
 
 ```bash
-uv run journey --file docs/browser_prompt_journey/browser_prompt_journey.py
+uv run journey verify --file docs/browser_prompt_journey/browser_prompt_journey.py
 ```
 
 Prompt memories are stored as `<memory>.memory.md` files next to the journey's `.journey` directory. Use
-`journey --touchpoint-docs browser` for prompt memory, model configuration, selector-vs-prompt guidance, and structured
+`journey touchpoints browser` for prompt memory, model configuration, selector-vs-prompt guidance, and structured
 output details.
 
 ## What To Notice
 
 - Tutorial journey files show user-flow structure; touchpoint references hold the complete API details.
-- `branch(start_from=...)` lets later cases reuse durable setup from a saved step boundary.
+- `branch(replay_from=...)` lets later cases reuse durable setup from a saved step boundary.
 - Browser, webhook, file, and Docker details belong inside coarse user-flow steps, not as one Journey step per click,
   poll, or assertion.
-- `--step` and `--develop-step` are the fastest way to iterate on one branch or late user-flow step.
+- `journey loop` and `journey verify --step` are the fastest way to iterate on one branch or late user-flow step.
 - Touchpoints remain ordinary Python helpers used from step functions.
 
 Continue with [05 Journey Cloud Integrations](05-journey-cloud-integrations.md) for focused webhook and email examples

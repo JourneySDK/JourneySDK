@@ -65,11 +65,12 @@ def is_journey_callable(obj: object) -> TypeGuard[JourneyEntrypoint]:
 
 def branch(
     *,
+    replay_from: object = _START_FROM_UNSET,
     start_from: object = _START_FROM_UNSET,
 ) -> BranchHandle:
     """Select one inline branch inside an ``if`` / ``elif`` chain.
 
-    ``start_from`` points at an earlier ``step(...)`` result. In a full
+    ``replay_from`` points at an earlier ``step(...)`` result. In a full
     multi-case run, later branch cases can restore to that step's completed
     post-exit boundary instead of rerunning earlier shared setup. Targeted
     execution reports that step as metadata in ``replay_anchor``, but still
@@ -77,8 +78,9 @@ def branch(
     replay says otherwise.
 
     Args:
-        start_from: Optional result from an earlier full ``step(...)`` call.
+        replay_from: Optional result from an earlier full ``step(...)`` call.
             Omit this argument to start a branch case from scratch.
+        start_from: Compatibility spelling for ``replay_from``.
 
     Returns:
         A branch handle. When used directly as an ``if`` / ``elif`` condition,
@@ -97,11 +99,11 @@ def branch(
         account = step(create_account)
         if branch():
             step(finish_fast_path)
-        elif branch(start_from=account):
+        elif branch(replay_from=account):
             step(finish_review_path, account)
 
         fast = branch()
-        review = branch(start_from=account)
+        review = branch(replay_from=account)
         if fast:
             step(check_fast_path)
         elif review:
@@ -118,35 +120,41 @@ def branch(
             ),
         )
 
+    if replay_from is not _START_FROM_UNSET and start_from is not _START_FROM_UNSET:
+        raise TypeError(
+            "branch(...) accepts either replay_from=... or start_from=..., not both."
+        )
+    replay_source = start_from if replay_from is _START_FROM_UNSET else replay_from
+
     if getattr(session, "mode", None) == "plan":
-        if start_from is _START_FROM_UNSET:
+        if replay_source is _START_FROM_UNSET:
             start_from_node_id = None
-        elif isinstance(start_from, PlannedValue):
-            if start_from.access_path:
+        elif isinstance(replay_source, PlannedValue):
+            if replay_source.access_path:
                 raise InvalidBranchUsageError(
-                    "branch(start_from=...) must point to a full earlier step() result.",
+                    "branch(replay_from=...) must point to a full earlier step() result.",
                     hint="Pass the earlier step() result itself, not one of its attributes.",
                 )
-            if start_from.kind != "step":
+            if replay_source.kind != "step":
                 raise InvalidBranchUsageError(
-                    "branch(start_from=...) must point to the result of an earlier step() call.",
-                    hint="Save the earlier step() result in a variable and pass that variable to branch(start_from=...).",
+                    "branch(replay_from=...) must point to the result of an earlier step() call.",
+                    hint="Save the earlier step() result in a variable and pass that variable to branch(replay_from=...).",
                 )
-            start_from_node_id = start_from.node_id
+            start_from_node_id = replay_source.node_id
         else:
             raise TypeError(
-                "branch(start_from=...) accepts an earlier step() result. Omit start_from to start from scratch."
+                "branch(replay_from=...) accepts an earlier step() result. Omit replay_from to start from scratch."
             )
     else:
-        if start_from is _START_FROM_UNSET:
+        if replay_source is _START_FROM_UNSET:
             start_from_node_id = None
         else:
             resolver = getattr(session, "step_anchor_for_value", None)
             if not callable(resolver):
                 raise TypeError(
-                    "branch(start_from=...) accepts an earlier step() result. Omit start_from to start from scratch."
+                    "branch(replay_from=...) accepts an earlier step() result. Omit replay_from to start from scratch."
                 )
-            start_from_node_id = resolver(start_from)
+            start_from_node_id = resolver(replay_source)
 
     caller = inspect.currentframe()
     caller_frame = caller.f_back if caller is not None else None

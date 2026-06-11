@@ -49,7 +49,7 @@ def rehydration_journey() -> None:
 
     shared = step(shared_after_anchor, context)
 
-    if branch(start_from=context):
+    if branch(replay_from=context):
         step(complete_branch_a_from_anchor, shared)
-    elif branch(start_from=context):
+    elif branch(replay_from=context):
         step(complete_branch_b_from_anchor, shared)

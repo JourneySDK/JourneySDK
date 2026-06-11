@@ -141,7 +141,7 @@ class _PlanSession:
             if start_from is not None and start_from not in self._steps_seen:
                 raise InvalidBranchUsageError(
                     f"Branch handle '{handle_def.name}' starts from step '{start_from}', but that step was never created earlier in the journey.",
-                    hint="Pass the result of an earlier step(...) call to branch(start_from=...).",
+                    hint="Pass the result of an earlier step(...) call to branch(replay_from=...).",
                 )
             return BranchHandle(
                 definition_site=site,
@@ -159,7 +159,7 @@ class _PlanSession:
         if start_from is not None and start_from not in self._steps_seen:
             raise InvalidBranchUsageError(
                 f"Branch '{spec.branch_key}' starts from step '{start_from}', but that step was never created earlier in the journey.",
-                hint="Pass the result of an earlier step(...) call to branch(start_from=...).",
+                hint="Pass the result of an earlier step(...) call to branch(replay_from=...).",
             )
         return BranchHandle(
             definition_site=site,
@@ -209,7 +209,7 @@ class _PlanSession:
         if start_from is not None and start_from not in self._steps_seen:
             raise InvalidBranchUsageError(
                 f"Branch '{spec.branch_key}' starts from step '{start_from}', but that step was never created earlier in the journey.",
-                hint="Pass the result of an earlier step(...) call to branch(start_from=...).",
+                hint="Pass the result of an earlier step(...) call to branch(replay_from=...).",
             )
 
         state = self._active_branch_chains.get(spec.template_key)
