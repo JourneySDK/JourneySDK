@@ -282,24 +282,24 @@ class ProbeSpec:
 
 
 @dataclass
-class ExploredNode:
+class DiscoveredNode:
     node_id: str
     start_url: str
     snapshot: PageSnapshot
     depth: int
-    path: tuple["ExploredEdge", ...] = ()
-    edges: list["ExploredEdge"] = field(default_factory=list)
+    path: tuple["DiscoveredEdge", ...] = ()
+    edges: list["DiscoveredEdge"] = field(default_factory=list)
     stop_reasons: set[str] = field(default_factory=set)
     prefetched_candidates: tuple[CandidateAction, ...] | None = None
 
 
 @dataclass
-class ExploredEdge:
+class DiscoveredEdge:
     edge_id: str
-    parent: ExploredNode
+    parent: DiscoveredNode
     action: CandidateAction
     snapshot: PageSnapshot
-    child: ExploredNode | None = None
+    child: DiscoveredNode | None = None
     function_name: str = ""
     probes: tuple[ProbeSpec, ...] = ()
 
@@ -321,7 +321,7 @@ class _ActionResult:
 class DiscoverResult:
     output_file: Path
     journey_name: str
-    roots: tuple[ExploredNode, ...]
+    roots: tuple[DiscoveredNode, ...]
     source: str
     actions: int
     branches: int
@@ -331,16 +331,13 @@ class DiscoverResult:
     stop_reason: str
 
 
-ExploreOptions = DiscoverOptions
-ExploreResult = DiscoverResult
-
 
 class ActionProvider(Protocol):
     def propose_actions(
         self,
         snapshot: PageSnapshot,
         *,
-        path: tuple[ExploredEdge, ...],
+        path: tuple[DiscoveredEdge, ...],
         remaining_actions: int,
         depth_remaining: int,
     ) -> list[CandidateAction]:
@@ -358,7 +355,7 @@ class ModelActionProvider:
         self,
         snapshot: PageSnapshot,
         *,
-        path: tuple[ExploredEdge, ...],
+        path: tuple[DiscoveredEdge, ...],
         remaining_actions: int,
         depth_remaining: int,
     ) -> list[CandidateAction]:
@@ -372,7 +369,7 @@ class ModelActionProvider:
             max_candidates=min(self._candidates_per_state, remaining_actions),
         )
         messages = [
-            {"role": "system", "content": _EXPLORE_SYSTEM_PROMPT},
+            {"role": "system", "content": _DISCOVER_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
         response = self._usage_tracker.call(
@@ -406,7 +403,7 @@ def discover(
     provider = action_provider or ModelActionProvider(model=model)
     ensure_browser_installed(normalized.browser)
 
-    roots: list[ExploredNode] = []
+    roots: list[DiscoveredNode] = []
     omitted_actions = 0
     stop_reasons: set[str] = set()
     model_cache: dict[str, list[CandidateAction]] = {}
@@ -419,7 +416,7 @@ def discover(
         )
         try:
             for index, start_url in enumerate(normalized.urls, start=1):
-                root, omitted = _explore_start_url(
+                root, omitted = _discover_start_url(
                     browser,
                     start_url=start_url,
                     options=normalized,
@@ -478,14 +475,6 @@ def discover(
     return result
 
 
-def explore(
-    options: ExploreOptions,
-    *,
-    action_provider: ActionProvider | None = None,
-) -> ExploreResult:
-    return discover(options, action_provider=action_provider)
-
-
 def parse_candidate_actions(text: str) -> list[CandidateAction]:
     payload = _extract_json_payload(text)
     raw_actions = payload.get("actions") if isinstance(payload, dict) else payload
@@ -501,13 +490,13 @@ def parse_candidate_actions(text: str) -> list[CandidateAction]:
             continue
         name = _clean_action_text(str(item.get("name") or f"action_{index}"))
         description = _clean_action_text(str(item.get("description") or name))
-        _validate_explore_python_code(code)
+        _validate_discover_python_code(code)
         actions.append(CandidateAction(name=name, description=description, code=code))
     return actions
 
 
 def render_journey_source(
-    roots: tuple[ExploredNode, ...],
+    roots: tuple[DiscoveredNode, ...],
     *,
     journey_name: str,
 ) -> str:
@@ -753,7 +742,7 @@ def validate_generated_source(source: str, *, journey_name: str) -> None:
         compile_journey(journey_fn)
 
 
-def _explore_start_url(
+def _discover_start_url(
     browser: object,
     *,
     start_url: str,
@@ -762,15 +751,15 @@ def _explore_start_url(
     model_cache: dict[str, list[CandidateAction]],
     budget: _CrawlBudget,
     node_prefix: str,
-) -> tuple[ExploredNode, int]:
+) -> tuple[DiscoveredNode, int]:
     root_snapshot = _snapshot_for_path(browser, start_url, ())
-    root = ExploredNode(
+    root = DiscoveredNode(
         node_id=f"{node_prefix}node_1",
         start_url=start_url,
         snapshot=root_snapshot,
         depth=0,
     )
-    queue: deque[ExploredNode] = deque([root])
+    queue: deque[DiscoveredNode] = deque([root])
     seen_signatures = {root_snapshot.signature}
     node_sequence = 1
     edge_sequence = 0
@@ -875,7 +864,7 @@ def _explore_start_url(
             edge_sequence += 1
             action_count += 1
             successful_transition = True
-            edge = ExploredEdge(
+            edge = DiscoveredEdge(
                 edge_id=f"{node_prefix}edge_{edge_sequence}",
                 parent=node,
                 action=candidate,
@@ -887,7 +876,7 @@ def _explore_start_url(
             if snapshot.signature not in seen_signatures:
                 seen_signatures.add(snapshot.signature)
                 node_sequence += 1
-                child = ExploredNode(
+                child = DiscoveredNode(
                     node_id=f"{node_prefix}node_{node_sequence}",
                     start_url=node.start_url,
                     snapshot=snapshot,
@@ -901,8 +890,8 @@ def _explore_start_url(
             node.stop_reasons.add("frontier_exhausted")
     if action_count >= options.max_actions:
         root.stop_reasons.add("max_actions")
-    for explored_node in _iter_nodes((root,)):
-        root.stop_reasons.update(explored_node.stop_reasons)
+    for discovered_node in _iter_nodes((root,)):
+        root.stop_reasons.update(discovered_node.stop_reasons)
     if not root.stop_reasons:
         root.stop_reasons.add("frontier_exhausted")
     return root, omitted_actions
@@ -911,7 +900,7 @@ def _explore_start_url(
 def _snapshot_for_path(
     browser: object,
     start_url: str,
-    path: tuple[ExploredEdge, ...],
+    path: tuple[DiscoveredEdge, ...],
 ) -> PageSnapshot:
     context = browser.new_context()
     try:
@@ -920,7 +909,7 @@ def _snapshot_for_path(
         _settle_page(page)
         active_page = page
         for edge in path:
-            active_page = _execute_explore_code(
+            active_page = _execute_discover_code(
                 active_page,
                 edge.action.code,
                 timeout_seconds=30.0,
@@ -935,7 +924,7 @@ def _snapshot_after_action(
     browser: object,
     *,
     start_url: str,
-    path: tuple[ExploredEdge, ...],
+    path: tuple[DiscoveredEdge, ...],
     action: CandidateAction,
     side_effect_probes: Literal["auto", "off"],
     max_variants_per_control: int,
@@ -948,13 +937,13 @@ def _snapshot_after_action(
         _settle_page(page)
         active_page = page
         for edge in path:
-            active_page = _execute_explore_code(
+            active_page = _execute_discover_code(
                 active_page,
                 edge.action.code,
                 timeout_seconds=timeout_seconds,
             )
             _settle_page(active_page)
-        active_page = _execute_explore_code(
+        active_page = _execute_discover_code(
             active_page,
             action.code,
             timeout_seconds=timeout_seconds,
@@ -982,7 +971,7 @@ def _deterministic_candidates_for_path(
     browser: object,
     *,
     start_url: str,
-    path: tuple[ExploredEdge, ...],
+    path: tuple[DiscoveredEdge, ...],
     max_variants_per_control: int,
     timeout_seconds: float,
 ) -> list[CandidateAction]:
@@ -993,7 +982,7 @@ def _deterministic_candidates_for_path(
         _settle_page(page)
         active_page = page
         for edge in path:
-            active_page = _execute_explore_code(
+            active_page = _execute_discover_code(
                 active_page,
                 edge.action.code,
                 timeout_seconds=timeout_seconds,
@@ -1603,14 +1592,14 @@ def _mentions_webhook_evidence(text: str) -> bool:
     return "webhook" in lowered or "callback" in lowered
 
 
-def _execute_explore_code(
+def _execute_discover_code(
     page: PlaywrightPage,
     code: str,
     *,
     timeout_seconds: float,
 ) -> PlaywrightPage:
     normalized = _strip_code_fences(code).strip()
-    _validate_explore_python_code(normalized)
+    _validate_discover_python_code(normalized)
     context = page.context
     pages = list(context.pages)
     active_page = page
@@ -1653,7 +1642,7 @@ def _execute_explore_code(
     return active_page
 
 
-def _validate_explore_python_code(code: str) -> None:
+def _validate_discover_python_code(code: str) -> None:
     _validate_prompt_python_code(
         code,
         owner="Journey discover Python snippet",
@@ -1794,7 +1783,7 @@ def _string_value(value: object) -> str:
 def _candidate_prompt(
     snapshot: PageSnapshot,
     *,
-    path: tuple[ExploredEdge, ...],
+    path: tuple[DiscoveredEdge, ...],
     remaining_actions: int,
     depth_remaining: int,
     max_candidates: int,
@@ -1854,7 +1843,7 @@ def _candidate_prompt(
     ).strip()
 
 
-_EXPLORE_SYSTEM_PROMPT = """You are Journey Discover, an autonomous browser test author.
+_DISCOVER_SYSTEM_PROMPT = """You are Journey Discover, an autonomous browser test author.
 Your job is to discover reachable user paths and produce replayable Playwright snippets.
 Return strict JSON only. Do not include markdown unless it is inside a JSON string.
 Prefer robust user-facing or data-testid selectors. Avoid repeating actions already listed
@@ -1882,7 +1871,7 @@ def _extract_json_payload(text: str) -> object:
         raise RuntimeError(f"journey discover model response was not valid JSON: {exc}") from exc
 
 
-def _render_root_function(root: ExploredNode, *, function_name: str) -> list[str]:
+def _render_root_function(root: DiscoveredNode, *, function_name: str) -> list[str]:
     expected_path = _path_for_url(root.snapshot.url)
     expected_title = root.snapshot.title or None
     expected_text = _visible_assertion_text(root.snapshot)
@@ -1900,7 +1889,7 @@ def _render_root_function(root: ExploredNode, *, function_name: str) -> list[str
     ]
 
 
-def _render_edge_function(edge: ExploredEdge) -> list[str]:
+def _render_edge_function(edge: DiscoveredEdge) -> list[str]:
     expected_path = _path_for_url(edge.snapshot.url)
     expected_title = edge.snapshot.title or None
     expected_text = _visible_assertion_text(edge.snapshot)
@@ -1976,7 +1965,7 @@ def _render_edge_function(edge: ExploredEdge) -> list[str]:
 
 
 def _render_journey_function(
-    roots: tuple[ExploredNode, ...],
+    roots: tuple[DiscoveredNode, ...],
     root_functions: dict[str, str],
     *,
     journey_name: str,
@@ -2002,7 +1991,7 @@ def _render_journey_function(
     return lines
 
 
-def _render_node_body(node: ExploredNode, *, current_var: str, indent: str) -> list[str]:
+def _render_node_body(node: DiscoveredNode, *, current_var: str, indent: str) -> list[str]:
     if not node.edges:
         return []
     if len(node.edges) == 1:
@@ -2039,11 +2028,11 @@ def _import_generated_module(path: Path) -> ModuleType:
     return module
 
 
-def _iter_nodes(roots: Sequence[ExploredNode]) -> list[ExploredNode]:
-    nodes: list[ExploredNode] = []
+def _iter_nodes(roots: Sequence[DiscoveredNode]) -> list[DiscoveredNode]:
+    nodes: list[DiscoveredNode] = []
     seen: set[str] = set()
 
-    def visit(node: ExploredNode) -> None:
+    def visit(node: DiscoveredNode) -> None:
         if node.node_id in seen:
             return
         seen.add(node.node_id)
@@ -2057,14 +2046,14 @@ def _iter_nodes(roots: Sequence[ExploredNode]) -> list[ExploredNode]:
     return nodes
 
 
-def _iter_edges(roots: Sequence[ExploredNode]) -> list[ExploredEdge]:
-    edges: list[ExploredEdge] = []
+def _iter_edges(roots: Sequence[DiscoveredNode]) -> list[DiscoveredEdge]:
+    edges: list[DiscoveredEdge] = []
     for node in _iter_nodes(roots):
         edges.extend(node.edges)
     return edges
 
 
-def _iter_edge_count(root: ExploredNode) -> int:
+def _iter_edge_count(root: DiscoveredNode) -> int:
     return len([edge for edge in _iter_edges((root,))])
 
 

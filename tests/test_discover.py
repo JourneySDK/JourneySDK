@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-import journeysdk.explorer as explorer_module
-from journeysdk.explorer import (
+import journeysdk.discover as discover_module
+from journeysdk.discover import (
     ActionCapture,
     CandidateAction,
     DiscoverOptions,
-    ExploredEdge,
-    ExploredNode,
+    DiscoveredEdge,
+    DiscoveredNode,
     PageSnapshot,
     ProbeSpec,
     _dedupe_candidates,
@@ -81,13 +81,13 @@ def test_parse_candidate_actions_rejects_unsafe_python() -> None:
 
 
 def test_rendered_journey_source_compiles_with_branches() -> None:
-    root = ExploredNode(
+    root = DiscoveredNode(
         node_id="root",
         start_url="http://example.test/",
         snapshot=_snapshot("http://example.test/", "Home", "Create Admin"),
         depth=0,
     )
-    checkout = ExploredEdge(
+    checkout = DiscoveredEdge(
         edge_id="checkout",
         parent=root,
         action=CandidateAction(
@@ -97,7 +97,7 @@ def test_rendered_journey_source_compiles_with_branches() -> None:
         ),
         snapshot=_snapshot("http://example.test/checkout", "Checkout"),
     )
-    admin = ExploredEdge(
+    admin = DiscoveredEdge(
         edge_id="admin",
         parent=root,
         action=CandidateAction(
@@ -295,7 +295,7 @@ def test_probe_helpers_match_identifiers_and_json_state_urls(
             return {"confirmation_code": "MC-ABC1234"}
         return None
 
-    monkeypatch.setattr(explorer_module, "_fetch_json_if_ok", fake_fetch)
+    monkeypatch.setattr(discover_module, "_fetch_json_if_ok", fake_fetch)
 
     assert (
         _discover_json_state_url("http://example.test/confirmation", "MC-ABC1234")
@@ -305,13 +305,13 @@ def test_probe_helpers_match_identifiers_and_json_state_urls(
 
 
 def test_generated_source_includes_discovered_probe_assertions() -> None:
-    root = ExploredNode(
+    root = DiscoveredNode(
         node_id="root",
         start_url="http://example.test/",
         snapshot=_snapshot("http://example.test/", "Home", "Start"),
         depth=0,
     )
-    confirmation = ExploredEdge(
+    confirmation = DiscoveredEdge(
         edge_id="confirmation",
         parent=root,
         action=CandidateAction(

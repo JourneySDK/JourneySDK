@@ -2353,7 +2353,7 @@ def _cmd_agent(args: argparse.Namespace) -> int:
 
 
 def _cmd_discover(args: argparse.Namespace) -> int:
-    from .explorer import DiscoverOptions, discover
+    from .discover import DiscoverOptions, discover
 
     root = Path.cwd().resolve()
     try:

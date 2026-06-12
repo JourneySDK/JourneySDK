@@ -345,8 +345,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     with pytest.raises(SystemExit):
         parser.parse_args(["execute", "--file", "journeys.py"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["explore", "http://example.test"])
-    with pytest.raises(SystemExit):
         parser.parse_args(["--only-step", "target"])
     with pytest.raises(SystemExit):
         parser.parse_args(["--case-id", "case_1"])
@@ -388,7 +386,6 @@ def test_help_outputs_include_agentic_command_manual():
     assert "journey loop <step_label>" in root_help
     assert "journey verify --step <step_label>" in root_help
     assert "journey discover <url>" in root_help
-    assert "journey explore" not in root_help
     assert "journey evidence --help" in root_help
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
     assert removed_plan_inspection_flag not in root_help
