@@ -17,6 +17,7 @@ from journeysdk.cli import (
     _active_environment_python,
     _read_pause_choice,
     build_agent_parser,
+    build_explore_parser,
     build_loop_parser,
     build_logs_parser,
     build_parser,
@@ -213,6 +214,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     capsys: pytest.CaptureFixture[str],
 ):
     parser = build_parser()
+    explore_parser = build_explore_parser()
     loop_parser = build_loop_parser()
     verify_parser = build_verify_parser()
 
@@ -266,6 +268,45 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert install_args.target == "claude"
     assert install_args.install is True
     assert install_args.force is True
+
+    explore_args = explore_parser.parse_args(
+        [
+            "http://127.0.0.1:18081",
+            "--file",
+            "journeys/explored_agentic_loop_journey.py",
+            "--journey-name",
+            "explored_agentic_loop_journey",
+            "--depth",
+            "4",
+            "--max-actions",
+            "30",
+            "--browser",
+            "chromium",
+            "--headed",
+            "--model",
+            "anthropic:claude-haiku-4-5",
+            "--allow-external",
+            "--force",
+        ]
+    )
+    assert explore_args.url == ["http://127.0.0.1:18081"]
+    assert explore_args.file == "journeys/explored_agentic_loop_journey.py"
+    assert explore_args.journey_name == "explored_agentic_loop_journey"
+    assert explore_args.depth == 4
+    assert explore_args.max_actions == 30
+    assert explore_args.browser == "chromium"
+    assert explore_args.headed is True
+    assert explore_args.model == "anthropic:claude-haiku-4-5"
+    assert explore_args.allow_external is True
+    assert explore_args.force is True
+
+    default_explore_args = explore_parser.parse_args(["example.test"])
+    assert default_explore_args.file == "journeys/explored_journey.py"
+    assert default_explore_args.journey_name == "explored_journey"
+    assert default_explore_args.depth == 4
+    assert default_explore_args.max_actions == 30
+    assert default_explore_args.browser == "chromium"
+    assert default_explore_args.headed is False
 
     alias_args = parser.parse_args(["--level", "warning"])
     assert alias_args.log_level == "warning"
@@ -326,11 +367,13 @@ def test_help_outputs_include_agentic_command_manual():
     root_help = build_parser().format_help()
     logs_help = build_logs_parser().format_help()
     agent_help = build_agent_parser().format_help()
+    explore_help = build_explore_parser().format_help()
 
     assert "replay and verify real user journeys for agentic coding loops" in root_help
     assert "Self-healing agent loop" in root_help
     assert "journey loop <step_label>" in root_help
     assert "journey verify --step <step_label>" in root_help
+    assert "journey explore <url>" in root_help
     assert "journey evidence --help" in root_help
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
     assert removed_plan_inspection_flag not in root_help
@@ -338,6 +381,8 @@ def test_help_outputs_include_agentic_command_manual():
     assert "journey evidence --list-scopes" in logs_help
     assert "Recovery:" in logs_help
     assert "Agent verification packet" in agent_help
+    assert "crawl app URLs and generate a branched Journey spec" in explore_help
+    assert "anthropic:claude-haiku-4-5" in explore_help
     assert "journey loop --help" in agent_help
     assert "journey verify --help" in agent_help
     assert "journey agent <target>" in agent_help

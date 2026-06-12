@@ -53,6 +53,7 @@ journey --help
 journey loop --help
 journey verify --help
 journey evidence --help
+journey explore --help
 journey agent --help
 ```
 
@@ -95,6 +96,8 @@ unless `--force` is passed.
 
 If you are authoring a journey by hand, use [Getting Started](docs/01-getting-started.md). It covers imports,
 top-level `@journey` functions, running one file, selecting one journey, and JSON Lines output for tools.
+If you want a draft from a running browser app, use `journey explore <url> --file journeys/<feature>_journey.py`,
+review the generated deterministic Playwright steps, then run `journey verify --file ...`.
 
 ## Authoring Guides
 
@@ -112,8 +115,9 @@ The docs index is [Journey Docs](docs/README.md).
 ## CLI Help
 
 Use `journey --help` as the short command index. Use `journey loop --help` for the focused edit loop,
-`journey verify --help` for branch/full verification, `journey evidence --help` for artifact inspection, and
-`journey agent --help` before printing or installing assistant guidance.
+`journey verify --help` for branch/full verification, `journey evidence --help` for artifact inspection,
+`journey explore --help` before generating a draft journey from a URL, and `journey agent --help` before printing or
+installing assistant guidance.
 
 ## Touchpoint References
 

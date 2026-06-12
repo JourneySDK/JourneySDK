@@ -337,6 +337,8 @@ def _help_command_for_prog(prog: str) -> str:
         return f"{prog} --help"
     if prog == "journey agent":
         return "journey agent --help"
+    if prog == "journey explore":
+        return "journey explore --help"
     if prog == "journey loop":
         return "journey loop --help"
     if prog == "journey verify":
@@ -363,6 +365,11 @@ def _parser_error_instructions(prog: str, message: str) -> str:
             "(codex, claude, cursor, or generic), and add --install only when "
             "writing persistent instructions."
         )
+    if prog == "journey explore":
+        return (
+            "Run `journey explore --help`, pass one or more start URLs, and "
+            "use --file to choose where the generated Journey spec should be written."
+        )
     return (
         "Run `journey --help`, choose `journey loop` for focused replay or "
         "`journey verify` for fresh confidence, and use "
@@ -379,6 +386,8 @@ def _parser_error_next_commands(prog: str, message: str) -> tuple[str, ...]:
         return tuple(commands)
     if prog == "journey agent":
         return ("journey agent --help", "journey agent codex")
+    if prog == "journey explore":
+        return ("journey explore --help", "journey verify --help")
     return ("journey --help", "journey agent codex", "journey evidence --help")
 
 
@@ -387,6 +396,8 @@ def _default_help_command_for_phase(phase: str) -> str:
         return "journey evidence --help"
     if phase == "agent":
         return "journey agent --help"
+    if phase == "explore":
+        return "journey explore --help"
     return "journey --help"
 
 
@@ -413,6 +424,11 @@ def _default_hint_for_error(error: _CommandError) -> str:
         return (
             "Run `journey agent --help`, choose a supported target, and use "
             "`--force` only with `--install` when replacing existing guidance."
+        )
+    if error.phase == "explore":
+        return (
+            "Run `journey explore --help`, confirm the app URL is reachable, "
+            "then retry with a writable --file path and model credentials."
         )
     return "Run the related Journey --help command, then retry with the corrected command."
 
@@ -443,6 +459,12 @@ def _default_instructions_for_error(error: _CommandError) -> str:
         return (
             "Agent guidance command failed. Use `journey agent --help` to choose "
             "a target and install mode, then retry with a valid command."
+        )
+    if error.phase == "explore":
+        return (
+            "Journey exploration failed before a generated spec could be written. "
+            "Read the `What happened` line, fix URL, browser, model, or output "
+            "path setup, then rerun `journey explore`."
         )
     return "Use the related Journey help command, correct the command, and retry."
 
@@ -496,6 +518,8 @@ def _default_next_commands_for_error(root: Path, error: _CommandError) -> tuple[
         commands.extend(("journey evidence --list-scopes", "journey evidence --list-log-sources"))
     elif error.phase == "agent":
         commands.append("journey agent --help")
+    elif error.phase == "explore":
+        commands.append("journey explore --help")
 
     help_command = error.help_command or _default_help_command_for_phase(error.phase)
     commands.append(help_command)
@@ -2328,6 +2352,77 @@ def _cmd_agent(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_explore(args: argparse.Namespace) -> int:
+    from .explorer import ExploreOptions, explore
+
+    root = Path.cwd().resolve()
+    try:
+        result = explore(
+            ExploreOptions(
+                urls=tuple(args.url),
+                output_file=Path(args.file),
+                journey_name=args.journey_name,
+                depth=args.depth,
+                max_actions=args.max_actions,
+                browser=args.browser,
+                headless=not args.headed,
+                model=args.model,
+                allow_external=args.allow_external,
+                force=args.force,
+            )
+        )
+    except Exception as exc:
+        _emit_errors(
+            root,
+            [
+                _CommandError(
+                    file=args.file,
+                    journey_name=args.journey_name,
+                    phase="explore",
+                    error_type=type(exc).__name__,
+                    message=str(exc) or type(exc).__name__,
+                    hint=getattr(exc, "hint", None),
+                    next_commands=("journey explore --help",),
+                    help_command="journey explore --help",
+                )
+            ],
+        )
+        return 1
+
+    verify_command = " ".join(
+        shlex.quote(part)
+        for part in (
+            "journey",
+            "verify",
+            "--file",
+            _display_path(root, result.output_file.resolve()),
+        )
+    )
+    _CLI_LOGGER.info(
+        "explore_result",
+        f"Generated Journey spec at {result.output_file}",
+        pretty=[
+            pretty_line(f"Generated Journey spec: {result.output_file}", style="success"),
+            pretty_line(
+                (
+                    f"  journey={result.journey_name} actions={result.actions} "
+                    f"branches={result.branches} omitted={result.omitted_actions}"
+                ),
+                style="success",
+            ),
+            pretty_line("Next commands:", style="success"),
+            pretty_line(f"  {verify_command}", style="success"),
+        ],
+        output_file=str(result.output_file),
+        journey_name=result.journey_name,
+        actions=result.actions,
+        branches=result.branches,
+        omitted_actions=result.omitted_actions,
+        next_commands=(verify_command,),
+    )
+    return 0
+
+
 def _cmd_touchpoint_docs(args: argparse.Namespace) -> int:
     sys.stdout.write(render_touchpoint_docs(args.touchpoint_docs))
     return 0
@@ -3936,6 +4031,77 @@ def build_touchpoints_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_explore_parser() -> argparse.ArgumentParser:
+    parser = _JourneyArgumentParser(
+        prog="journey explore",
+        description="crawl app URLs and generate a branched Journey spec",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Browser exploration:\n"
+            "  journey explore http://127.0.0.1:3000 --file journeys/explored_journey.py\n"
+            "      Use Claude Haiku to discover user paths and write deterministic Playwright steps.\n"
+            "  journey explore http://127.0.0.1:18081 --depth 4 --max-actions 30 --force\n"
+            "      Explore more of a local app and replace the generated file.\n"
+            "\n"
+            "The generated Journey is a draft test suite. Review it, then run:\n"
+            "  journey verify --file journeys/explored_journey.py\n"
+            "\n"
+            "Model selection follows --model, then JOURNEY_BROWSER_PROMPT_MODEL, then "
+            "anthropic:claude-haiku-4-5."
+        ),
+    )
+    parser.add_argument("url", nargs="+", help="Start URL to explore; may be repeated")
+    parser.add_argument(
+        "--file",
+        default="journeys/explored_journey.py",
+        help="Generated Journey file path (default: journeys/explored_journey.py)",
+    )
+    parser.add_argument(
+        "--journey-name",
+        default="explored_journey",
+        help="Generated @journey function name (default: explored_journey)",
+    )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=4,
+        help="Maximum action depth per start URL (default: 4)",
+    )
+    parser.add_argument(
+        "--max-actions",
+        type=int,
+        default=30,
+        help="Maximum explored actions per start URL (default: 30)",
+    )
+    parser.add_argument(
+        "--browser",
+        choices=("chromium", "firefox", "webkit"),
+        default="chromium",
+        help="Playwright browser to use (default: chromium)",
+    )
+    parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Show the browser during exploration",
+    )
+    parser.add_argument(
+        "--model",
+        help="LangChain model identifier for exploration",
+    )
+    parser.add_argument(
+        "--allow-external",
+        action="store_true",
+        help="Allow exploration to follow off-origin navigations",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing generated Journey file",
+    )
+    _add_runtime_output_arguments(parser)
+    return parser
+
+
 def build_agent_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey agent",
@@ -4003,6 +4169,8 @@ def build_parser() -> argparse.ArgumentParser:
             "      Freshly verify the whole journey before finishing.\n"
             "  journey evidence --step <step_label>\n"
             "      Inspect traces, videos, structured logs, and touchpoint payloads.\n"
+            "  journey explore <url> --file journeys/explored_journey.py\n"
+            "      Crawl an app URL and generate a draft branched Journey spec.\n"
             "  journey touchpoints browser|docker|email|webhook|http|all\n"
             "      Print packaged touchpoint references for helpers used inside steps.\n"
             "\n"
@@ -4106,6 +4274,11 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(raw_argv[1:])
         configure_logging(args.log_level, output_format=args.output)
         return _cmd_touchpoint_docs(args)
+    if raw_argv and raw_argv[0] == "explore":
+        parser = build_explore_parser()
+        args = parser.parse_args(raw_argv[1:])
+        configure_logging(args.log_level, output_format=args.output)
+        return _cmd_explore(args)
     if raw_argv and raw_argv[0] == "loop":
         parser = build_loop_parser()
         args = parser.parse_args(raw_argv[1:])
@@ -4128,7 +4301,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(args.log_level, output_format=args.output)
     parser.error(
         "missing command: use journey loop, journey verify, journey evidence, "
-        "journey touchpoints, or journey agent"
+        "journey explore, journey touchpoints, or journey agent"
     )
     return 2
 

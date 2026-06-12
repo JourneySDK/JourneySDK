@@ -67,13 +67,14 @@ journey --help
 journey loop --help
 journey verify --help
 journey evidence --help
+journey explore --help
 journey agent --help
 ```
 
 `journey --help` is the short command index. `journey loop --help` explains the focused replay loop for one step.
 `journey verify --help` explains branch and full-journey verification. `journey evidence --help` explains how to
-discover scopes and sources before reading artifacts. `journey agent --help` explains print/install modes for packaged
-assistant guidance.
+discover scopes and sources before reading artifacts. `journey explore --help` explains how to crawl a running app URL
+and write a draft Journey spec. `journey agent --help` explains print/install modes for packaged assistant guidance.
 
 When a Journey command fails, the CLI prints an instructional block:
 
@@ -86,6 +87,20 @@ Next commands:
 
 Structured and JSON Lines output include the same recovery data in `instructions`, `next_commands`, and
 `help_command` fields so agents can continue without external docs.
+
+## Generate A Draft Journey From A URL
+
+Use `journey explore` when an app is already running and you want a first Journey spec with broad browser coverage:
+
+```bash
+journey explore http://127.0.0.1:3000 --file journeys/explored_journey.py
+journey verify --file journeys/explored_journey.py
+```
+
+The explorer uses Claude Haiku by default through `JOURNEY_BROWSER_PROMPT_MODEL` model resolution, crawls same-origin
+paths within `--depth` and `--max-actions`, and writes deterministic Playwright step helpers. Model calls happen during
+exploration, not during later `journey verify` runs. Review the generated file before committing it, especially for
+credentials, fixture data, and side-effectful flows.
 
 ## Ctrl-C And Resumable Runs
 

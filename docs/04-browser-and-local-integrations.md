@@ -136,6 +136,20 @@ uv run journey verify --reuse-state --file docs/browser_resume_journey/browser_r
 Use `journey touchpoints browser` for `JourneyBrowserPage`, page rehydration, lifecycle, evidence, and
 `open_page(saved_page)` details.
 
+## Browser Explore
+
+Use `journey explore` when a local app is running and you want Journey to draft broad browser coverage from the app UI:
+
+```bash
+uv run journey explore http://127.0.0.1:3000 --file journeys/explored_journey.py
+uv run journey verify --file journeys/explored_journey.py
+```
+
+The explorer opens the start URL, asks the configured Claude Haiku model for next browser actions, executes restricted
+Playwright snippets during exploration, and writes deterministic `open_page(...)` step helpers with `branch(...)`
+where it finds alternate paths. The generated file is a draft: review step boundaries, fixture data, and assertions
+before treating it as committed coverage.
+
 ## Browser Prompt Tutorial
 
 Read `docs/browser_prompt_journey/browser_prompt_journey.py`.
@@ -170,6 +184,8 @@ output details.
 - `branch(replay_from=...)` lets later cases reuse durable setup from a saved step boundary.
 - Browser, webhook, file, and Docker details belong inside coarse user-flow steps, not as one Journey step per click,
   poll, or assertion.
+- `journey explore` is a fast way to bootstrap browser coverage, but generated specs still need executable
+  `journey verify` evidence before they count as complete.
 - `journey loop` and `journey verify --step` are the fastest way to iterate on one branch or late user-flow step.
 - Touchpoints remain ordinary Python helpers used from step functions.
 

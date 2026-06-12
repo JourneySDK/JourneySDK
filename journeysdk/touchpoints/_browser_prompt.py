@@ -2000,6 +2000,7 @@ def _validate_prompt_python_code(
     code: str,
     *,
     owner: str = "Journey prompt Python snippet",
+    extra_allowed_names: set[str] | None = None,
 ) -> None:
     try:
         tree = ast.parse(code, mode="exec")
@@ -2007,7 +2008,7 @@ def _validate_prompt_python_code(
         raise RuntimeError(f"{owner} is not valid Python: {exc}") from exc
     _reject_unsupported_prompt_nodes(tree, owner=owner)
     bound_names = _prompt_bound_names(tree)
-    allowed_names = _PROMPT_AVAILABLE_NAMES | bound_names
+    allowed_names = _PROMPT_AVAILABLE_NAMES | bound_names | (extra_allowed_names or set())
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if node.id in _PROMPT_BLOCKED_NAMES:
