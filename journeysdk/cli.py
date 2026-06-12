@@ -4569,6 +4569,8 @@ def build_parser() -> argparse.ArgumentParser:
             "      Crawl an app URL and print a draft branched Journey spec.\n"
             "  journey discover <step_label> --file journeys/<feature>_journey.py\n"
             "      Continue from an existing browser step and print a pasteable coverage snippet.\n"
+            "  journey agent codex|claude|cursor|generic [--install]\n"
+            "      Print or install packaged assistant guidance for Journey SDK loops.\n"
             "  journey touchpoints browser|docker|email|webhook|http|all\n"
             "      Print packaged touchpoint references for helpers used inside steps.\n"
             "\n"

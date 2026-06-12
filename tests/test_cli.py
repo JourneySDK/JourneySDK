@@ -845,6 +845,7 @@ def test_help_outputs_include_agentic_command_manual():
     assert "journey verify --step <step_label>" in root_help
     assert "journey discover <url>" in root_help
     assert "journey discover <step_label>" in root_help
+    assert "journey agent codex|claude|cursor|generic [--install]" in root_help
     assert "journey evidence --help" in root_help
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
     assert removed_plan_inspection_flag not in root_help
