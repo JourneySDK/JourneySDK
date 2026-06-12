@@ -1,20 +1,24 @@
-"""Internal browser explorer for generating Journey specs."""
+"""Internal browser discovery for generating Journey specs."""
 
 from __future__ import annotations
 
 import ast
 import importlib.util
 import json
+import os
 import re
 import tempfile
 import textwrap
+import time
+import urllib.error
+import urllib.request
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
-from typing import Literal, Protocol, cast
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any, Literal, Protocol, cast
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import uuid4
 
 from playwright.sync_api import Page as PlaywrightPage
@@ -39,27 +43,206 @@ from journeysdk.touchpoints._browser_prompt import (
 from journeysdk.touchpoints.browser import ensure_browser_installed
 
 
-JOURNEY_EXPLORE_MODEL_ENV = "JOURNEY_BROWSER_PROMPT_MODEL"
-DEFAULT_JOURNEY_EXPLORE_MODEL = "anthropic:claude-haiku-4-5"
+JOURNEY_DISCOVER_MODEL_ENV = "JOURNEY_BROWSER_PROMPT_MODEL"
+DEFAULT_JOURNEY_DISCOVER_MODEL = "anthropic:claude-haiku-4-5"
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
-_LOGGER = get_logger("explore")
+_LOGGER = get_logger("discover")
 _MAX_OBSERVATION_TEXT_LENGTH = 8000
 _DEFAULT_CANDIDATES_PER_STATE = 5
+_DEFAULT_MAX_MODEL_CALLS = 8
+_DEFAULT_ACTION_TIMEOUT_SECONDS = 120.0
+_DEFAULT_MAX_VARIANTS_PER_CONTROL = 3
+_JSON_STATE_PATHS = (
+    "/api/state",
+    "/api/status",
+    "/api/registration",
+    "/api/registrations",
+    "/api/order",
+    "/api/orders",
+    "/api/events",
+    "/state",
+)
+_IDENTIFIER_QUERY_KEYS = (
+    "confirmation_code",
+    "code",
+    "id",
+    "reference",
+    "token",
+)
+_EMAIL_EVIDENCE_URL_ENV = (
+    "JOURNEY_DISCOVER_EMAIL_EVIDENCE_URL",
+    "MAILPIT_URL",
+    "MAILPIT_HTTP_URL",
+    "MAILHOG_URL",
+)
+_WEBHOOK_EVIDENCE_URL_ENV = (
+    "JOURNEY_DISCOVER_WEBHOOK_EVIDENCE_URL",
+    "WEBHOOK_RECEIVER_URL",
+    "WEBHOOK_EVIDENCE_URL",
+)
+_EMAIL_EVIDENCE_URLS = (
+    "http://127.0.0.1:8025",
+    "http://localhost:8025",
+)
+_WEBHOOK_EVIDENCE_URLS: tuple[str, ...] = ()
+
+_AFFORDANCE_SCRIPT = r"""
+() => {
+  const cssEscape = window.CSS && CSS.escape
+    ? (value) => CSS.escape(String(value))
+    : (value) => String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+
+  function attrValue(value) {
+    return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  function cleanText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().slice(0, 180);
+  }
+
+  function isVisible(element) {
+    if (!element || !element.isConnected) return false;
+    const style = window.getComputedStyle(element);
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    if (Number(style.opacity) === 0) return false;
+    return element.getClientRects().length > 0;
+  }
+
+  function cssPath(element) {
+    const parts = [];
+    let current = element;
+    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body) {
+      const tag = current.tagName.toLowerCase();
+      let index = 1;
+      let sibling = current.previousElementSibling;
+      while (sibling) {
+        if (sibling.tagName.toLowerCase() === tag) index += 1;
+        sibling = sibling.previousElementSibling;
+      }
+      parts.unshift(`${tag}:nth-of-type(${index})`);
+      current = current.parentElement;
+    }
+    return parts.length ? `body > ${parts.join(" > ")}` : null;
+  }
+
+  function selectorFor(element) {
+    const testid = element.getAttribute("data-testid");
+    if (testid) return `[data-testid="${attrValue(testid)}"]`;
+    if (element.id) return `#${cssEscape(element.id)}`;
+    const name = element.getAttribute("name");
+    if (name) return `${element.tagName.toLowerCase()}[name="${attrValue(name)}"]`;
+    const aria = element.getAttribute("aria-label");
+    if (aria) return `${element.tagName.toLowerCase()}[aria-label="${attrValue(aria)}"]`;
+    return cssPath(element);
+  }
+
+  function labelFor(element) {
+    if (element.labels && element.labels.length) {
+      return cleanText(Array.from(element.labels).map((label) => label.innerText || label.textContent).join(" "));
+    }
+    const id = element.getAttribute("id");
+    if (id) {
+      const label = document.querySelector(`label[for="${attrValue(id)}"]`);
+      if (label) return cleanText(label.innerText || label.textContent);
+    }
+    return cleanText(element.getAttribute("aria-label") || element.getAttribute("placeholder") || "");
+  }
+
+  function fieldInfo(element) {
+    const tag = element.tagName.toLowerCase();
+    const type = tag === "input" ? String(element.getAttribute("type") || "text").toLowerCase() : tag;
+    if (["hidden", "submit", "button", "image", "reset", "file"].includes(type)) return null;
+    const info = {
+      tag,
+      type,
+      selector: selectorFor(element),
+      id: element.getAttribute("id") || "",
+      name: element.getAttribute("name") || "",
+      testid: element.getAttribute("data-testid") || "",
+      label: labelFor(element),
+      placeholder: element.getAttribute("placeholder") || "",
+      value: "value" in element ? String(element.value || "") : "",
+      required: Boolean(element.required),
+      disabled: Boolean(element.disabled),
+      readonly: Boolean(element.readOnly),
+      checked: Boolean(element.checked),
+      visible: isVisible(element),
+    };
+    if (tag === "select") {
+      info.options = Array.from(element.options || []).map((option) => ({
+        value: option.value,
+        text: cleanText(option.text),
+        selected: Boolean(option.selected),
+        disabled: Boolean(option.disabled),
+      }));
+    }
+    return info;
+  }
+
+  function controlInfo(element) {
+    return {
+      selector: selectorFor(element),
+      testid: element.getAttribute("data-testid") || "",
+      id: element.getAttribute("id") || "",
+      name: element.getAttribute("name") || "",
+      text: cleanText(element.innerText || element.textContent || element.value || element.getAttribute("aria-label") || ""),
+      href: element.href || element.getAttribute("href") || "",
+      type: String(element.getAttribute("type") || "").toLowerCase(),
+      visible: isVisible(element),
+    };
+  }
+
+  const forms = Array.from(document.querySelectorAll("form")).map((form) => {
+    const fields = Array.from(form.querySelectorAll("input, textarea, select"))
+      .map(fieldInfo)
+      .filter((field) => field && field.selector && !field.disabled);
+    const submitElement = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+    return {
+      selector: selectorFor(form),
+      action: form.action || form.getAttribute("action") || "",
+      method: String(form.method || "get").toLowerCase(),
+      fields,
+      submit: submitElement ? controlInfo(submitElement) : null,
+    };
+  });
+
+  const links = Array.from(document.querySelectorAll("a[href]"))
+    .filter(isVisible)
+    .map(controlInfo)
+    .filter((link) => link.selector && link.href);
+
+  const buttons = Array.from(document.querySelectorAll("button, [role='button']"))
+    .filter((button) => isVisible(button) && !button.closest("form"))
+    .map(controlInfo)
+    .filter((button) => button.selector);
+
+  return {
+    route: window.location.pathname || "/",
+    title: document.title || "",
+    forms,
+    links,
+    buttons,
+  };
+}
+"""
 
 
 @dataclass(frozen=True)
-class ExploreOptions:
+class DiscoverOptions:
     urls: tuple[str, ...]
-    output_file: Path = Path("journeys/explored_journey.py")
-    journey_name: str = "explored_journey"
+    output_file: Path = Path("journeys/discovered_journey.py")
+    journey_name: str = "discovered_journey"
     depth: int = 4
     max_actions: int = 30
+    max_model_calls: int = _DEFAULT_MAX_MODEL_CALLS
+    max_variants_per_control: int = _DEFAULT_MAX_VARIANTS_PER_CONTROL
+    side_effect_probes: Literal["auto", "off"] = "auto"
     browser: Literal["chromium", "firefox", "webkit"] = "chromium"
     headless: bool = True
     model: str | None = None
     allow_external: bool = False
     force: bool = False
-    action_timeout_seconds: float = 30.0
+    action_timeout_seconds: float = _DEFAULT_ACTION_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -69,6 +252,7 @@ class PageSnapshot:
     visible_text: str
     semantic_dom: str
     signature: str
+    affordances: str = ""
 
 
 @dataclass(frozen=True)
@@ -76,6 +260,25 @@ class CandidateAction:
     name: str
     description: str
     code: str
+    captures: tuple["ActionCapture", ...] = ()
+    variant_group: str | None = None
+    variant_value: str | None = None
+    variant_label: str | None = None
+
+
+@dataclass(frozen=True)
+class ActionCapture:
+    variable: str
+    value: str
+    kind: str
+    label: str
+
+
+@dataclass(frozen=True)
+class ProbeSpec:
+    kind: Literal["json_state", "email_evidence", "webhook_evidence"]
+    url: str
+    description: str
 
 
 @dataclass
@@ -86,6 +289,8 @@ class ExploredNode:
     depth: int
     path: tuple["ExploredEdge", ...] = ()
     edges: list["ExploredEdge"] = field(default_factory=list)
+    stop_reasons: set[str] = field(default_factory=set)
+    prefetched_candidates: tuple[CandidateAction, ...] | None = None
 
 
 @dataclass
@@ -96,10 +301,24 @@ class ExploredEdge:
     snapshot: PageSnapshot
     child: ExploredNode | None = None
     function_name: str = ""
+    probes: tuple[ProbeSpec, ...] = ()
+
+
+@dataclass
+class _CrawlBudget:
+    max_model_calls: int
+    model_calls: int = 0
 
 
 @dataclass(frozen=True)
-class ExploreResult:
+class _ActionResult:
+    snapshot: PageSnapshot
+    prefetched_candidates: tuple[CandidateAction, ...]
+    probes: tuple[ProbeSpec, ...] = ()
+
+
+@dataclass(frozen=True)
+class DiscoverResult:
     output_file: Path
     journey_name: str
     roots: tuple[ExploredNode, ...]
@@ -107,7 +326,13 @@ class ExploreResult:
     actions: int
     branches: int
     omitted_actions: int
+    model_calls: int
     model: str
+    stop_reason: str
+
+
+ExploreOptions = DiscoverOptions
+ExploreResult = DiscoverResult
 
 
 class ActionProvider(Protocol):
@@ -151,38 +376,41 @@ class ModelActionProvider:
             {"role": "user", "content": prompt},
         ]
         response = self._usage_tracker.call(
-            operation="explore_actions",
+            operation="discover_actions",
             configured_model=self._model_name,
             logger=_LOGGER,
             callback=lambda config: self._model.invoke(messages, config=config),
         )
         response_text = _extract_langchain_text(
             response,
-            owner="journey explore",
+            owner="journey discover",
         )
         return parse_candidate_actions(response_text)[
             : min(self._candidates_per_state, remaining_actions)
         ]
 
 
-def explore(
-    options: ExploreOptions,
+def discover(
+    options: DiscoverOptions,
     *,
     action_provider: ActionProvider | None = None,
-) -> ExploreResult:
+) -> DiscoverResult:
     normalized = _normalize_options(options)
     if normalized.output_file.exists() and not normalized.force:
         raise FileExistsError(
-            f"Journey explore output already exists: {normalized.output_file}. "
+            f"Journey discover output already exists: {normalized.output_file}. "
             "Pass --force to replace it."
         )
 
-    model = _resolve_explore_model(normalized.model)
+    model = _resolve_discover_model(normalized.model)
     provider = action_provider or ModelActionProvider(model=model)
     ensure_browser_installed(normalized.browser)
 
     roots: list[ExploredNode] = []
     omitted_actions = 0
+    stop_reasons: set[str] = set()
+    model_cache: dict[str, list[CandidateAction]] = {}
+    budget = _CrawlBudget(max_model_calls=normalized.max_model_calls)
     with sync_playwright() as playwright:
         browser_type = getattr(playwright, normalized.browser)
         browser = browser_type.launch(
@@ -196,10 +424,13 @@ def explore(
                     start_url=start_url,
                     options=normalized,
                     provider=provider,
+                    model_cache=model_cache,
+                    budget=budget,
                     node_prefix=f"start_{index}_",
                 )
                 roots.append(root)
                 omitted_actions += omitted
+                stop_reasons.update(root.stop_reasons)
         finally:
             browser.close()
 
@@ -213,7 +444,7 @@ def explore(
 
     actions = sum(_iter_edge_count(root) for root in roots)
     branches = sum(1 for node in _iter_nodes(roots) if len(node.edges) > 1)
-    result = ExploreResult(
+    result = DiscoverResult(
         output_file=normalized.output_file,
         journey_name=normalized.journey_name,
         roots=tuple(roots),
@@ -221,13 +452,15 @@ def explore(
         actions=actions,
         branches=branches,
         omitted_actions=omitted_actions,
+        model_calls=budget.model_calls,
         model=model,
+        stop_reason=", ".join(sorted(stop_reasons)) or "frontier_exhausted",
     )
     _LOGGER.info(
-        "explore_success",
-        "journey explore generated a Journey spec",
+        "discover_success",
+        "journey discover generated a Journey spec",
         pretty=pretty_row(
-            "Explore",
+            "Discover",
             f"wrote {result.output_file} actions={actions} branches={branches}",
             indent=8,
             label_width=27,
@@ -238,16 +471,26 @@ def explore(
         actions=actions,
         branches=branches,
         omitted_actions=omitted_actions,
+        model_calls=budget.model_calls,
         model=model,
+        stop_reason=result.stop_reason,
     )
     return result
+
+
+def explore(
+    options: ExploreOptions,
+    *,
+    action_provider: ActionProvider | None = None,
+) -> ExploreResult:
+    return discover(options, action_provider=action_provider)
 
 
 def parse_candidate_actions(text: str) -> list[CandidateAction]:
     payload = _extract_json_payload(text)
     raw_actions = payload.get("actions") if isinstance(payload, dict) else payload
     if not isinstance(raw_actions, list):
-        raise RuntimeError("journey explore expected model JSON with an actions list.")
+        raise RuntimeError("journey discover expected model JSON with an actions list.")
 
     actions: list[CandidateAction] = []
     for index, item in enumerate(raw_actions, start=1):
@@ -269,9 +512,9 @@ def render_journey_source(
     journey_name: str,
 ) -> str:
     if not roots:
-        raise ValueError("render_journey_source(...) needs at least one explored root.")
+        raise ValueError("render_journey_source(...) needs at least one discovered root.")
     allocator = _NameAllocator()
-    journey_name = _sanitize_identifier(journey_name, default="explored_journey")
+    journey_name = _sanitize_identifier(journey_name, default="discovered_journey")
     root_functions = {
         root.node_id: allocator.allocate(f"open_{_state_slug(root.snapshot)}")
         for root in roots
@@ -280,19 +523,174 @@ def render_journey_source(
         edge.function_name = allocator.allocate(edge.action.name)
 
     lines: list[str] = [
-        '"""Generated by `journey explore`. Review before committing."""',
+        '"""Generated by `journey discover`. Review before committing."""',
         "",
         "from __future__ import annotations",
         "",
-        "from urllib.parse import urlsplit",
+        "import json",
+        "import re",
+        "import time",
+        "from urllib.parse import quote, urlsplit",
         "from uuid import uuid4",
         "",
         "from journeysdk import branch, journey, step",
         "from journeysdk.touchpoints.browser import JourneyBrowserPage, open_page",
+        "from journeysdk.touchpoints.http import http_request",
         "",
         "",
         "def _unique_email(prefix: str) -> str:",
         "    return f\"{prefix}-{uuid4().hex[:8]}@example.test\"",
+        "",
+        "",
+        "def _json_contains_value(payload: object, expected: object) -> bool:",
+        "    expected_text = str(expected)",
+        "    if isinstance(payload, dict):",
+        "        return any(_json_contains_value(value, expected_text) for value in payload.values())",
+        "    if isinstance(payload, (list, tuple)):",
+        "        return any(_json_contains_value(value, expected_text) for value in payload)",
+        "    if payload is None:",
+        "        return False",
+        "    return str(payload) == expected_text or expected_text in str(payload)",
+        "",
+        "",
+        "def _dedupe_expected_values(values: list[object]) -> list[str]:",
+        "    deduped: list[str] = []",
+        "    for value in values:",
+        "        if value is None:",
+        "            continue",
+        "        text = str(value).strip()",
+        "        if text and text not in deduped:",
+        "            deduped.append(text)",
+        "    return deduped",
+        "",
+        "",
+        "def _http_json(url: str, *, timeout: float = 10.0) -> object | None:",
+        "    try:",
+        "        response = http_request(url, timeout=timeout)",
+        "    except Exception:",
+        "        return None",
+        "    if response.status < 200 or response.status > 299:",
+        "        return None",
+        "    try:",
+        "        return response.json()",
+        "    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):",
+        "        return None",
+        "",
+        "",
+        "def _missing_expected_values(payload: object, expected_values: list[str]) -> list[str]:",
+        "    return [value for value in expected_values if not _json_contains_value(payload, value)]",
+        "",
+        "",
+        "def _wait_for_http_json(",
+        "    url: str,",
+        "    expected_values: list[str],",
+        "    *,",
+        "    label: str,",
+        "    timeout_seconds: float = 45.0,",
+        "    poll_interval: float = 0.5,",
+        ") -> object:",
+        "    deadline = time.monotonic() + timeout_seconds",
+        "    last_payload: object | None = None",
+        "    while True:",
+        "        payload = _http_json(url, timeout=min(10.0, max(0.1, poll_interval)))",
+        "        if payload is not None:",
+        "            last_payload = payload",
+        "            missing = _missing_expected_values(payload, expected_values)",
+        "            if not missing:",
+        "                return payload",
+        "        if time.monotonic() >= deadline:",
+        "            raise AssertionError(",
+        "                f\"Timed out waiting for {label} at {url!r} to contain {expected_values!r}; \"",
+        "                f\"last payload: {last_payload!r}.\"",
+        "            )",
+        "        time.sleep(poll_interval)",
+        "",
+        "",
+        "def _mail_messages(payload: object) -> list[dict[str, object]]:",
+        "    if isinstance(payload, dict):",
+        "        for key in (\"messages\", \"Messages\", \"items\", \"data\"):",
+        "            value = payload.get(key)",
+        "            if isinstance(value, list):",
+        "                return [item for item in value if isinstance(item, dict)]",
+        "    if isinstance(payload, list):",
+        "        return [item for item in payload if isinstance(item, dict)]",
+        "    return []",
+        "",
+        "",
+        "def _mail_message_id(message: dict[str, object]) -> str | None:",
+        "    for key in (\"ID\", \"Id\", \"id\", \"message_id\", \"MessageID\"):",
+        "        value = message.get(key)",
+        "        if value:",
+        "            return str(value)",
+        "    return None",
+        "",
+        "",
+        "def _wait_for_email_evidence(",
+        "    base_url: str,",
+        "    identifier: str,",
+        "    expected_values: list[str],",
+        "    *,",
+        "    timeout_seconds: float = 45.0,",
+        "    poll_interval: float = 0.5,",
+        ") -> object:",
+        "    deadline = time.monotonic() + timeout_seconds",
+        "    messages_url = f\"{base_url.rstrip('/')}/api/v1/messages\"",
+        "    last_payload: object | None = None",
+        "    while True:",
+        "        payload = _http_json(messages_url, timeout=min(10.0, max(0.1, poll_interval)))",
+        "        if payload is not None:",
+        "            last_payload = payload",
+        "            for message in _mail_messages(payload):",
+        "                detail: object = message",
+        "                message_id = _mail_message_id(message)",
+        "                if message_id:",
+        "                    detail_url = f\"{base_url.rstrip('/')}/api/v1/message/{quote(message_id)}\"",
+        "                    detail = _http_json(detail_url, timeout=10.0) or message",
+        "                evidence = {\"message\": message, \"detail\": detail}",
+        "                if not _json_contains_value(evidence, identifier):",
+        "                    continue",
+        "                missing = _missing_expected_values(evidence, expected_values)",
+        "                if not missing:",
+        "                    return evidence",
+        "        if time.monotonic() >= deadline:",
+        "            raise AssertionError(",
+        "                f\"Timed out waiting for email evidence containing {expected_values!r}; \"",
+        "                f\"last payload: {last_payload!r}.\"",
+        "            )",
+        "        time.sleep(poll_interval)",
+        "",
+        "",
+        "def _wait_for_webhook_evidence(",
+        "    base_url: str,",
+        "    identifier: str,",
+        "    expected_values: list[str],",
+        "    *,",
+        "    timeout_seconds: float = 45.0,",
+        "    poll_interval: float = 0.5,",
+        ") -> object:",
+        "    url = f\"{base_url.rstrip('/')}/requests/latest?confirmation_code={quote(identifier)}\"",
+        "    return _wait_for_http_json(",
+        "        url,",
+        "        expected_values,",
+        "        label=\"webhook evidence\",",
+        "        timeout_seconds=timeout_seconds,",
+        "        poll_interval=poll_interval,",
+        "    )",
+        "",
+        "",
+        "def _first_visible_identifier(page: JourneyBrowserPage, *, timeout_ms: int) -> str:",
+        "    body_text = page.locator(\"body\").inner_text(timeout=timeout_ms)",
+        "    patterns = (",
+        "        (r\"\\b[A-Z]{2,}-[A-Z0-9][A-Z0-9-]{3,}\\b\", 0),",
+        "        (r\"\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b\", re.IGNORECASE),",
+        "        (r\"\\b[A-Z0-9]{8,}\\b\", 0),",
+        "        (r\"\\b[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}\\b\", re.IGNORECASE),",
+        "    )",
+        "    for pattern, flags in patterns:",
+        "        match = re.search(pattern, body_text, flags=flags)",
+        "        if match:",
+        "            return match.group(0)",
+        "    raise AssertionError(\"Expected a stable visible identifier after the discovered transition.\")",
         "",
         "",
         "def _assert_page_state(",
@@ -300,6 +698,8 @@ def render_journey_source(
         "    *,",
         "    expected_path: str | None = None,",
         "    expected_title: str | None = None,",
+        "    expected_text: str | None = None,",
+        f"    timeout_ms: int = {int(_DEFAULT_ACTION_TIMEOUT_SECONDS * 1000)},",
         ") -> None:",
         "    if expected_path is not None:",
         "        actual_path = urlsplit(page.url).path or \"/\"",
@@ -309,6 +709,10 @@ def render_journey_source(
         "        actual_title = page.title()",
         "        if actual_title != expected_title:",
         "            raise AssertionError(f\"Expected title {expected_title!r}, got {actual_title!r}.\")",
+        "    if expected_text is not None:",
+        "        body_text = page.locator(\"body\").inner_text(timeout=timeout_ms)",
+        "        if expected_text not in body_text:",
+        "            raise AssertionError(f\"Expected page text {expected_text!r} to be visible.\")",
         "",
         "",
     ]
@@ -336,15 +740,15 @@ def validate_generated_source(source: str, *, journey_name: str) -> None:
     try:
         ast.parse(source)
     except SyntaxError as exc:
-        raise RuntimeError(f"journey explore generated invalid Python: {exc}") from exc
-    with tempfile.TemporaryDirectory(prefix="journey-explore-") as temp_dir:
+        raise RuntimeError(f"journey discover generated invalid Python: {exc}") from exc
+    with tempfile.TemporaryDirectory(prefix="journey-discover-") as temp_dir:
         path = Path(temp_dir) / "generated_journey.py"
         path.write_text(source, encoding="utf-8")
         module = _import_generated_module(path)
         journey_fn = getattr(module, journey_name, None)
         if not is_journey_callable(journey_fn):
             raise RuntimeError(
-                f"journey explore generated source without {journey_name!r} Journey entrypoint."
+                f"journey discover generated source without {journey_name!r} Journey entrypoint."
             )
         compile_journey(journey_fn)
 
@@ -353,8 +757,10 @@ def _explore_start_url(
     browser: object,
     *,
     start_url: str,
-    options: ExploreOptions,
+    options: DiscoverOptions,
     provider: ActionProvider,
+    model_cache: dict[str, list[CandidateAction]],
+    budget: _CrawlBudget,
     node_prefix: str,
 ) -> tuple[ExploredNode, int]:
     root_snapshot = _snapshot_for_path(browser, start_url, ())
@@ -375,34 +781,62 @@ def _explore_start_url(
     while queue and action_count < options.max_actions:
         node = queue.popleft()
         if node.depth >= options.depth:
+            node.stop_reasons.add("max_depth")
             continue
         remaining = options.max_actions - action_count
-        candidates = provider.propose_actions(
-            node.snapshot,
-            path=node.path,
-            remaining_actions=remaining,
-            depth_remaining=options.depth - node.depth,
-        )
+        if node.prefetched_candidates is not None:
+            deterministic_candidates = list(node.prefetched_candidates)
+        else:
+            deterministic_candidates = _deterministic_candidates_for_path(
+                browser,
+                start_url=node.start_url,
+                path=node.path,
+                max_variants_per_control=options.max_variants_per_control,
+                timeout_seconds=options.action_timeout_seconds,
+            )
+        candidates = _dedupe_candidates(deterministic_candidates)
         if not candidates:
+            cached = model_cache.get(node.snapshot.signature)
+            if cached is None and budget.model_calls < budget.max_model_calls:
+                budget.model_calls += 1
+                cached = provider.propose_actions(
+                    node.snapshot,
+                    path=node.path,
+                    remaining_actions=remaining,
+                    depth_remaining=options.depth - node.depth,
+                )
+                model_cache[node.snapshot.signature] = cached
+            elif cached is None:
+                node.stop_reasons.add("max_model_calls")
+                cached = []
+            candidates = _dedupe_candidates(cached)
+        if not candidates:
+            node.stop_reasons.add("frontier_exhausted")
             continue
+
+        successful_transition = False
         for candidate in candidates:
             if action_count >= options.max_actions:
+                node.stop_reasons.add("max_actions")
                 break
             try:
-                snapshot = _snapshot_after_action(
+                action_result = _snapshot_after_action(
                     browser,
                     start_url=node.start_url,
                     path=node.path,
                     action=candidate,
+                    side_effect_probes=options.side_effect_probes,
+                    max_variants_per_control=options.max_variants_per_control,
                     timeout_seconds=options.action_timeout_seconds,
                 )
+                snapshot = action_result.snapshot
             except Exception as exc:
                 omitted_actions += 1
                 _LOGGER.warning(
-                    "explore_action_omitted",
-                    "journey explore omitted a failed action",
+                    "discover_action_omitted",
+                    "journey discover omitted a failed action",
                     pretty=pretty_row(
-                        "Explore",
+                        "Discover",
                         f"omitted {candidate.name}: {_format_exception(exc)}",
                         indent=8,
                         label_width=27,
@@ -415,10 +849,10 @@ def _explore_start_url(
             if not options.allow_external and _origin(snapshot.url) not in allowed_origins:
                 omitted_actions += 1
                 _LOGGER.warning(
-                    "explore_external_omitted",
-                    "journey explore omitted an external navigation",
+                    "discover_external_omitted",
+                    "journey discover omitted an external navigation",
                     pretty=pretty_row(
-                        "Explore",
+                        "Discover",
                         f"omitted external {snapshot.url}",
                         indent=8,
                         label_width=27,
@@ -428,14 +862,25 @@ def _explore_start_url(
                     url=snapshot.url,
                 )
                 continue
+            if snapshot.signature == node.snapshot.signature:
+                omitted_actions += 1
+                _LOGGER.debug(
+                    "discover_action_omitted",
+                    "journey discover omitted a non-transition action",
+                    action=candidate.name,
+                    reason="state_unchanged",
+                )
+                continue
 
             edge_sequence += 1
             action_count += 1
+            successful_transition = True
             edge = ExploredEdge(
                 edge_id=f"{node_prefix}edge_{edge_sequence}",
                 parent=node,
                 action=candidate,
                 snapshot=snapshot,
+                probes=action_result.probes,
             )
             node.edges.append(edge)
 
@@ -448,9 +893,18 @@ def _explore_start_url(
                     snapshot=snapshot,
                     depth=node.depth + 1,
                     path=(*node.path, edge),
+                    prefetched_candidates=action_result.prefetched_candidates,
                 )
                 edge.child = child
                 queue.append(child)
+        if not successful_transition:
+            node.stop_reasons.add("frontier_exhausted")
+    if action_count >= options.max_actions:
+        root.stop_reasons.add("max_actions")
+    for explored_node in _iter_nodes((root,)):
+        root.stop_reasons.update(explored_node.stop_reasons)
+    if not root.stop_reasons:
+        root.stop_reasons.add("frontier_exhausted")
     return root, omitted_actions
 
 
@@ -483,8 +937,10 @@ def _snapshot_after_action(
     start_url: str,
     path: tuple[ExploredEdge, ...],
     action: CandidateAction,
+    side_effect_probes: Literal["auto", "off"],
+    max_variants_per_control: int,
     timeout_seconds: float,
-) -> PageSnapshot:
+) -> _ActionResult:
     context = browser.new_context()
     try:
         page = context.new_page()
@@ -504,9 +960,647 @@ def _snapshot_after_action(
             timeout_seconds=timeout_seconds,
         )
         _settle_page(active_page)
-        return _snapshot_page(active_page)
+        snapshot = _snapshot_page(active_page)
+        probes = ()
+        if side_effect_probes == "auto":
+            probes = tuple(_discover_probes_for_page(active_page, action=action))
+        return _ActionResult(
+            snapshot=snapshot,
+            prefetched_candidates=tuple(
+                _deterministic_candidates_for_page(
+                    active_page,
+                    max_variants_per_control=max_variants_per_control,
+                )
+            ),
+            probes=probes,
+        )
     finally:
         context.close()
+
+
+def _deterministic_candidates_for_path(
+    browser: object,
+    *,
+    start_url: str,
+    path: tuple[ExploredEdge, ...],
+    max_variants_per_control: int,
+    timeout_seconds: float,
+) -> list[CandidateAction]:
+    context = browser.new_context()
+    try:
+        page = context.new_page()
+        page.goto(start_url, wait_until="load", timeout=int(timeout_seconds * 1000))
+        _settle_page(page)
+        active_page = page
+        for edge in path:
+            active_page = _execute_explore_code(
+                active_page,
+                edge.action.code,
+                timeout_seconds=timeout_seconds,
+            )
+            _settle_page(active_page)
+        return _deterministic_candidates_for_page(
+            active_page,
+            max_variants_per_control=max_variants_per_control,
+        )
+    finally:
+        context.close()
+
+
+def _deterministic_candidates_for_page(
+    page: PlaywrightPage,
+    *,
+    max_variants_per_control: int = _DEFAULT_MAX_VARIANTS_PER_CONTROL,
+) -> list[CandidateAction]:
+    affordances = _extract_affordances(page)
+    candidates: list[CandidateAction] = []
+    for form in _as_list(affordances.get("forms")):
+        candidates.extend(
+            _form_submit_candidates(
+                form,
+                max_variants_per_control=max_variants_per_control,
+            )
+        )
+    for link in _as_list(affordances.get("links")):
+        candidate = _click_candidate(link, kind="link")
+        if candidate is not None:
+            candidates.append(candidate)
+    for button in _as_list(affordances.get("buttons")):
+        candidate = _click_candidate(button, kind="button")
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _form_submit_candidate(form: dict[str, object]) -> CandidateAction | None:
+    candidates = _form_submit_candidates(
+        form,
+        max_variants_per_control=1,
+    )
+    return candidates[0] if candidates else None
+
+
+def _form_submit_candidates(
+    form: dict[str, object],
+    *,
+    max_variants_per_control: int,
+) -> list[CandidateAction]:
+    submit = form.get("submit")
+    if not isinstance(submit, dict):
+        return []
+    submit_selector = _string_value(submit.get("selector"))
+    if not submit_selector:
+        return []
+    finite_controls = _finite_control_variants(
+        form,
+        max_variants_per_control=max_variants_per_control,
+    )
+    if not finite_controls:
+        finite_controls = ((),)
+    candidates: list[CandidateAction] = []
+    for control_choices in finite_controls:
+        candidate = _form_submit_candidate_for_choices(
+            form,
+            submit=submit,
+            submit_selector=submit_selector,
+            control_choices=control_choices,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _form_submit_candidate_for_choices(
+    form: dict[str, object],
+    *,
+    submit: dict[str, object],
+    submit_selector: str,
+    control_choices: tuple[dict[str, object], ...],
+) -> CandidateAction | None:
+    lines: list[str] = []
+    captures: list[ActionCapture] = []
+    choice_by_selector = {
+        _string_value(choice.get("selector")): choice
+        for choice in control_choices
+        if _string_value(choice.get("selector"))
+    }
+    has_choice_variants = bool(control_choices)
+    used_variables: set[str] = set()
+    for raw_field in _as_list(form.get("fields")):
+        if not isinstance(raw_field, dict):
+            continue
+        field = cast(dict[str, object], raw_field)
+        selector = _string_value(field.get("selector"))
+        if not selector or field.get("disabled") or field.get("readonly"):
+            continue
+        field_tag = _string_value(field.get("tag")).lower()
+        field_type = _string_value(field.get("type")).lower()
+        if field_tag == "select":
+            choice = choice_by_selector.get(selector)
+            option_value = (
+                _string_value(choice.get("value"))
+                if choice is not None
+                else _first_select_option_value(field)
+            )
+            if option_value is not None:
+                variable = _allocate_variable_name(
+                    _capture_variable_base(field, default="selected_option"),
+                    used_variables,
+                )
+                label = _string_value(choice.get("label")) if choice is not None else ""
+                lines.append(f"{variable} = {option_value!r}")
+                lines.append(
+                    f"page.locator({selector!r}).select_option({variable}, timeout=timeout_ms)"
+                )
+                captures.append(
+                    ActionCapture(
+                        variable=variable,
+                        value=option_value,
+                        kind="option",
+                        label=label or _string_value(field.get("label")) or option_value,
+                    )
+                )
+            continue
+        if field_type in {"checkbox", "radio"}:
+            choice = choice_by_selector.get(selector)
+            should_check = (
+                choice is not None
+                if has_choice_variants
+                else field_type == "checkbox" and bool(field.get("required")) and not bool(field.get("checked"))
+            )
+            if should_check:
+                lines.append(f"page.locator({selector!r}).check(timeout=timeout_ms)")
+                value = (
+                    _string_value(choice.get("value"))
+                    if choice is not None
+                    else _string_value(field.get("value")) or "on"
+                )
+                captures.append(
+                    ActionCapture(
+                        variable="",
+                        value=value,
+                        kind=field_type,
+                        label=(
+                            _string_value(choice.get("label"))
+                            if choice is not None
+                            else _string_value(field.get("label")) or value
+                        ),
+                    )
+                )
+            continue
+        if field_type in {"hidden", "submit", "button", "image", "reset", "file"}:
+            continue
+        value_expr = _field_value_expression(field)
+        if value_expr is None:
+            continue
+        variable = _allocate_variable_name(
+            _capture_variable_base(field, default="field_value"),
+            used_variables,
+        )
+        lines.append(f"{variable} = {value_expr}")
+        lines.append(f"page.locator({selector!r}).fill({variable}, timeout=timeout_ms)")
+        captures.append(
+            ActionCapture(
+                variable=variable,
+                value="",
+                kind="email" if "email" in variable else "field",
+                label=_string_value(field.get("label")) or _string_value(field.get("name")) or variable,
+            )
+        )
+    lines.append(f"page.locator({submit_selector!r}).click(timeout=timeout_ms)")
+    lines.append('page.wait_for_load_state("load", timeout=timeout_ms)')
+    action_name = _transition_name(
+        submit,
+        fallback=_string_value(form.get("action")) or "submit form",
+    )
+    variant_group = None
+    variant_value = None
+    variant_label = None
+    if control_choices:
+        first_choice = control_choices[0]
+        variant_group = _string_value(first_choice.get("group"))
+        variant_value = _string_value(first_choice.get("value"))
+        variant_label = _string_value(first_choice.get("label"))
+        suffix = variant_label or variant_value
+        if suffix:
+            action_name = f"{action_name}_{_sanitize_identifier(suffix, default='variant')}"
+    description = f"Complete and submit the {action_name.replace('_', ' ')} form."
+    return CandidateAction(
+        name=action_name,
+        description=description,
+        code="\n".join(lines),
+        captures=tuple(captures),
+        variant_group=variant_group,
+        variant_value=variant_value,
+        variant_label=variant_label,
+    )
+
+
+def _click_candidate(item: dict[str, object], *, kind: str) -> CandidateAction | None:
+    selector = _string_value(item.get("selector"))
+    if not selector:
+        return None
+    lines = [
+        f"page.locator({selector!r}).click(timeout=timeout_ms)",
+        'page.wait_for_load_state("load", timeout=timeout_ms)',
+    ]
+    action_name = _transition_name(item, fallback=f"open {kind}")
+    description = f"Click {kind} {action_name.replace('_', ' ')}."
+    return CandidateAction(name=action_name, description=description, code="\n".join(lines))
+
+
+def _transition_name(item: dict[str, object], *, fallback: str) -> str:
+    for key in ("testid", "text", "label", "name", "href"):
+        value = _string_value(item.get(key))
+        if value:
+            return _sanitize_identifier(value, default=fallback)
+    return _sanitize_identifier(fallback, default="discover_transition")
+
+
+def _finite_control_variants(
+    form: dict[str, object],
+    *,
+    max_variants_per_control: int,
+) -> tuple[tuple[dict[str, object], ...], ...]:
+    if max_variants_per_control <= 1:
+        return ()
+    variants: list[tuple[dict[str, object], ...]] = []
+    for raw_field in _as_list(form.get("fields")):
+        if not isinstance(raw_field, dict):
+            continue
+        field = cast(dict[str, object], raw_field)
+        selector = _string_value(field.get("selector"))
+        if not selector or field.get("disabled") or field.get("readonly"):
+            continue
+        field_tag = _string_value(field.get("tag")).lower()
+        field_type = _string_value(field.get("type")).lower()
+        if field_tag == "select":
+            choices = _select_variants(field, max_variants_per_control=max_variants_per_control)
+        elif field_type == "radio":
+            choices = _radio_variants(field, max_variants_per_control=max_variants_per_control)
+        elif field_type == "checkbox":
+            choices = _checkbox_variants(field, max_variants_per_control=max_variants_per_control)
+        else:
+            choices = ()
+        variants.extend((choice,) for choice in choices)
+    return tuple(variants)
+
+
+def _select_variants(
+    field: dict[str, object],
+    *,
+    max_variants_per_control: int,
+) -> tuple[dict[str, object], ...]:
+    selector = _string_value(field.get("selector"))
+    group = _string_value(field.get("name")) or _string_value(field.get("testid")) or selector
+    choices: list[dict[str, object]] = []
+    for raw_option in _as_list(field.get("options")):
+        if not isinstance(raw_option, dict):
+            continue
+        option = cast(dict[str, object], raw_option)
+        if option.get("disabled"):
+            continue
+        value = _string_value(option.get("value")) or _string_value(option.get("text"))
+        label = _string_value(option.get("text")) or value
+        if not value or _is_placeholder_option(value=value, label=label):
+            continue
+        choices.append(
+            {
+                "selector": selector,
+                "group": group,
+                "value": value,
+                "label": label,
+                "selected": bool(option.get("selected")),
+            }
+        )
+    return tuple(choices[:max_variants_per_control])
+
+
+def _radio_variants(
+    field: dict[str, object],
+    *,
+    max_variants_per_control: int,
+) -> tuple[dict[str, object], ...]:
+    selector = _string_value(field.get("selector"))
+    value = _string_value(field.get("value")) or "on"
+    label = _string_value(field.get("label")) or value
+    if not selector or _is_placeholder_option(value=value, label=label):
+        return ()
+    return (
+        {
+            "selector": selector,
+            "group": _string_value(field.get("name")) or selector,
+            "value": value,
+            "label": label,
+        },
+    )[:max_variants_per_control]
+
+
+def _checkbox_variants(
+    field: dict[str, object],
+    *,
+    max_variants_per_control: int,
+) -> tuple[dict[str, object], ...]:
+    if max_variants_per_control <= 0:
+        return ()
+    selector = _string_value(field.get("selector"))
+    value = _string_value(field.get("value")) or "on"
+    label = _string_value(field.get("label")) or value
+    if not selector or _is_placeholder_option(value=value, label=label):
+        return ()
+    return (
+        {
+            "selector": selector,
+            "group": _string_value(field.get("name")) or selector,
+            "value": value,
+            "label": label,
+        },
+    )[:max_variants_per_control]
+
+
+def _is_placeholder_option(*, value: str, label: str) -> bool:
+    normalized = f"{value} {label}".strip().lower()
+    if not normalized:
+        return True
+    return normalized in {"select", "choose", "none", "n/a"} or normalized.startswith(
+        ("select ", "choose ")
+    )
+
+
+def _capture_variable_base(field: dict[str, object], *, default: str) -> str:
+    for key in ("name", "testid", "id", "label", "placeholder"):
+        value = _string_value(field.get(key))
+        if value:
+            return value
+    return default
+
+
+def _allocate_variable_name(raw: str, used: set[str]) -> str:
+    base = _sanitize_identifier(raw, default="value")
+    candidate = base
+    suffix = 2
+    while candidate in used:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _field_value_expression(field: dict[str, object]) -> str | None:
+    field_type = _string_value(field.get("type")).lower()
+    current_value = _string_value(field.get("value"))
+    identity = " ".join(
+        _string_value(field.get(key)).lower()
+        for key in ("testid", "name", "label", "placeholder", "id")
+    )
+    if field_type == "email" or "email" in identity:
+        prefix = re.sub(r"[^a-z0-9]+", "-", identity).strip("-") or "user"
+        return f"unique_email({prefix[:32]!r})"
+    if current_value:
+        return repr(current_value)
+    if "name" in identity:
+        return repr("Test User")
+    if field_type in {"number", "range"}:
+        return repr("1")
+    if field_type in {"tel", "phone"}:
+        return repr("5550100")
+    if field_type == "url":
+        return repr("https://example.test")
+    if field.get("required"):
+        return repr("test value")
+    return None
+
+
+def _first_select_option_value(field: dict[str, object]) -> str | None:
+    selected_value: str | None = None
+    fallback_value: str | None = None
+    for raw_option in _as_list(field.get("options")):
+        if not isinstance(raw_option, dict):
+            continue
+        option = cast(dict[str, object], raw_option)
+        if option.get("disabled"):
+            continue
+        value = _string_value(option.get("value"))
+        if not value:
+            value = _string_value(option.get("text"))
+        if not value:
+            continue
+        if fallback_value is None:
+            fallback_value = value
+        if option.get("selected"):
+            selected_value = value
+            break
+    return selected_value or fallback_value
+
+
+def _dedupe_candidates(candidates: Sequence[CandidateAction]) -> list[CandidateAction]:
+    deduped: list[CandidateAction] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        key = (candidate.name, candidate.code)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _discover_probes_for_page(
+    page: PlaywrightPage,
+    *,
+    action: CandidateAction,
+) -> list[ProbeSpec]:
+    visible_text = _safe_visible_text(page)
+    identifier = _first_stable_identifier(visible_text)
+    if identifier is None:
+        _LOGGER.debug(
+            "discover_probe_omitted",
+            "journey discover found no stable identifier for side-effect probes",
+            reason="missing_identifier",
+            action=action.name,
+        )
+        return []
+
+    probes: list[ProbeSpec] = []
+    state_url = _discover_json_state_url(page.url, identifier)
+    if state_url is not None:
+        probes.append(
+            ProbeSpec(
+                kind="json_state",
+                url=state_url,
+                description="same-origin JSON state contains the visible identifier",
+            )
+        )
+        _LOGGER.info(
+            "discover_probe_found",
+            "journey discover found a JSON state probe",
+            action=action.name,
+            kind="json_state",
+            url=state_url,
+        )
+    else:
+        _LOGGER.debug(
+            "discover_probe_omitted",
+            "journey discover did not find a matching JSON state probe",
+            action=action.name,
+            kind="json_state",
+            reason="not_reachable_or_no_identifier_match",
+        )
+
+    if _mentions_email_evidence(visible_text):
+        email_url = _discover_email_evidence_url(identifier)
+        if email_url is not None:
+            probes.append(
+                ProbeSpec(
+                    kind="email_evidence",
+                    url=email_url,
+                    description="local email evidence contains the visible identifier",
+                )
+            )
+            _LOGGER.info(
+                "discover_probe_found",
+                "journey discover found an email evidence probe",
+                action=action.name,
+                kind="email_evidence",
+                url=email_url,
+            )
+        else:
+            _LOGGER.debug(
+                "discover_probe_omitted",
+                "journey discover did not find reachable email evidence",
+                action=action.name,
+                kind="email_evidence",
+                reason="not_reachable_or_no_identifier_match",
+            )
+
+    if _mentions_webhook_evidence(visible_text):
+        webhook_url = _discover_webhook_evidence_url(identifier)
+        if webhook_url is not None:
+            probes.append(
+                ProbeSpec(
+                    kind="webhook_evidence",
+                    url=webhook_url,
+                    description="local webhook evidence contains the visible identifier",
+                )
+            )
+            _LOGGER.info(
+                "discover_probe_found",
+                "journey discover found a webhook evidence probe",
+                action=action.name,
+                kind="webhook_evidence",
+                url=webhook_url,
+            )
+        else:
+            _LOGGER.debug(
+                "discover_probe_omitted",
+                "journey discover did not find reachable webhook evidence",
+                action=action.name,
+                kind="webhook_evidence",
+                reason="not_reachable_or_no_identifier_match",
+            )
+    return probes
+
+
+def _first_stable_identifier(text: str) -> str | None:
+    patterns = (
+        (r"\b[A-Z]{2,}-[A-Z0-9][A-Z0-9-]{3,}\b", 0),
+        (
+            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+            re.IGNORECASE,
+        ),
+        (r"\b[A-Z0-9]{8,}\b", 0),
+        (r"\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b", re.IGNORECASE),
+    )
+    for pattern, flags in patterns:
+        match = re.search(pattern, text, flags=flags)
+        if match:
+            return match.group(0)
+    return None
+
+
+def _discover_json_state_url(page_url: str, identifier: str) -> str | None:
+    origin = _origin(page_url)
+    if not origin.startswith(("http://", "https://")):
+        return None
+    for path in _JSON_STATE_PATHS:
+        for query_key in _IDENTIFIER_QUERY_KEYS:
+            url = f"{origin}{path}?{query_key}={quote(identifier)}"
+            payload = _fetch_json_if_ok(url, timeout=1.5)
+            if payload is not None and _json_contains_value(payload, identifier):
+                return url.replace(quote(identifier), "{identifier}")
+    return None
+
+
+def _discover_email_evidence_url(identifier: str) -> str | None:
+    for base_url in _candidate_service_urls(_EMAIL_EVIDENCE_URL_ENV, _EMAIL_EVIDENCE_URLS):
+        messages = _fetch_json_if_ok(f"{base_url}/api/v1/messages", timeout=1.5)
+        if messages is None or not _json_contains_value(messages, identifier):
+            continue
+        return base_url
+    return None
+
+
+def _discover_webhook_evidence_url(identifier: str) -> str | None:
+    for base_url in _candidate_service_urls(_WEBHOOK_EVIDENCE_URL_ENV, _WEBHOOK_EVIDENCE_URLS):
+        url = f"{base_url}/requests/latest?confirmation_code={quote(identifier)}"
+        payload = _fetch_json_if_ok(url, timeout=1.5)
+        if payload is not None and _json_contains_value(payload, identifier):
+            return base_url
+    return None
+
+
+def _candidate_service_urls(env_names: Sequence[str], defaults: Sequence[str]) -> tuple[str, ...]:
+    values: list[str] = []
+    for name in env_names:
+        value = os.environ.get(name)
+        if value:
+            values.append(value)
+    values.extend(defaults)
+    normalized: list[str] = []
+    for value in values:
+        stripped = value.strip().rstrip("/")
+        if stripped and stripped not in normalized:
+            normalized.append(stripped)
+    return tuple(normalized)
+
+
+def _fetch_json_if_ok(url: str, *, timeout: float) -> object | None:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            status = getattr(response, "status", getattr(response, "code", 200))
+            if int(status) < 200 or int(status) > 299:
+                return None
+            content_type = str(response.headers.get("Content-Type", ""))
+            body = response.read()
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError):
+        return None
+    if "json" not in content_type.lower() and not body.strip().startswith((b"{", b"[")):
+        return None
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _json_contains_value(payload: object, expected: object) -> bool:
+    expected_text = str(expected)
+    if isinstance(payload, dict):
+        return any(_json_contains_value(value, expected_text) for value in payload.values())
+    if isinstance(payload, list | tuple):
+        return any(_json_contains_value(value, expected_text) for value in payload)
+    if payload is None:
+        return False
+    return str(payload) == expected_text or expected_text in str(payload)
+
+
+def _mentions_email_evidence(text: str) -> bool:
+    lowered = text.lower()
+    return "email" in lowered or "mail" in lowered
+
+
+def _mentions_webhook_evidence(text: str) -> bool:
+    lowered = text.lower()
+    return "webhook" in lowered or "callback" in lowered
 
 
 def _execute_explore_code(
@@ -541,10 +1635,10 @@ def _execute_explore_code(
         nonlocal active_page, pages
         pages = list(context.pages)
         if isinstance(index, bool) or not isinstance(index, int):
-            raise RuntimeError("journey explore switch_page index must be an integer.")
+            raise RuntimeError("journey discover switch_page index must be an integer.")
         if index < 0 or index >= len(pages):
             raise RuntimeError(
-                f"journey explore switch_page index {index} is outside 0..{len(pages) - 1}."
+                f"journey discover switch_page index {index} is outside 0..{len(pages) - 1}."
             )
         active_page = pages[index]
         namespace["page"] = active_page
@@ -552,7 +1646,7 @@ def _execute_explore_code(
         return active_page
 
     namespace["switch_page"] = switch_page
-    exec(compile(normalized, "<journey-explore>", "exec"), namespace, namespace)
+    exec(compile(normalized, "<journey-discover>", "exec"), namespace, namespace)
     candidate_page = namespace.get("page")
     if isinstance(candidate_page, PlaywrightPage):
         active_page = candidate_page
@@ -562,14 +1656,14 @@ def _execute_explore_code(
 def _validate_explore_python_code(code: str) -> None:
     _validate_prompt_python_code(
         code,
-        owner="Journey explore Python snippet",
+        owner="Journey discover Python snippet",
         extra_allowed_names={"unique_email"},
     )
     tree = ast.parse(code, mode="exec")
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id == "switch_page":
             raise RuntimeError(
-                "Journey explore Python snippet cannot use switch_page(...) because "
+                "Journey discover Python snippet cannot use switch_page(...) because "
                 "generated Journey steps must return a replayable JourneyBrowserPage."
             )
 
@@ -579,6 +1673,7 @@ def _snapshot_page(page: PlaywrightPage) -> PageSnapshot:
     title = _safe_page_title(page)
     visible_text = _truncate(_safe_visible_text(page), _MAX_OBSERVATION_TEXT_LENGTH)
     semantic_dom = _truncate(_safe_semantic_dom(page), _MAX_OBSERVATION_TEXT_LENGTH)
+    affordances = _truncate(_safe_affordance_inventory(page), _MAX_OBSERVATION_TEXT_LENGTH)
     signature = json.dumps(
         {
             "url": _url_signature(url),
@@ -594,6 +1689,7 @@ def _snapshot_page(page: PlaywrightPage) -> PageSnapshot:
         visible_text=visible_text,
         semantic_dom=semantic_dom,
         signature=signature,
+        affordances=affordances,
     )
 
 
@@ -638,6 +1734,63 @@ def _safe_semantic_dom(page: PlaywrightPage) -> str:
         return ""
 
 
+def _safe_affordance_inventory(page: PlaywrightPage) -> str:
+    try:
+        return _render_affordance_inventory(_extract_affordances(page))
+    except Exception:
+        return ""
+
+
+def _extract_affordances(page: PlaywrightPage) -> dict[str, object]:
+    payload = page.evaluate(_AFFORDANCE_SCRIPT)
+    if isinstance(payload, dict):
+        return cast(dict[str, object], payload)
+    return {"forms": [], "links": [], "buttons": []}
+
+
+def _render_affordance_inventory(affordances: dict[str, object]) -> str:
+    lines: list[str] = []
+    for index, raw_form in enumerate(_as_list(affordances.get("forms")), start=1):
+        if not isinstance(raw_form, dict):
+            continue
+        form = cast(dict[str, object], raw_form)
+        submit = form.get("submit") if isinstance(form.get("submit"), dict) else {}
+        submit_text = _string_value(cast(dict[str, object], submit).get("text")) if submit else ""
+        action = _string_value(form.get("action"))
+        lines.append(f"- form {index}: action={action or '?'} submit={submit_text or '?'}")
+        for raw_field in _as_list(form.get("fields")):
+            if not isinstance(raw_field, dict):
+                continue
+            field = cast(dict[str, object], raw_field)
+            label = _string_value(field.get("label")) or _string_value(field.get("name"))
+            field_type = _string_value(field.get("type")) or _string_value(field.get("tag"))
+            required = " required" if field.get("required") else ""
+            testid = _string_value(field.get("testid"))
+            testid_text = f" data-testid={testid}" if testid else ""
+            lines.append(f"  - {label or '?'} type={field_type or '?'}{required}{testid_text}")
+    for raw_link in _as_list(affordances.get("links")):
+        if not isinstance(raw_link, dict):
+            continue
+        link = cast(dict[str, object], raw_link)
+        lines.append(
+            f"- link: {_string_value(link.get('text')) or '?'} href={_string_value(link.get('href')) or '?'}"
+        )
+    for raw_button in _as_list(affordances.get("buttons")):
+        if not isinstance(raw_button, dict):
+            continue
+        button = cast(dict[str, object], raw_button)
+        lines.append(f"- button: {_string_value(button.get('text')) or '?'}")
+    return "\n".join(lines)
+
+
+def _as_list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
+def _string_value(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _candidate_prompt(
     snapshot: PageSnapshot,
     *,
@@ -652,9 +1805,11 @@ def _candidate_prompt(
     )
     if not prior_actions:
         prior_actions = "- none"
+    affordance_block = snapshot.affordances or snapshot.semantic_dom
+    affordance_label = "Affordances" if snapshot.affordances else "Semantic DOM"
     return textwrap.dedent(
         f"""
-        Explore this browser page and return up to {max_candidates} next user actions.
+        Discover this browser page and return up to {max_candidates} next complete user transitions.
 
         Current URL: {snapshot.url}
         Current title: {snapshot.title}
@@ -669,10 +1824,10 @@ def _candidate_prompt(
         {snapshot.visible_text}
         </visible-text>
 
-        Semantic DOM:
-        <semantic-dom>
-        {snapshot.semantic_dom}
-        </semantic-dom>
+        {affordance_label}:
+        <affordances>
+        {affordance_block}
+        </affordances>
 
         Return JSON only:
         {{
@@ -686,7 +1841,9 @@ def _candidate_prompt(
         }}
 
         Snippet rules:
-        - Execute one meaningful user path segment from the current page.
+        - Execute one complete user transition from the current page.
+        - Compose required fills, selects, submits, waits, and assertions together.
+        - Do not return standalone field fills unless they reveal a new stable state.
         - Use page, timeout_ms, and unique_email(prefix).
         - Prefer data-testid selectors and accessible selectors.
         - Pass timeout=timeout_ms to Playwright actions and waits.
@@ -697,7 +1854,7 @@ def _candidate_prompt(
     ).strip()
 
 
-_EXPLORE_SYSTEM_PROMPT = """You are Journey Explore, an autonomous browser test author.
+_EXPLORE_SYSTEM_PROMPT = """You are Journey Discover, an autonomous browser test author.
 Your job is to discover reachable user paths and produce replayable Playwright snippets.
 Return strict JSON only. Do not include markdown unless it is inside a JSON string.
 Prefer robust user-facing or data-testid selectors. Avoid repeating actions already listed
@@ -714,28 +1871,30 @@ def _extract_json_payload(text: str) -> object:
     array_start = stripped.find("[")
     candidates = [index for index in (object_start, array_start) if index >= 0]
     if not candidates:
-        raise RuntimeError("journey explore model response did not contain JSON.")
+        raise RuntimeError("journey discover model response did not contain JSON.")
     start = min(candidates)
     end = max(stripped.rfind("}"), stripped.rfind("]"))
     if end < start:
-        raise RuntimeError("journey explore model response JSON was incomplete.")
+        raise RuntimeError("journey discover model response JSON was incomplete.")
     try:
         return json.loads(stripped[start : end + 1])
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"journey explore model response was not valid JSON: {exc}") from exc
+        raise RuntimeError(f"journey discover model response was not valid JSON: {exc}") from exc
 
 
 def _render_root_function(root: ExploredNode, *, function_name: str) -> list[str]:
     expected_path = _path_for_url(root.snapshot.url)
     expected_title = root.snapshot.title or None
+    expected_text = _visible_assertion_text(root.snapshot)
     return [
         f"def {function_name}() -> JourneyBrowserPage:",
         f"    page = open_page({root.start_url!r})",
-        "    timeout_ms = 30000",
+        f"    timeout_ms = {int(_DEFAULT_ACTION_TIMEOUT_SECONDS * 1000)}",
         "    page.wait_for_load_state(\"load\", timeout=timeout_ms)",
         (
             "    _assert_page_state("
-            f"page, expected_path={expected_path!r}, expected_title={expected_title!r})"
+            f"page, expected_path={expected_path!r}, expected_title={expected_title!r}, "
+            f"expected_text={expected_text!r}, timeout_ms=timeout_ms)"
         ),
         "    return page",
     ]
@@ -744,11 +1903,12 @@ def _render_root_function(root: ExploredNode, *, function_name: str) -> list[str
 def _render_edge_function(edge: ExploredEdge) -> list[str]:
     expected_path = _path_for_url(edge.snapshot.url)
     expected_title = edge.snapshot.title or None
+    expected_text = _visible_assertion_text(edge.snapshot)
     lines = [
         f"def {edge.function_name}(saved_page: JourneyBrowserPage) -> JourneyBrowserPage:",
         f"    \"\"\"{_docstring_text(edge.action.description)}\"\"\"",
         "    page = open_page(saved_page)",
-        "    timeout_ms = 30000",
+        f"    timeout_ms = {int(_DEFAULT_ACTION_TIMEOUT_SECONDS * 1000)}",
         "",
         "    def unique_email(prefix: str) -> str:",
         "        return _unique_email(prefix)",
@@ -761,11 +1921,57 @@ def _render_edge_function(edge: ExploredEdge) -> list[str]:
             "    page.wait_for_load_state(\"load\", timeout=timeout_ms)",
             (
                 "    _assert_page_state("
-                f"page, expected_path={expected_path!r}, expected_title={expected_title!r})"
+                f"page, expected_path={expected_path!r}, expected_title={expected_title!r}, "
+                f"expected_text={expected_text!r}, timeout_ms=timeout_ms)"
             ),
-            "    return page",
         ]
     )
+    if edge.probes:
+        expected_values = ["_journey_visible_identifier"]
+        machine_expected_values = ["_journey_visible_identifier"]
+        for capture in edge.action.captures:
+            if capture.variable:
+                expected_values.append(capture.variable)
+                if capture.kind != "field":
+                    machine_expected_values.append(capture.variable)
+            elif capture.value:
+                expected_values.append(repr(capture.value))
+                if capture.kind != "field":
+                    machine_expected_values.append(repr(capture.value))
+        lines.extend(
+            [
+                "    _journey_visible_identifier = _first_visible_identifier(page, timeout_ms=timeout_ms)",
+                (
+                    "    _journey_expected_values = _dedupe_expected_values(["
+                    + ", ".join(expected_values)
+                    + "])"
+                ),
+                (
+                    "    _journey_machine_expected_values = _dedupe_expected_values(["
+                    + ", ".join(machine_expected_values)
+                    + "])"
+                ),
+            ]
+        )
+        for probe in edge.probes:
+            if probe.kind == "json_state":
+                lines.append(
+                    "    _wait_for_http_json("
+                    f"{probe.url!r}.format(identifier=quote(_journey_visible_identifier)), "
+                    "_journey_expected_values, "
+                    f"label={probe.description!r})"
+                )
+            elif probe.kind == "email_evidence":
+                lines.append(
+                    "    _wait_for_email_evidence("
+                    f"{probe.url!r}, _journey_visible_identifier, _journey_expected_values)"
+                )
+            elif probe.kind == "webhook_evidence":
+                lines.append(
+                    "    _wait_for_webhook_evidence("
+                    f"{probe.url!r}, _journey_visible_identifier, _journey_machine_expected_values)"
+                )
+    lines.append("    return page")
     return lines
 
 
@@ -825,7 +2031,7 @@ def _render_node_body(node: ExploredNode, *, current_var: str, indent: str) -> l
 
 
 def _import_generated_module(path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("_journey_explore_generated", path)
+    spec = importlib.util.spec_from_file_location("_journey_discover_generated", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not import generated Journey file {path}.")
     module = importlib.util.module_from_spec(spec)
@@ -862,22 +2068,31 @@ def _iter_edge_count(root: ExploredNode) -> int:
     return len([edge for edge in _iter_edges((root,))])
 
 
-def _normalize_options(options: ExploreOptions) -> ExploreOptions:
+def _normalize_options(options: DiscoverOptions) -> DiscoverOptions:
     if not options.urls:
-        raise ValueError("journey explore requires at least one URL.")
+        raise ValueError("journey discover requires at least one URL.")
     urls = tuple(_normalize_url(url) for url in options.urls)
     if options.depth <= 0:
-        raise ValueError("journey explore --depth must be a positive integer.")
+        raise ValueError("journey discover --depth must be a positive integer.")
     if options.max_actions <= 0:
-        raise ValueError("journey explore --max-actions must be a positive integer.")
+        raise ValueError("journey discover --max-actions must be a positive integer.")
+    if options.max_model_calls < 0:
+        raise ValueError("journey discover --max-model-calls must be zero or a positive integer.")
+    if options.max_variants_per_control <= 0:
+        raise ValueError("journey discover --max-variants-per-control must be a positive integer.")
+    if options.side_effect_probes not in {"auto", "off"}:
+        raise ValueError("journey discover --side-effect-probes must be auto or off.")
     if options.browser not in _SUPPORTED_BROWSERS:
-        raise ValueError("journey explore --browser must be chromium, firefox, or webkit.")
-    return ExploreOptions(
+        raise ValueError("journey discover --browser must be chromium, firefox, or webkit.")
+    return DiscoverOptions(
         urls=urls,
         output_file=options.output_file,
-        journey_name=_sanitize_identifier(options.journey_name, default="explored_journey"),
+        journey_name=_sanitize_identifier(options.journey_name, default="discovered_journey"),
         depth=options.depth,
         max_actions=options.max_actions,
+        max_model_calls=options.max_model_calls,
+        max_variants_per_control=options.max_variants_per_control,
+        side_effect_probes=options.side_effect_probes,
         browser=options.browser,
         headless=options.headless,
         model=options.model,
@@ -887,26 +2102,26 @@ def _normalize_options(options: ExploreOptions) -> ExploreOptions:
     )
 
 
-def _resolve_explore_model(model: str | None) -> str:
+def _resolve_discover_model(model: str | None) -> str:
     return resolve_prompt_model(
         model,
-        env_var=JOURNEY_EXPLORE_MODEL_ENV,
-        owner="journey explore",
-        default_model=DEFAULT_JOURNEY_EXPLORE_MODEL,
+        env_var=JOURNEY_DISCOVER_MODEL_ENV,
+        owner="journey discover",
+        default_model=DEFAULT_JOURNEY_DISCOVER_MODEL,
     )
 
 
 def _normalize_url(url: str) -> str:
     normalized = url.strip()
     if not normalized:
-        raise ValueError("journey explore URL values must be non-blank.")
+        raise ValueError("journey discover URL values must be non-blank.")
     parsed = urlsplit(normalized)
     if not parsed.scheme:
         normalized = f"http://{normalized}"
         parsed = urlsplit(normalized)
     if parsed.scheme not in {"http", "https", "file"}:
         raise ValueError(
-            "journey explore supports http, https, and file URLs. "
+            "journey discover supports http, https, and file URLs. "
             f"Got {parsed.scheme!r}."
         )
     return normalized
@@ -938,6 +2153,19 @@ def _state_slug(snapshot: PageSnapshot) -> str:
     parsed = urlsplit(snapshot.url)
     raw = snapshot.title or parsed.path or "page"
     return raw
+
+
+def _visible_assertion_text(snapshot: PageSnapshot) -> str | None:
+    for line in snapshot.visible_text.splitlines():
+        text = " ".join(line.strip().split())
+        if 3 <= len(text) <= 100:
+            return text
+    words = " ".join(snapshot.visible_text.split())
+    if 3 <= len(words) <= 100:
+        return words
+    if len(words) > 100:
+        return words[:100].rstrip()
+    return None
 
 
 def _sanitize_identifier(raw: str, *, default: str) -> str:
@@ -980,7 +2208,7 @@ class _NameAllocator:
         self._used: set[str] = set()
 
     def allocate(self, raw: str) -> str:
-        base = _sanitize_identifier(raw, default="explore_action")
+        base = _sanitize_identifier(raw, default="discover_action")
         candidate = base
         suffix = 2
         while candidate in self._used:

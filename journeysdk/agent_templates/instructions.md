@@ -40,7 +40,7 @@ journey --help
 journey loop --help
 journey verify --help
 journey evidence --help
-journey explore --help
+journey discover --help
 journey touchpoints browser
 journey touchpoints docker
 journey touchpoints email
@@ -58,7 +58,7 @@ journey evidence --step target_step
 journey verify --step target_step --file journeys/<feature>_journey.py --fresh
 journey verify --file journeys/<feature>_journey.py --fresh
 journey verify --step target_step --file journeys/<feature>_journey.py --output jsonl
-journey explore http://127.0.0.1:3000 --file journeys/<feature>_journey.py
+journey discover http://127.0.0.1:3000 --file journeys/<feature>_journey.py
 ```
 
 If the CLI prints `Retry failed step: ...`, copy that command as the focused loop. Read every `What happened`,
@@ -92,8 +92,10 @@ If the CLI prints `Retry failed step: ...`, copy that command as the focused loo
 - Step function names are stable CLI labels used by `journey loop`, `journey verify --step`, state files, retries, and
   branch replay. Rename them only when updating those references intentionally.
 - Keep planning side-effect free. Acquire browsers, cloud resources, services, and handles inside step execution.
-- If asked to bootstrap coverage from a running browser app, use `journey explore <url> --file journeys/<feature>_journey.py`
-  as a draft generator, then review the generated steps and run `journey verify --file ...` before claiming coverage.
+- If asked to bootstrap coverage from a running browser app, use `journey discover <url> --file journeys/<feature>_journey.py`
+  as a draft generator. Expect complete transition steps, bounded finite-choice branches, and best-effort generic
+  API/email/webhook evidence probes when stable identifiers and reachable endpoints are observed. Review the generated
+  steps and run `journey verify --file ...` before claiming coverage.
 
 ## Branches
 
