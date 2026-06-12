@@ -11,10 +11,11 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import urlsplit as urllib_parse_urlsplit
 
 from .agent_instructions import (
     install_agent_instructions,
@@ -276,6 +277,30 @@ class _ExecutedJourney:
     journey_name: str
     plan: JourneyPlan
     report: ExecutionReport
+
+
+@dataclass(frozen=True)
+class _DiscoverAnchorSelection:
+    journey: _CompiledJourney
+    case: CasePlan
+    target_index: int
+    candidates: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _DiscoverAnchorExecution:
+    result: object
+    side_outputs: dict[str, tuple[object, ...]]
+    release_step_resources: Callable[[], None] | None = None
+    cleanup: Callable[[], None] | None = None
+
+    def close_step_resources(self) -> None:
+        if self.release_step_resources is not None:
+            self.release_step_resources()
+
+    def close(self) -> None:
+        if self.cleanup is not None:
+            self.cleanup()
 
 
 def _labels_for_case(case: CasePlan) -> list[str]:
@@ -1356,6 +1381,135 @@ def _select_targeted_journey(
     return next(iter(flow_matches.values())), []
 
 
+def _is_discover_url_like(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    parsed = urllib_parse_urlsplit(stripped)
+    if "://" in stripped or stripped.startswith("file:"):
+        return parsed.scheme in {"http", "https", "file"}
+    first_segment = stripped.split("/", 1)[0]
+    host = first_segment.rsplit("@", 1)[-1].split(":", 1)[0].strip("[]").lower()
+    if host in {"localhost", "::1"}:
+        return True
+    if host.startswith("127.") or host == "0.0.0.0":
+        return True
+    if ":" in first_segment:
+        return True
+    return "." in host
+
+
+def _classify_discover_targets(values: Sequence[str]) -> tuple[str, tuple[str, ...]]:
+    if not values:
+        raise JourneySelectionError(
+            "journey discover requires a URL or one Journey step label.",
+            hint="Run `journey discover http://127.0.0.1:3000` or `journey discover open_main_page --file journeys/app.py`.",
+        )
+    url_flags = [_is_discover_url_like(value) for value in values]
+    if all(url_flags):
+        return "url", tuple(values)
+    if any(url_flags):
+        raise JourneySelectionError(
+            "journey discover cannot mix URL targets with step labels.",
+            hint="Pass either one or more URLs, or exactly one step label with --file.",
+        )
+    if len(values) != 1:
+        raise JourneySelectionError(
+            "journey discover step mode accepts exactly one step label.",
+            hint="Run `journey discover <step_label> --file journeys/app.py`.",
+        )
+    return "step", (values[0],)
+
+
+def _discover_anchor_prefix(case: CasePlan, target_index: int) -> tuple[tuple[str, ...], ...]:
+    prefix: list[tuple[str, ...]] = []
+    for node in case.nodes[:target_index]:
+        if isinstance(node, StepNode):
+            prefix.append(("step", node.node_id, node.label or "", node.fn_ref))
+        elif isinstance(node, BranchMarkerNode):
+            prefix.append(
+                (
+                    "branch",
+                    node.node_id,
+                    node.group_id,
+                    node.active_key,
+                    node.start_from or "",
+                )
+            )
+    return tuple(prefix)
+
+
+def _discover_anchor_candidate(
+    item: _CompiledJourney,
+    case: CasePlan,
+    target_index: int,
+) -> str:
+    prefix_labels = [
+        getattr(node, "label", None) or getattr(node, "node_id", "")
+        for node in case.nodes[: target_index + 1]
+        if isinstance(node, StepNode)
+    ]
+    return (
+        f"{item.file_path}:{item.journey_name}:{case.case_id}"
+        f" index={target_index} prefix={' > '.join(prefix_labels) or '<start>'}"
+    )
+
+
+def _select_discover_anchor(
+    compiled: list[_CompiledJourney],
+    *,
+    step: str,
+) -> tuple[_DiscoverAnchorSelection | None, list[_CommandError]]:
+    matches: list[tuple[_CompiledJourney, CasePlan, int, tuple[tuple[str, ...], ...], str]] = []
+    for item in compiled:
+        for case, target_index in _locate_step_matches(item.plan, step):
+            matches.append(
+                (
+                    item,
+                    case,
+                    target_index,
+                    _discover_anchor_prefix(case, target_index),
+                    _discover_anchor_candidate(item, case, target_index),
+                )
+            )
+    if not matches:
+        return None, [_error_from_exception(StepNotFoundError(step), phase="execute")]
+
+    groups = {
+        (item.file_path, item.journey_name, prefix)
+        for item, _case, _target_index, prefix, _candidate in matches
+    }
+    candidates = tuple(sorted(candidate for *_unused, candidate in matches))
+    if len(groups) != 1:
+        return None, [
+            _error_from_exception(
+                JourneySelectionError(
+                    f"Step {step!r} is ambiguous for journey discover.",
+                    hint=(
+                        "Use --file and --journey to select one Journey, or choose a step "
+                        "before the branch-specific paths diverge. Candidates: "
+                        + "; ".join(candidates)
+                    ),
+                ),
+                phase="execute",
+            )
+        ]
+
+    item, case, target_index, _prefix, _candidate = min(
+        matches,
+        key=lambda match: (str(match[0].file_path), match[0].journey_name, match[2], match[1].case_id),
+    )
+    return (
+        _DiscoverAnchorSelection(
+            journey=item,
+            case=case,
+            target_index=target_index,
+            candidates=candidates,
+        ),
+        [],
+    )
+
+
 def _paused_prompt(paused: _PausedExecution) -> str:
     status = _step_stop_status(paused, verb="Paused")
     if paused.paused_step.ok:
@@ -1717,6 +1871,123 @@ def _execute_target_step(
             report=report,
         )
     ], []
+
+
+def _execute_discover_anchor_step(
+    compiled: list[_CompiledJourney],
+    *,
+    root: Path,
+    step: str,
+) -> tuple[_DiscoverAnchorExecution | None, list[_CommandError]]:
+    selected, errors = _select_discover_anchor(compiled, step=step)
+    if selected is None:
+        return None, errors
+
+    try:
+        _CLI_LOGGER.info(
+            "discover_anchor_execution_start",
+            "executing journey anchor step for discovery",
+            pretty=False,
+            file=str(selected.journey.file_path),
+            journey=selected.journey.journey_name,
+            step=step,
+            case=selected.case.case_id,
+        )
+        report = _execute_plan(
+            selected.journey.function,
+            plan=selected.journey.plan,
+            develop_step=step,
+            selected_case_id=selected.case.case_id,
+            selected_stop_after_index=selected.target_index,
+            state=None,
+            observer=None,
+            no_state=True,
+            no_state_update=True,
+            no_memory=True,
+            no_memory_update=True,
+            no_browser_recording=True,
+            no_logs=True,
+            prompt_memory_root=_prompt_memory_root_for_target(selected.journey),
+        )
+    except Exception as exc:
+        _CLI_LOGGER.error(
+            "discover_anchor_execution_failure",
+            "journey discover anchor step execution failed",
+            pretty=(
+                f"{_pretty_target(display_file=_display_path(root, selected.journey.file_path), journey=selected.journey.journey_name)} "
+                f"failed: {_format_exception(exc)}"
+            ),
+            file=str(selected.journey.file_path),
+            journey=selected.journey.journey_name,
+            step=step,
+            error=_format_exception(exc),
+        )
+        return None, [
+            _error_from_exception(
+                exc,
+                phase="execute",
+                file_path=str(selected.journey.file_path),
+                journey_name=selected.journey.journey_name,
+            )
+        ]
+
+    target_node = selected.case.nodes[selected.target_index]
+    target_node_id = target_node.node_id if isinstance(target_node, StepNode) else None
+    cleanup: Callable[[], None] | None = None
+    if isinstance(report, _PausedExecution):
+        if report.case_report is None:
+            report.close_pending_exits()
+            return None, [
+                _CommandError(
+                    file=str(selected.journey.file_path),
+                    journey_name=selected.journey.journey_name,
+                    phase="execute",
+                    error_type="JourneySelectionError",
+                    message=f"Journey discover anchor step {step!r} paused before reporting its result.",
+                    hint="Use a stable completed step that returns JourneyBrowserPage or calls open_page(...).",
+                )
+            ]
+        case_reports = [report.case_report]
+        release_step_resources = report.close_pending_step_exits
+        cleanup = report.close_pending_case_exits
+    else:
+        case_reports = report.case_reports
+        release_step_resources = None
+
+    for case_report in case_reports:
+        if case_report.case_id != selected.case.case_id:
+            continue
+        for record in case_report.records:
+            if record.node_type != "StepNode":
+                continue
+            if target_node_id is not None and record.node_id != target_node_id:
+                continue
+            return (
+                _DiscoverAnchorExecution(
+                    result=record.result,
+                    side_outputs={
+                        key: tuple(values)
+                        for key, values in record.side_outputs.items()
+                    },
+                    release_step_resources=release_step_resources,
+                    cleanup=cleanup,
+                ),
+                [],
+            )
+
+    if cleanup is not None:
+        cleanup()
+    return None, [
+        _CommandError(
+            file=str(selected.journey.file_path),
+            journey_name=selected.journey.journey_name,
+            phase="execute",
+            error_type="StepNotFoundError",
+            message=f"Journey discover did not receive a result for anchor step {step!r}.",
+            hint="Check that the selected step executes successfully and returns JourneyBrowserPage or calls open_page(...).",
+            step_label=step,
+        )
+    ]
 
 
 def _reload_develop_target(
@@ -2353,14 +2624,87 @@ def _cmd_agent(args: argparse.Namespace) -> int:
 
 
 def _cmd_discover(args: argparse.Namespace) -> int:
-    from .discover import DiscoverOptions, discover
+    from .discover import (
+        DiscoverOptions,
+        AnchorEvidenceContext,
+        browser_state_from_step_anchor,
+        discover,
+        evidence_context_from_step_anchor,
+    )
 
     root = Path.cwd().resolve()
+    anchor_execution: _DiscoverAnchorExecution | None = None
+    anchor_evidence = AnchorEvidenceContext()
     try:
+        mode, targets = _classify_discover_targets(tuple(args.target))
+        if mode == "url" and args.file:
+            raise JourneySelectionError(
+                "journey discover URL mode does not accept --file; generated code is printed to stdout; redirect stdout if a file is desired.",
+                hint="Run `journey discover http://127.0.0.1:3000 > journeys/discovered_journey.py`.",
+            )
+        if mode == "step" and not args.file:
+            raise JourneySelectionError(
+                "journey discover step mode requires --file to select the source Journey file.",
+                hint="Run `journey discover open_main_page --file journeys/app_journey.py`.",
+            )
+
+        start_page_state = None
+        anchor_step = None
+        urls: tuple[str, ...] = ()
+        if mode == "step":
+            anchor_step = targets[0]
+            discovery_args = argparse.Namespace(
+                file=args.file,
+                journey=args.journey,
+                fail_fast=True,
+            )
+            root, discovered, discovery_errors = _discover_targets(discovery_args)
+            if discovery_errors:
+                _emit_errors(root, discovery_errors)
+                return 1
+            compiled, compile_errors = _compile_targets(discovered, fail_fast=True)
+            if compile_errors:
+                _emit_errors(root, compile_errors)
+                return 1
+            anchor_execution, anchor_errors = _execute_discover_anchor_step(
+                compiled,
+                root=root,
+                step=anchor_step,
+            )
+            if anchor_errors:
+                _emit_errors(root, anchor_errors)
+                return 1
+            if anchor_execution is None:
+                _emit_errors(
+                    root,
+                    [
+                        _CommandError(
+                            file=str(Path(args.file)),
+                            journey_name=args.journey,
+                            phase="execute",
+                            error_type="JourneySelectionError",
+                            message=f"Journey discover did not execute anchor step {anchor_step!r}.",
+                            hint="Check --file, --journey, and the selected step label.",
+                            step_label=anchor_step,
+                        )
+                    ],
+                )
+                return 1
+            start_page_state = browser_state_from_step_anchor(
+                anchor_execution.result,
+                side_outputs=anchor_execution.side_outputs,
+                step_label=anchor_step,
+            )
+            anchor_evidence = evidence_context_from_step_anchor(anchor_execution.result)
+            anchor_execution.close_step_resources()
+        else:
+            urls = targets
+
         result = discover(
             DiscoverOptions(
-                urls=tuple(args.url),
-                output_file=Path(args.file),
+                urls=urls,
+                start_page_state=start_page_state,
+                anchor_step=anchor_step,
                 journey_name=args.journey_name,
                 depth=args.depth,
                 max_actions=args.max_actions,
@@ -2371,16 +2715,29 @@ def _cmd_discover(args: argparse.Namespace) -> int:
                 headless=not args.headed,
                 model=args.model,
                 allow_external=args.allow_external,
-                force=args.force,
+                action_timeout_seconds=args.action_timeout,
+                email_evidence_urls=anchor_evidence.email_evidence_urls,
+                webhook_evidence_urls=anchor_evidence.webhook_evidence_urls,
+                cloud_webhook_endpoints=anchor_evidence.cloud_webhook_endpoints,
             )
         )
+        if anchor_execution is not None:
+            anchor_execution.close()
+            anchor_execution = None
     except Exception as exc:
+        if anchor_execution is not None:
+            try:
+                anchor_execution.close()
+            except Exception as cleanup_exc:  # pragma: no cover - defensive cleanup
+                exc.add_note(
+                    f"journey discover anchor cleanup failed: {_format_exception(cleanup_exc)}"
+                )
         _emit_errors(
             root,
             [
                 _CommandError(
                     file=args.file,
-                    journey_name=args.journey_name,
+                    journey_name=args.journey,
                     phase="discover",
                     error_type=type(exc).__name__,
                     message=str(exc) or type(exc).__name__,
@@ -2392,39 +2749,32 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         )
         return 1
 
-    verify_command = " ".join(
-        shlex.quote(part)
-        for part in (
-            "journey",
-            "verify",
-            "--file",
-            _display_path(root, result.output_file.resolve()),
-        )
-    )
+    if args.output == "source":
+        sys.stdout.write(result.source)
+        return 0
+
     _CLI_LOGGER.info(
         "discover_result",
-        f"Generated Journey spec at {result.output_file}",
+        "journey discover generated Python source",
         pretty=[
-            pretty_line(f"Generated Journey spec: {result.output_file}", style="success"),
             pretty_line(
                 (
-                    f"  journey={result.journey_name} actions={result.actions} "
+                    f"Generated Journey source: mode={result.mode} journey={result.journey_name} actions={result.actions} "
                     f"branches={result.branches} omitted={result.omitted_actions} "
                     f"model_calls={result.model_calls} stop={result.stop_reason}"
                 ),
                 style="success",
             ),
-            pretty_line("Next commands:", style="success"),
-            pretty_line(f"  {verify_command}", style="success"),
         ],
-        output_file=str(result.output_file),
+        source=result.source,
+        mode=result.mode,
         journey_name=result.journey_name,
+        extension_name=result.extension_name,
         actions=result.actions,
         branches=result.branches,
         omitted_actions=result.omitted_actions,
         model_calls=result.model_calls,
         stop_reason=result.stop_reason,
-        next_commands=(verify_command,),
     )
     return 0
 
@@ -4040,32 +4390,41 @@ def build_touchpoints_parser() -> argparse.ArgumentParser:
 def build_discover_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey discover",
-        description="crawl app URLs and generate a branched Journey spec",
+        description="crawl app URLs or continue from a Journey browser step and print generated Journey source",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Browser discovery:\n"
-            "  journey discover http://127.0.0.1:3000 --file journeys/discovered_journey.py\n"
-            "      Use Claude Haiku to discover user paths and write deterministic Playwright steps.\n"
-            "  journey discover http://127.0.0.1:18081 --depth 4 --max-actions 30 --max-model-calls 8 --force\n"
-            "      Discover more of a local app and replace the generated file.\n"
+            "  journey discover http://127.0.0.1:3000 > journeys/discovered_journey.py\n"
+            "      Use Claude Haiku to discover user paths and print a deterministic Journey draft.\n"
+            "  journey discover open_main_page --file journeys/app_journey.py\n"
+            "      Run an existing browser step, discover from that page, and print a pasteable snippet.\n"
+            "  journey discover http://127.0.0.1:18081 --depth 4 --max-actions 30 --max-model-calls 8 --output jsonl\n"
+            "      Emit discovery events plus a final discover_result event containing the generated source.\n"
             "\n"
-            "The generated Journey is a draft test suite. Review it, then run:\n"
-            "  journey verify --file journeys/discovered_journey.py\n"
+            "Generated code is never written by this command. Redirect stdout in URL mode,\n"
+            "or paste the printed snippet into the source Journey in step mode.\n"
             "\n"
             "Model selection follows --model, then JOURNEY_BROWSER_PROMPT_MODEL, then "
             "anthropic:claude-haiku-4-5."
         ),
     )
-    parser.add_argument("url", nargs="+", help="Start URL to discover; may be repeated")
+    parser.add_argument(
+        "target",
+        nargs="+",
+        help="Start URL(s), or exactly one Journey step label for step-anchored discovery",
+    )
     parser.add_argument(
         "--file",
-        default="journeys/discovered_journey.py",
-        help="Generated Journey file path (default: journeys/discovered_journey.py)",
+        help="Source Journey file to search in step mode; rejected in URL mode",
+    )
+    parser.add_argument(
+        "--journey",
+        help="Existing @journey function name to search in step mode",
     )
     parser.add_argument(
         "--journey-name",
         default="discovered_journey",
-        help="Generated @journey function name (default: discovered_journey)",
+        help="Generated @journey function name for URL-mode source (default: discovered_journey)",
     )
     parser.add_argument(
         "--depth",
@@ -4090,6 +4449,12 @@ def build_discover_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Maximum finite select/radio/checkbox variants per control (default: 3)",
+    )
+    parser.add_argument(
+        "--action-timeout",
+        type=float,
+        default=30.0,
+        help="Maximum seconds for one exploratory action attempt (default: 30)",
     )
     parser.add_argument(
         "--side-effect-probes",
@@ -4118,11 +4483,19 @@ def build_discover_parser() -> argparse.ArgumentParser:
         help="Allow discovery to follow off-origin navigations",
     )
     parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Replace an existing generated Journey file",
+        "--output",
+        choices=("source", "jsonl"),
+        default="source",
+        help="Set discover output format (default: source)",
     )
-    _add_runtime_output_arguments(parser)
+    parser.add_argument(
+        "--log-level",
+        "--level",
+        dest="log_level",
+        choices=("debug", "info", "warning", "error", "off"),
+        default="info",
+        help="Set Journey diagnostic logging level (default: info)",
+    )
     return parser
 
 def build_agent_parser() -> argparse.ArgumentParser:
@@ -4192,8 +4565,10 @@ def build_parser() -> argparse.ArgumentParser:
             "      Freshly verify the whole journey before finishing.\n"
             "  journey evidence --step <step_label>\n"
             "      Inspect traces, videos, structured logs, and touchpoint payloads.\n"
-            "  journey discover <url> --file journeys/discovered_journey.py\n"
-            "      Crawl an app URL and generate a draft branched Journey spec.\n"
+            "  journey discover <url> > journeys/discovered_journey.py\n"
+            "      Crawl an app URL and print a draft branched Journey spec.\n"
+            "  journey discover <step_label> --file journeys/<feature>_journey.py\n"
+            "      Continue from an existing browser step and print a pasteable coverage snippet.\n"
             "  journey touchpoints browser|docker|email|webhook|http|all\n"
             "      Print packaged touchpoint references for helpers used inside steps.\n"
             "\n"
@@ -4240,10 +4615,18 @@ def _preconfigure_logging(argv: list[str]) -> None:
     )
     output = _extract_option_value(argv, "--output")
     output_format = output if output in {"pretty", "jsonl"} else "pretty"
+    discover_help = argv and argv[0] == "discover" and any(
+        value in {"--help", "-h"} for value in argv[1:]
+    )
+    stream = (
+        sys.stderr
+        if argv and argv[0] == "discover" and output != "jsonl" and not discover_help
+        else None
+    )
     try:
-        configure_logging(level, output_format=output_format)  # type: ignore[arg-type]
+        configure_logging(level, stream=stream, output_format=output_format)  # type: ignore[arg-type]
     except ValueError:
-        configure_logging("info", output_format=output_format)
+        configure_logging("info", stream=stream, output_format=output_format)
 
 
 def _active_environment_python() -> Path | None:
@@ -4300,7 +4683,10 @@ def main(argv: list[str] | None = None) -> int:
     if raw_argv and raw_argv[0] == "discover":
         parser = build_discover_parser()
         args = parser.parse_args(raw_argv[1:])
-        configure_logging(args.log_level, output_format=args.output)
+        if args.output == "source":
+            configure_logging(args.log_level, stream=sys.stderr, output_format="pretty")
+        else:
+            configure_logging(args.log_level, output_format="jsonl")
         return _cmd_discover(args)
     if raw_argv and raw_argv[0] == "loop":
         parser = build_loop_parser()

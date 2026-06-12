@@ -423,6 +423,37 @@ def test_single_branch_group_compiles_to_one_case_per_branch():
     )
 
 
+def test_branch_group_inside_direct_helper_function_compiles():
+    def setup():
+        return "setup"
+
+    def first_path(_setup):
+        return "first"
+
+    def second_path(_setup):
+        return "second"
+
+    def discovered_extension(anchor):
+        if journey_sdk.branch(replay_from=anchor):
+            journey_sdk.step(first_path, anchor)
+        elif journey_sdk.branch(replay_from=anchor):
+            journey_sdk.step(second_path, anchor)
+
+    def journey():
+        anchor = journey_sdk.step(setup)
+        discovered_extension(anchor)
+
+    plan = journey_sdk.compile_journey(journey)
+
+    assert len(plan.case_plans) == 2
+    assert sorted(_labels(case) for case in plan.case_plans) == sorted(
+        [
+            ["setup", "first_path"],
+            ["setup", "second_path"],
+        ]
+    )
+
+
 def test_nested_branch_groups_expand_recursively_only_when_reachable():
     def journey():
         if journey_sdk.branch():
@@ -3457,7 +3488,7 @@ def test_execute_state_sanitizes_completed_step_record_results(tmp_path):
 
     payload = json.loads(state_file.read_text(encoding="utf-8"))
     assert payload["format"] == "journey.execution_state"
-    assert payload["version"] == 12
+    assert payload["version"] == 13
     assert payload["validity"]["fingerprints"]
     encoded_result = payload["completed_case_reports"][0]["records"][0]["result"]
     assert encoded_result["encoding"] == "pickle-base64"

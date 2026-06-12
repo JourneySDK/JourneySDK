@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
 StepRetryDelay: TypeAlias = int | float | timedelta
@@ -109,6 +109,7 @@ class NodeExecutionRecord:
     status: NodeExecutionStatus
     result: StepResult = None
     error: str | None = None
+    side_outputs: dict[str, tuple[object, ...]] = field(default_factory=dict)
 
 
 @dataclass

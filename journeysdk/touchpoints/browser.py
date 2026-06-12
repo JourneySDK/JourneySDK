@@ -25,7 +25,9 @@ from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import (
     _allocate_log_artifact,
     _allocate_browser_recording,
+    _get_step_side_outputs,
     _register_step_exit_object,
+    _register_step_side_output,
     _require_executing_step,
 )
 from journeysdk.executor import (
@@ -75,6 +77,7 @@ _REHYDRATE_STORAGE_SCRIPT = """
 """
 
 _SUPPORTED_BROWSERS = {"chromium", "firefox", "webkit"}
+_BROWSER_PAGE_SIDE_OUTPUT = "browser_page"
 _BROWSER_INSTALL_LOCK = Lock()
 _NAVIGATION_RETRY_ATTEMPTS = 5
 _NAVIGATION_RETRY_DELAY_SECONDS = 0.25
@@ -1119,6 +1122,7 @@ def open_page(
             page.evaluate(_REHYDRATE_STORAGE_SCRIPT, local_storage)
             _retry_navigation(lambda: page.reload(wait_until="load"))
         _register_step_exit_object("open_page", page)
+        _register_step_side_output("open_page", _BROWSER_PAGE_SIDE_OUTPUT, page)
         _LOGGER.info(
             "open_page_success",
             "browser page opened",
@@ -1231,6 +1235,41 @@ def _launch_browser_with_auto_install(
             raise
         _install_playwright_browser(browser)
         return launch(headless=headless, handle_sigint=False)
+
+
+def browser_pages_from_step_result(step_result: object) -> tuple[JourneyBrowserPage, ...]:
+    """Return browser pages opened by the step that produced ``step_result``."""
+
+    outputs = _get_step_side_outputs(
+        "browser_pages_from_step_result",
+        step_result,
+        _BROWSER_PAGE_SIDE_OUTPUT,
+    )
+    pages = tuple(
+        output for output in outputs if isinstance(output, JourneyBrowserPage)
+    )
+    if not pages:
+        raise TypeError(
+            "The selected step did not return or open a JourneyBrowserPage. "
+            "Use a step that calls open_page(...) or returns JourneyBrowserPage."
+        )
+    return pages
+
+
+def browser_page_from_step_result(
+    step_result: object,
+    *,
+    index: int = -1,
+) -> JourneyBrowserPage:
+    """Return one browser page opened by the step that produced ``step_result``."""
+
+    pages = browser_pages_from_step_result(step_result)
+    try:
+        return pages[index]
+    except IndexError as exc:
+        raise IndexError(
+            f"Step result has {len(pages)} browser page side output(s); index {index} is out of range."
+        ) from exc
 
 
 def _close_open_page_after_interrupt(
@@ -1451,6 +1490,8 @@ def _cleanup_failure_message(failures: list[BaseException]) -> str:
 __all__ = [
     "BrowserCookie",
     "JourneyBrowserPage",
+    "browser_page_from_step_result",
+    "browser_pages_from_step_result",
     "ensure_browser_installed",
     "open_page",
 ]

@@ -275,26 +275,47 @@ class _PausedExecution:
     paused_step: PausedStepState
     _pending_exit_objects: tuple[_StepExitObject, ...] = ()
     _pending_case_exit_objects: tuple[_CaseExitObject, ...] = ()
-    _pending_exits_closed: bool = field(default=False, init=False, repr=False)
+    case_report: CaseExecutionReport | None = None
+    _pending_step_exits_closed: bool = field(default=False, init=False, repr=False)
+    _pending_case_exits_closed: bool = field(default=False, init=False, repr=False)
 
-    def close_pending_exits(self) -> None:
-        if self._pending_exits_closed:
-            return
-        self._pending_exits_closed = True
-
+    def _close_pending_step_exit_objects(self) -> list[BaseException]:
+        if self._pending_step_exits_closed:
+            return []
+        self._pending_step_exits_closed = True
         step_failures: list[BaseException] = []
         for value in reversed(self._pending_exit_objects):
             try:
                 value.__exit__(None, None, None)
             except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
                 step_failures.append(cleanup_exc)
+        return step_failures
 
+    def _close_pending_case_exit_objects(self) -> list[BaseException]:
+        if self._pending_case_exits_closed:
+            return []
+        self._pending_case_exits_closed = True
         case_failures: list[BaseException] = []
         for value in reversed(self._pending_case_exit_objects):
             try:
                 value.__case_exit__(None, None, None)
             except BaseException as cleanup_exc:  # pragma: no cover - exercised through callers
                 case_failures.append(cleanup_exc)
+        return case_failures
+
+    def close_pending_step_exits(self) -> None:
+        step_failures = self._close_pending_step_exit_objects()
+        if step_failures:
+            raise RuntimeError(_cleanup_failure_message(step_failures))
+
+    def close_pending_case_exits(self) -> None:
+        case_failures = self._close_pending_case_exit_objects()
+        if case_failures:
+            raise RuntimeError(_case_cleanup_failure_message(case_failures))
+
+    def close_pending_exits(self) -> None:
+        step_failures = self._close_pending_step_exit_objects()
+        case_failures = self._close_pending_case_exit_objects()
 
         if step_failures and case_failures:
             raise RuntimeError(
@@ -1260,7 +1281,15 @@ def _copy_binding(binding: StepBindingState) -> StepBindingState:
         result=binding.result,
         fn_ref=binding.fn_ref,
         source_fingerprint=binding.source_fingerprint,
+        side_outputs={
+            key: tuple(values)
+            for key, values in binding.side_outputs.items()
+        },
     )
+
+
+def _side_output_context_kind(kind: str) -> str:
+    return re.sub(r"[^0-9A-Za-z_.-]+", "-", kind).strip("-") or "value"
 
 
 def _copy_runtime_snapshot(snapshot: RuntimeSnapshotState) -> RuntimeSnapshotState:
@@ -1287,6 +1316,7 @@ def _record_with_status(
         status=status,
         result=record.result,
         error=record.error,
+        side_outputs=dict(record.side_outputs),
     )
 
 
@@ -1320,6 +1350,7 @@ def _state_record(record: NodeExecutionRecord) -> NodeExecutionRecord:
         status=record.status,
         result=result,
         error=record.error,
+        side_outputs={},
     )
 
 
@@ -2208,6 +2239,7 @@ class _RunSession:
         self._step_bindings: dict[str, StepBindingState] = {}
         self._step_input_cache: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
         self._step_result_cache: dict[str, Any] = {}
+        self._step_side_output_cache: dict[tuple[str, str], tuple[Any, ...]] = {}
         self._step_binding_contexts: dict[str, JourneyRestoreContext] = {}
         self._retry_remaining: dict[str, int] = {}
         self._step_attempts: dict[str, int] = {}
@@ -2333,6 +2365,8 @@ class _RunSession:
             )
             self._step_input_cache.pop(key, None)
             self._step_result_cache.pop(key, None)
+            for kind in binding.side_outputs:
+                self._step_side_output_cache.pop((key, kind), None)
         self._retry_remaining = restored.retry_remaining
         self._step_attempts = restored.step_attempts
         self.replay_from_index = (max(self._record_indices) + 1) if self._record_indices else 0
@@ -2354,6 +2388,7 @@ class _RunSession:
         }
         self._step_input_cache = {}
         self._step_result_cache = {}
+        self._step_side_output_cache = {}
         self._retry_remaining = restored.retry_remaining
         self.replay_from_index = restored_state.replay_from_index
         self._dirty_node_id = restored_state.dirty_node_id
@@ -2500,6 +2535,7 @@ class _RunSession:
         status: NodeExecutionStatus,
         result: Any = None,
         error: str | None = None,
+        side_outputs: dict[str, tuple[object, ...]] | None = None,
     ) -> bool:
         label = getattr(node, "label", None)
         self._record_indices.append(node_index)
@@ -2511,6 +2547,7 @@ class _RunSession:
                 status=status,
                 result=result,
                 error=error,
+                side_outputs=dict(side_outputs or {}),
             )
         )
         self._persist_state()
@@ -2584,9 +2621,14 @@ class _RunSession:
             if binding is not None:
                 binding.has_result = False
                 binding.result = None
+                binding.side_outputs = {}
             if index not in self._replay_policy.input_indices:
                 self._step_input_cache.pop(binding_key, None)
             self._step_result_cache.pop(binding_key, None)
+            for cache_key in [
+                key for key in self._step_side_output_cache if key[0] == binding_key
+            ]:
+                self._step_side_output_cache.pop(cache_key, None)
             if node.node_id != preserve_retry_for:
                 self._retry_remaining.pop(node.node_id, None)
 
@@ -2729,13 +2771,51 @@ class _RunSession:
         binding.has_result = True
         return binding
 
+    def _set_step_side_outputs(
+        self,
+        node: StepNode,
+        side_outputs: dict[str, tuple[Any, ...]],
+    ) -> None:
+        binding_key = self._step_key_by_id[node.node_id]
+        binding = self._step_bindings.get(binding_key)
+        if binding is None:
+            binding = self._store_step_inputs(node, (), {})
+
+        binding.side_outputs = {}
+        for kind, values in side_outputs.items():
+            materialized = tuple(values)
+            if not materialized:
+                continue
+            self._step_side_output_cache[(binding_key, kind)] = materialized
+            if not self._rehydration_enabled or self._state_controller is None:
+                continue
+            context_kind = _side_output_context_kind(kind)
+            binding.side_outputs[kind] = tuple(
+                self._store_runtime_value(
+                    value,
+                    context=self._binding_store_context(binding_key).child(
+                        f"side-output-{context_kind}-{index}"
+                    ),
+                    description=(
+                        f"side output {kind!r} {index + 1} for "
+                        f"step '{node.label or node.node_id}'"
+                    ),
+                )
+                for index, value in enumerate(materialized)
+            )
+
     def _discard_step_result(self, node: StepNode) -> None:
         binding_key = self._step_key_by_id[node.node_id]
         binding = self._step_bindings.get(binding_key)
         if binding is not None:
             binding.has_result = False
             binding.result = None
+            binding.side_outputs = {}
         self._step_result_cache.pop(binding_key, None)
+        for cache_key in [
+            key for key in self._step_side_output_cache if key[0] == binding_key
+        ]:
+            self._step_side_output_cache.pop(cache_key, None)
 
     def _remember_step_result(self, node: StepNode, result: Any) -> None:
         self._runtime_step_result_ids.setdefault(id(result), set()).add(node.node_id)
@@ -2748,6 +2828,33 @@ class _RunSession:
                 "branch(replay_from=...) accepts a value returned by an earlier step() call. Omit replay_from to start from scratch."
             )
         return _RuntimeStepAnchor(frozenset(node_ids))
+
+    def _get_step_side_outputs(self, step_result: Any, kind: str) -> tuple[Any, ...]:
+        node_ids = self._runtime_step_result_ids.get(id(step_result))
+        if not node_ids:
+            raise TypeError(
+                "Step side outputs can only be read from a value returned by an earlier step() call."
+            )
+        outputs: list[Any] = []
+        for node_id in sorted(
+            node_ids,
+            key=lambda item: self._step_index_by_id.get(item, len(self.case_plan.nodes)),
+        ):
+            binding_key = self._step_key_by_id.get(node_id)
+            if binding_key is None:
+                continue
+            binding = self._step_bindings.get(binding_key)
+            if binding is None:
+                continue
+            outputs.extend(
+                self._materialize_step_side_outputs(
+                    binding_key,
+                    binding,
+                    kind,
+                    description=f"side output {kind!r} for step '{node_id}'",
+                )
+            )
+        return tuple(outputs)
 
     def _handle_step_exception(
         self,
@@ -2965,6 +3072,36 @@ class _RunSession:
         self._step_result_cache[binding_key] = restored
         return restored
 
+    def _materialize_step_side_outputs(
+        self,
+        binding_key: str,
+        binding: StepBindingState,
+        kind: str,
+        *,
+        description: str,
+    ) -> tuple[Any, ...]:
+        cached = self._step_side_output_cache.get((binding_key, kind))
+        if cached is not None:
+            return cached
+        stored_values = binding.side_outputs.get(kind)
+        if not stored_values:
+            return ()
+        context = self._step_binding_contexts.get(binding_key)
+        if context is None:
+            context = self._binding_restore_context(binding_key)
+            self._step_binding_contexts[binding_key] = context
+        context_kind = _side_output_context_kind(kind)
+        restored = tuple(
+            self._restore_stored_value(
+                stored,
+                context=context.child(f"side-output-{context_kind}-{index}"),
+                description=f"{description} {index + 1}",
+            )
+            for index, stored in enumerate(stored_values)
+        )
+        self._step_side_output_cache[(binding_key, kind)] = restored
+        return restored
+
     def _store_runtime_value(
         self,
         value: Any,
@@ -3007,6 +3144,39 @@ class _RunSession:
                 str(exc),
                 hint="Inspect the custom __restore__ implementation or restart the run after fixing the underlying issue.",
             ) from exc
+
+    def _freeze_binding_side_outputs(
+        self,
+        binding_key: str,
+        binding: StepBindingState,
+        *,
+        context: JourneyStoreContext,
+        description_prefix: str,
+    ) -> dict[str, tuple[StoredValue, ...]]:
+        cached_kinds = [
+            kind
+            for cache_binding_key, kind in self._step_side_output_cache
+            if cache_binding_key == binding_key
+        ]
+        for kind in cached_kinds:
+            if kind in binding.side_outputs:
+                continue
+            cached_values = self._step_side_output_cache.get((binding_key, kind), ())
+            context_kind = _side_output_context_kind(kind)
+            binding.side_outputs[kind] = tuple(
+                self._store_runtime_value(
+                    value,
+                    context=context.child(f"side-output-{context_kind}-{index}"),
+                    description=(
+                        f"{description_prefix} side output {kind!r} {index + 1}"
+                    ),
+                )
+                for index, value in enumerate(cached_values)
+            )
+        return {
+            kind: tuple(values)
+            for kind, values in binding.side_outputs.items()
+        }
 
     def _freeze_binding(
         self,
@@ -3077,6 +3247,12 @@ class _RunSession:
                         description=f"{description_prefix} result",
                     )
             frozen.result = binding.result
+            frozen.side_outputs = self._freeze_binding_side_outputs(
+                binding_key,
+                binding,
+                context=context,
+                description_prefix=description_prefix,
+            )
         return frozen
 
     def _freeze_branch_anchor_binding(
@@ -3104,6 +3280,12 @@ class _RunSession:
                 )
             else:
                 frozen.result = binding.result
+            frozen.side_outputs = self._freeze_binding_side_outputs(
+                binding_key,
+                binding,
+                context=context,
+                description_prefix=description_prefix,
+            )
         return frozen
 
     def _binding_store_context(self, binding_key: str) -> JourneyStoreContext:
@@ -3170,6 +3352,18 @@ class _RunSession:
                 ),
             )
         lifecycle._register_exit_object(value)
+
+    def _register_step_side_output(self, kind: str, value: Any) -> None:
+        lifecycle = self._active_step_lifecycle
+        if lifecycle is None or lifecycle.phase != _STEP_LIFECYCLE_EXECUTION:
+            raise InvalidBranchUsageError(
+                "Step side outputs can only be registered while a step is running.",
+                hint=(
+                    "Call lifecycle-aware touchpoints from inside a function passed to "
+                    "step(...), not during planning, module import, or between steps."
+                ),
+            )
+        lifecycle._register_side_output(kind, value)
 
     def _register_case_exit_object(self, value: _CaseExitObject) -> None:
         lifecycle = self._active_step_lifecycle
@@ -3312,6 +3506,7 @@ class _RunSession:
         started_at: float,
         output: Any,
         binding: StepBindingState,
+        side_outputs: dict[str, tuple[object, ...]] | None = None,
     ) -> bool:
         self._remember_step_result(node, output)
         self._retry_remaining.pop(node.node_id, None)
@@ -3322,6 +3517,7 @@ class _RunSession:
             node,
             status="executed",
             result=output,
+            side_outputs=side_outputs,
         )
         self._observer.on_step_success(
             case_plan=self.case_plan,
@@ -3650,6 +3846,7 @@ class _StepLifecycle:
     started_at: float = 0.0
     registered_exit_objects: list[_StepExitObject] = field(default_factory=list)
     registered_case_exit_objects: list[_CaseExitObject] = field(default_factory=list)
+    registered_side_outputs: dict[str, list[Any]] = field(default_factory=dict)
     exit_objects: tuple[_StepExitObject, ...] = ()
     _success_committed: bool = False
 
@@ -3776,6 +3973,11 @@ class _StepLifecycle:
         if all(id(value) != id(existing) for existing in self.registered_exit_objects):
             self.registered_exit_objects.append(value)
 
+    def _register_side_output(self, kind: str, value: Any) -> None:
+        values = self.registered_side_outputs.setdefault(kind, [])
+        if all(id(value) != id(existing) for existing in values):
+            values.append(value)
+
     def _register_case_exit_object(self, value: _CaseExitObject) -> None:
         if all(
             id(value) != id(existing)
@@ -3814,6 +4016,10 @@ class _StepLifecycle:
         exit_objects = self._exit_objects_for_output(output)
         try:
             binding = self.session._set_step_result(self.node, output)
+            self.session._set_step_side_outputs(
+                self.node,
+                self._side_outputs_for_report(),
+            )
         except Exception as exc:
             cleanup_failures = self.session._close_step_exit_objects(
                 exit_objects,
@@ -3831,6 +4037,13 @@ class _StepLifecycle:
             raise
         self.exit_objects = exit_objects
         return binding
+
+    def _side_outputs_for_report(self) -> dict[str, tuple[object, ...]]:
+        return {
+            kind: tuple(values)
+            for kind, values in self.registered_side_outputs.items()
+            if values
+        }
 
     def _pre_exit(self, output: Any, binding: StepBindingState) -> bool:
         self._enter(_STEP_LIFECYCLE_PRE_EXIT)
@@ -3904,6 +4117,7 @@ class _StepLifecycle:
             started_at=self.started_at,
             output=output,
             binding=binding,
+            side_outputs=self._side_outputs_for_report(),
         )
 
     def _post_exit(self) -> None:
@@ -4656,6 +4870,8 @@ def _execute_plan(
     plan: JourneyPlan,
     step: str | None = None,
     develop_step: str | None = None,
+    selected_case_id: str | None = None,
+    selected_stop_after_index: int | None = None,
     pause_action: str | None = None,
     state: str | Path | None = None,
     observer: _ExecutionObserver | None = None,
@@ -4674,7 +4890,23 @@ def _execute_plan(
     if not clean_browser_recordings:
         clean_logs = False
     target_step = develop_step if develop_step is not None else step
-    selected_cases = _select_cases(plan, target_step)
+    if selected_case_id is not None:
+        case_plan = next(
+            (case for case in plan.case_plans if case.case_id == selected_case_id),
+            None,
+        )
+        if case_plan is None:
+            raise ValueError(
+                f"Selected case {selected_case_id!r} was not found in the Journey plan."
+            )
+        selected_cases = [
+            _SelectedCase(
+                case_plan=case_plan,
+                stop_after_index=selected_stop_after_index,
+            )
+        ]
+    else:
+        selected_cases = _select_cases(plan, target_step)
     validation = validate_journey(journey_fn)
     execution_observer = observer or _LoggingExecutionObserver()
     log_root = _resolve_log_root(journey_fn)
@@ -4874,10 +5106,19 @@ def _execute_plan(
                             )
                         break
                 except _PauseRequested as pause_request:
+                    paused_report = CaseExecutionReport(
+                        case_id=selected_case.case_plan.case_id,
+                        branch_env=dict(selected_case.case_plan.branch_env),
+                        records=list(run_session.records),
+                        completed=False,
+                        stopped_at_label=pause_request.paused_step.label,
+                        replay_anchor=replay_anchor if step is not None else None,
+                    )
                     return _PausedExecution(
                         pause_request.paused_step,
                         pause_request.pending_exit_objects,
                         run_session._pop_case_exit_objects(),
+                        paused_report,
                     )
                 except BaseException as exc:
                     cleanup_failures = run_session._close_case_exit_objects(

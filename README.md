@@ -96,10 +96,14 @@ unless `--force` is passed.
 
 If you are authoring a journey by hand, use [Getting Started](docs/01-getting-started.md). It covers imports,
 top-level `@journey` functions, running one file, selecting one journey, and JSON Lines output for tools.
-If you want a draft from a running browser app, use `journey discover <url> --file journeys/<feature>_journey.py`.
+If you want a draft from a running browser app, use `journey discover <url> > journeys/<feature>_journey.py`.
 It crawls complete same-origin user transitions, expands bounded finite choices such as selects and radios into
-branches, adds best-effort generic API/email/webhook evidence probes when stable identifiers are observable, and writes
-deterministic Playwright steps. Review the generated draft, then run `journey verify --file ...`.
+branches, bounds failed exploratory actions with `--action-timeout`, adds best-effort generic API/email/webhook and SDK
+Cloud webhook evidence probes when stable identifiers are observable, and prints deterministic Playwright steps. Review
+the generated draft, then run `journey verify --file ...`. To extend an existing
+Journey from a browser step, run `journey discover <step_label> --file journeys/<feature>_journey.py`; the command runs
+that step, uses its returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`, and prints a
+pasteable snippet instead of editing the file.
 
 ## Authoring Guides
 
@@ -118,8 +122,8 @@ The docs index is [Journey Docs](docs/README.md).
 
 Use `journey --help` as the short command index. Use `journey loop --help` for the focused edit loop,
 `journey verify --help` for branch/full verification, `journey evidence --help` for artifact inspection,
-`journey discover --help` before generating a draft journey from a URL, and `journey agent --help` before printing or
-installing assistant guidance.
+`journey discover --help` before generating a draft journey from a URL or existing browser step, and
+`journey agent --help` before printing or installing assistant guidance.
 
 ## Touchpoint References
 

@@ -23,7 +23,7 @@ from .models import (
 )
 from .rehydration import StoredValue
 
-STATE_FORMAT_VERSION = 12
+STATE_FORMAT_VERSION = 13
 DEFAULT_STATE_FILENAME = "state.json"
 DEFAULT_STATE_DIR = ".journey"
 
@@ -53,6 +53,7 @@ class StepBindingState:
     result: StoredValue | None = None
     fn_ref: str | None = None
     source_fingerprint: str | None = None
+    side_outputs: dict[str, tuple[StoredValue, ...]] = field(default_factory=dict)
 
 
 @dataclass
@@ -469,6 +470,10 @@ def _encode_step_binding(binding: StepBindingState) -> dict[str, object]:
         ),
         "fn_ref": binding.fn_ref,
         "source_fingerprint": binding.source_fingerprint,
+        "side_outputs": {
+            key: [_encode_stored_value(value) for value in values]
+            for key, values in binding.side_outputs.items()
+        },
     }
 
 
@@ -494,6 +499,16 @@ def _decode_step_binding(payload: object) -> StepBindingState:
             data.get("source_fingerprint"),
             "source_fingerprint",
         ),
+        side_outputs={
+            key: tuple(
+                _decode_stored_value(item)
+                for item in _require_list(value, f"side_outputs[{key!r}]")
+            )
+            for key, value in _require_dict(
+                data.get("side_outputs", {}),
+                "side_outputs",
+            ).items()
+        },
     )
 
 

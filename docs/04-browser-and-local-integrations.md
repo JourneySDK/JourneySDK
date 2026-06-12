@@ -141,19 +141,40 @@ Use `journey touchpoints browser` for `JourneyBrowserPage`, page rehydration, li
 Use `journey discover` when a local app is running and you want Journey to draft broad browser coverage from the app UI:
 
 ```bash
-uv run journey discover http://127.0.0.1:3000 --file journeys/discovered_journey.py
+uv run journey discover http://127.0.0.1:3000 > journeys/discovered_journey.py
 uv run journey verify --file journeys/discovered_journey.py
 ```
 
 The discoverer opens the start URL, extracts forms, links, buttons, labels, `data-testid`s, finite controls, and route
 text, then tries complete deterministic transitions such as fill-select-submit before asking the configured Claude Haiku
 model for uncertain next transitions. Select, radio, and checkbox choices are branched up to
-`--max-variants-per-control`; discovered stable identifiers can feed generic same-origin JSON, local email, and local
-webhook evidence assertions when those endpoints are reachable. Use `JOURNEY_DISCOVER_EMAIL_EVIDENCE_URL` and
+`--max-variants-per-control`; failed exploratory actions are bounded by `--action-timeout`. Discovered stable identifiers
+can feed generic same-origin JSON, local email, local webhook, and SDK Cloud webhook evidence assertions when those
+endpoints are reachable. Use `JOURNEY_DISCOVER_EMAIL_EVIDENCE_URL` and
 `JOURNEY_DISCOVER_WEBHOOK_EVIDENCE_URL` to point discovery at local evidence services that are not on their usual
-development ports. It executes restricted Playwright snippets during discovery and writes deterministic `open_page(...)`
-step helpers with `branch(...)` where it finds alternate paths. The generated file is a draft: review step boundaries,
+development ports. It executes restricted Playwright snippets during discovery and prints deterministic `open_page(...)`
+step helpers with `branch(...)` where it finds alternate paths. The generated source is a draft: review step boundaries,
 fixture data, and assertions before treating it as committed coverage.
+
+Discovery can also start from an existing Journey browser step:
+
+```bash
+uv run journey discover open_main_page --file journeys/app_journey.py
+```
+
+In step mode, `--file` points at the existing Journey file and `--journey` can disambiguate the existing entrypoint.
+Journey executes only through the anchor step with temporary state and no browser recording, then uses the step result
+if it is `JourneyBrowserPage`, otherwise the last browser page opened by `open_page(...)` inside that step. Discover
+restores the page URL, cookies, and local storage in its browser context and prints a pasteable snippet:
+
+```python
+main_page = step(open_main_page)
+discover_after_open_main_page(main_page)
+```
+
+Use this when a new feature is reachable from a known page in an existing Journey. The snippet extends the Journey
+instead of replacing the file, so you can keep the existing setup step as the replay anchor and add tight coverage for
+newly discovered links, forms, choices, and side effects.
 
 ## Browser Prompt Tutorial
 
@@ -189,7 +210,7 @@ output details.
 - `branch(replay_from=...)` lets later cases reuse durable setup from a saved step boundary.
 - Browser, webhook, file, and Docker details belong inside coarse user-flow steps, not as one Journey step per click,
   poll, or assertion.
-- `journey discover` is a fast way to bootstrap browser coverage, but generated specs still need executable
+- `journey discover` is a fast way to bootstrap or extend browser coverage, but generated specs still need executable
   `journey verify` evidence before they count as complete.
 - `journey loop` and `journey verify --step` are the fastest way to iterate on one branch or late user-flow step.
 - Touchpoints remain ordinary Python helpers used from step functions.

@@ -393,44 +393,106 @@ class _JourneyValidator(ast.NodeVisitor):
 def validate_journey(journey_fn: JourneyEntrypoint) -> JourneyValidation:
     """Validate the journey source against v1 authoring constraints."""
 
-    try:
-        source_lines, source_start_line = inspect.getsourcelines(journey_fn)
-    except (OSError, TypeError) as exc:
-        raise UnsupportedControlFlowError(
-            "Journey source code could not be inspected for validation.",
-            hint="Define the journey in a regular Python module instead of generating it dynamically.",
-        ) from exc
+    branch_conditions: dict[BranchSiteKey, BranchConditionSpec] = {}
+    branch_handle_definitions: dict[BranchSiteKey, BranchHandleDefinitionSpec] = {}
+    visited_helpers: set[int] = set()
 
-    source = "".join(source_lines)
-    source_col_offset = len(source_lines[0]) - len(source_lines[0].lstrip())
-    source = textwrap.dedent(source)
-    module_ast = ast.parse(source)
+    def validate_function(fn: Any, *, include_helpers: bool) -> ast.AST:
+        try:
+            source_lines, source_start_line = inspect.getsourcelines(fn)
+        except (OSError, TypeError) as exc:
+            raise UnsupportedControlFlowError(
+                "Journey source code could not be inspected for validation.",
+                hint="Define the journey in a regular Python module instead of generating it dynamically.",
+            ) from exc
 
-    fn_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
-    for stmt in module_ast.body:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            fn_node = stmt
-            break
+        source = "".join(source_lines)
+        source_col_offset = len(source_lines[0]) - len(source_lines[0].lstrip())
+        source = textwrap.dedent(source)
+        module_ast = ast.parse(source)
 
-    if fn_node is None:
-        raise UnsupportedControlFlowError(
-            "The inspected journey source did not resolve to a function definition."
+        fn_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+        expected_name = getattr(fn, "__name__", None)
+        for stmt in module_ast.body:
+            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if expected_name is None or stmt.name == expected_name:
+                fn_node = stmt
+                break
+            if fn_node is None:
+                fn_node = stmt
+
+        if fn_node is None:
+            raise UnsupportedControlFlowError(
+                "The inspected journey source did not resolve to a function definition."
+            )
+
+        validator = _JourneyValidator(
+            fn_node,
+            source_line_offset=source_start_line - 1,
+            source_col_offset=source_col_offset,
         )
+        validator.validate()
 
-    validator = _JourneyValidator(
-        fn_node,
-        source_line_offset=source_start_line - 1,
-        source_col_offset=source_col_offset,
-    )
-    validator.validate()
+        if validator.issues:
+            issue = validator.issues[0]
+            if issubclass(issue.exc_type, JourneyError):
+                raise issue.exc_type(issue.message, hint=issue.hint)
+            raise issue.exc_type(issue.message)
 
-    if validator.issues:
-        issue = validator.issues[0]
-        if issubclass(issue.exc_type, JourneyError):
-            raise issue.exc_type(issue.message, hint=issue.hint)
-        raise issue.exc_type(issue.message)
+        branch_conditions.update(validator.branch_conditions)
+        branch_handle_definitions.update(validator.branch_handle_definitions)
+
+        if include_helpers:
+            for helper in _direct_helper_calls(fn, fn_node):
+                if id(helper) in visited_helpers:
+                    continue
+                if not _function_source_mentions_branch(helper):
+                    continue
+                visited_helpers.add(id(helper))
+                validate_function(helper, include_helpers=True)
+
+        return fn_node
+
+    visited_helpers.add(id(journey_fn))
+    validate_function(journey_fn, include_helpers=True)
 
     return JourneyValidation(
-        branch_conditions=dict(validator.branch_conditions),
-        branch_handle_definitions=dict(validator.branch_handle_definitions),
+        branch_conditions=dict(branch_conditions),
+        branch_handle_definitions=dict(branch_handle_definitions),
     )
+
+
+def _direct_helper_calls(
+    fn: Any,
+    function_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[Any]:
+    namespace: dict[str, Any] = {}
+    try:
+        closure = inspect.getclosurevars(fn)
+    except TypeError:
+        closure = None
+    namespace.update(getattr(fn, "__globals__", {}))
+    if closure is not None:
+        namespace.update(closure.globals)
+        namespace.update(closure.nonlocals)
+
+    helpers: list[Any] = []
+    for node in ast.walk(function_node):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        name = node.func.id
+        if name in {"branch", "step", "journey", "resume"}:
+            continue
+        helper = namespace.get(name)
+        if inspect.isfunction(helper):
+            helpers.append(helper)
+    return helpers
+
+
+def _function_source_mentions_branch(fn: Any) -> bool:
+    try:
+        source = inspect.getsource(fn)
+    except (OSError, TypeError):
+        return False
+    return "branch(" in source or ".branch(" in source

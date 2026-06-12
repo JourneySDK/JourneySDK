@@ -74,7 +74,8 @@ journey agent --help
 `journey --help` is the short command index. `journey loop --help` explains the focused replay loop for one step.
 `journey verify --help` explains branch and full-journey verification. `journey evidence --help` explains how to
 discover scopes and sources before reading artifacts. `journey discover --help` explains how to crawl a running app URL
-and write a draft Journey spec. `journey agent --help` explains print/install modes for packaged assistant guidance.
+or continue from an existing browser step and print generated Journey source. `journey agent --help` explains
+print/install modes for packaged assistant guidance.
 
 When a Journey command fails, the CLI prints an instructional block:
 
@@ -88,23 +89,50 @@ Next commands:
 Structured and JSON Lines output include the same recovery data in `instructions`, `next_commands`, and
 `help_command` fields so agents can continue without external docs.
 
-## Generate A Draft Journey From A URL
+## Generate Draft Journey Source
 
 Use `journey discover` when an app is already running and you want a first Journey spec with broad browser coverage:
 
 ```bash
-journey discover http://127.0.0.1:3000 --file journeys/discovered_journey.py
+journey discover http://127.0.0.1:3000 > journeys/discovered_journey.py
 journey verify --file journeys/discovered_journey.py
 ```
 
 The discoverer composes deterministic form submits and navigation transitions first, expands bounded finite controls
 with `--max-variants-per-control`, then uses Claude Haiku by default through `JOURNEY_BROWSER_PROMPT_MODEL` model
 resolution when the next transition is uncertain. It crawls same-origin scenarios within `--depth`, `--max-actions`,
-and `--max-model-calls`, and writes deterministic Playwright step helpers. When a transition exposes a stable visible
-identifier, `--side-effect-probes auto` can attach generic same-origin JSON, local email, and local webhook evidence
-assertions if reachable endpoints are discovered. Model calls happen during discovery, not during later
+`--max-model-calls`, and `--action-timeout`, and prints deterministic Playwright step helpers. When a transition exposes
+a stable visible identifier, `--side-effect-probes auto` can attach generic same-origin JSON, local email, local webhook,
+and SDK Cloud webhook evidence assertions if reachable endpoints are discovered. Model calls happen during discovery, not during later
 `journey verify` runs. Review the generated file before committing it, especially for credentials, fixture data, and
 side-effectful flows.
+
+For agent workflows that need structured diagnostics and the generated source in one stream, use JSON Lines output and
+read the final `discover_result.source` field:
+
+```bash
+journey discover http://127.0.0.1:3000 --output jsonl
+```
+
+When you are already working from a Journey step that lands on the page under development, anchor discovery at that
+step instead of starting over from a URL:
+
+```bash
+journey discover open_main_page --file journeys/app_journey.py
+```
+
+Step mode uses `--file` as the existing Journey source file to search, accepts `--journey` to disambiguate the existing
+entrypoint, executes only through the requested step with temporary state and no browser recording, and starts from the
+step's returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`. It then prints an extension
+snippet. Paste the helper functions into the Journey file and call the generated function near the anchor, for example:
+
+```python
+main_page = step(open_main_page)
+discover_after_open_main_page(main_page)
+```
+
+`journey discover` never writes generated code by itself. In URL mode, `--file` is rejected; redirect stdout if a file
+is desired. In step mode, `--file` selects the source Journey file and the generated snippet is still printed.
 
 ## Ctrl-C And Resumable Runs
 

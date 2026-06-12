@@ -98,3 +98,8 @@ journey evidence --paths --run 8bc31a94e2f1
 `JourneyBrowserPage` stores URL, cookies, and local storage. Reopen it with `open_page(saved_page)` inside a later step.
 Do that only when the later step needs the same browser state as a real replay boundary. Do not pass live Playwright
 objects through step results.
+
+When a step opens a page with `open_page(...)` but returns a different domain object, Journey also records that browser
+page as a replayable side output for the step. Use `browser_page_from_step_result(anchor_result)` inside a later step to
+recover the last page opened by the step that produced `anchor_result`. This is what `journey discover <step_label>`
+uses when extending an existing Journey from an ordinary setup step.

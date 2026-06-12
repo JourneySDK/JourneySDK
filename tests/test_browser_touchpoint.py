@@ -1108,6 +1108,44 @@ def test_open_page_cleans_unreturned_page_at_step_exit(monkeypatch):
     ]
 
 
+def test_open_page_side_output_recovers_from_non_page_step_result_after_branch_replay(
+    tmp_path,
+    monkeypatch,
+):
+    events: list[object] = []
+    _install_fake_playwright(monkeypatch, events)
+
+    def prepare_workspace() -> dict[str, str]:
+        page = journey_browser.open_page("http://example.test/setup")
+        page.goto("http://example.test/checkout", wait_until="load")
+        return {"workspace_id": "w-1"}
+
+    def recover_first_path(workspace: dict[str, str]) -> bool:
+        page = journey_browser.browser_page_from_step_result(workspace)
+        events.append(("first_path", page.url))
+        return True
+
+    def recover_second_path(workspace: dict[str, str]) -> bool:
+        page = journey_browser.browser_page_from_step_result(workspace)
+        events.append(("second_path", page.url))
+        return True
+
+    def journey():
+        workspace = journey_sdk.step(prepare_workspace)
+        if journey_sdk.branch(replay_from=workspace):
+            journey_sdk.step(recover_first_path, workspace)
+        elif journey_sdk.branch(replay_from=workspace):
+            journey_sdk.step(recover_second_path, workspace)
+
+    report = journey_sdk.execute(journey, state=tmp_path / "journey.state")
+
+    assert len(report.case_reports) == 2
+    assert events.count(("goto", "http://example.test/setup", "load")) == 1
+    assert ("capture_state", "http://example.test/checkout") in events
+    assert ("first_path", "http://example.test/checkout") in events
+    assert ("second_path", "http://example.test/checkout") in events
+
+
 def test_open_page_cleans_unreturned_page_when_step_fails(monkeypatch):
     events: list[object] = []
     _install_fake_playwright(monkeypatch, events)

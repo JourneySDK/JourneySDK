@@ -52,6 +52,40 @@ def _register_step_exit_object(owner: str, value: Any) -> None:
     register(value)
 
 
+def _register_step_side_output(owner: str, kind: str, value: Any) -> None:
+    """Register a replayable touchpoint value produced during the active step."""
+
+    _require_executing_step(owner)
+    session = get_session()
+    register = getattr(session, "_register_step_side_output", None)
+    if not callable(register):
+        raise InvalidBranchUsageError(
+            f"{owner}(...) could not register its step side output.",
+            hint=(
+                "Call lifecycle-aware touchpoints from inside a function passed to "
+                "step(...), not during planning, module import, or between steps."
+            ),
+        )
+    register(kind, value)
+
+
+def _get_step_side_outputs(owner: str, step_result: Any, kind: str) -> tuple[Any, ...]:
+    """Return replayable touchpoint values associated with a prior step result."""
+
+    _require_executing_step(owner)
+    session = get_session()
+    getter = getattr(session, "_get_step_side_outputs", None)
+    if not callable(getter):
+        raise InvalidBranchUsageError(
+            f"{owner}(...) could not read step side outputs.",
+            hint=(
+                "Call lifecycle-aware touchpoints from inside a function passed to "
+                "step(...), not during planning, module import, or between steps."
+            ),
+        )
+    return tuple(getter(step_result, kind))
+
+
 def _register_case_exit_object(owner: str, value: Any) -> bool:
     """Register a live touchpoint resource for case-exit cleanup, if in a run."""
 
