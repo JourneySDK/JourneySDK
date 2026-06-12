@@ -393,7 +393,7 @@ def _parser_error_instructions(prog: str, message: str) -> str:
     if prog == "journey discover":
         return (
             "Run `journey discover --help`, pass one or more start URLs, and "
-            "use --file to choose where the generated Journey spec should be written."
+            "use --output-file to choose where the generated Journey source should be written."
         )
     return (
         "Run `journey --help`, choose `journey loop` for focused replay or "
@@ -453,7 +453,7 @@ def _default_hint_for_error(error: _CommandError) -> str:
     if error.phase == "discover":
         return (
             "Run `journey discover --help`, confirm the app URL is reachable, "
-            "then retry with a writable --file path and model credentials."
+            "then retry with a writable --output-file path and model credentials."
         )
     return "Run the related Journey --help command, then retry with the corrected command."
 
@@ -1403,7 +1403,10 @@ def _classify_discover_targets(values: Sequence[str]) -> tuple[str, tuple[str, .
     if not values:
         raise JourneySelectionError(
             "journey discover requires a URL or one Journey step label.",
-            hint="Run `journey discover http://127.0.0.1:3000` or `journey discover open_main_page --file journeys/app.py`.",
+            hint=(
+                "Run `journey discover http://127.0.0.1:3000 --output-file journeys/discovered.py` "
+                "or `journey discover open_main_page --file journeys/app.py --output-file journeys/discovered_snippet.py`."
+            ),
         )
     url_flags = [_is_discover_url_like(value) for value in values]
     if all(url_flags):
@@ -1416,7 +1419,10 @@ def _classify_discover_targets(values: Sequence[str]) -> tuple[str, tuple[str, .
     if len(values) != 1:
         raise JourneySelectionError(
             "journey discover step mode accepts exactly one step label.",
-            hint="Run `journey discover <step_label> --file journeys/app.py`.",
+            hint=(
+                "Run `journey discover <step_label> --file journeys/app.py "
+                "--output-file journeys/discovered_snippet.py`."
+            ),
         )
     return "step", (values[0],)
 
@@ -2623,6 +2629,76 @@ def _cmd_agent(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_discover_output_file(
+    args: argparse.Namespace,
+    *,
+    root: Path,
+    mode: str,
+) -> Path:
+    if not args.output_file:
+        raise JourneySelectionError(
+            "journey discover requires --output-file so stdout can stream live discovery logs.",
+            hint=(
+                "Run `journey discover http://127.0.0.1:3000 "
+                "--output-file journeys/discovered_journey.py`."
+            ),
+        )
+
+    output_file = Path(args.output_file)
+    if not output_file.is_absolute():
+        output_file = root / output_file
+    output_file = output_file.resolve()
+
+    if mode == "step" and args.file:
+        source_file = Path(args.file)
+        if not source_file.is_absolute():
+            source_file = root / source_file
+        if output_file == source_file.resolve():
+            raise JourneySelectionError(
+                "journey discover --output-file must be different from step mode --file.",
+                hint=(
+                    "Write the generated snippet to a separate file, review it, "
+                    "then paste the helper into the source Journey file."
+                ),
+            )
+
+    if output_file.exists() and output_file.is_dir():
+        raise JourneySelectionError(
+            f"journey discover output path is a directory: {output_file}.",
+            hint="Pass --output-file with a file path for the generated Journey source.",
+        )
+
+    if output_file.exists() and not args.force:
+        raise JourneySelectionError(
+            f"journey discover output file already exists: {output_file}.",
+            hint="Pass --force with --output-file to replace the existing generated source.",
+        )
+
+    return output_file
+
+
+def _write_discover_output_file(output_file: Path, source: str) -> None:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=output_file.parent,
+            prefix=f".{output_file.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(source)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, output_file)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
 def _cmd_discover(args: argparse.Namespace) -> int:
     from .discover import (
         DiscoverOptions,
@@ -2637,15 +2713,36 @@ def _cmd_discover(args: argparse.Namespace) -> int:
     anchor_evidence = AnchorEvidenceContext()
     try:
         mode, targets = _classify_discover_targets(tuple(args.target))
+        output_file = _resolve_discover_output_file(args, root=root, mode=mode)
+        _CLI_LOGGER.info(
+            "discover_start",
+            "journey discover starting",
+            pretty=pretty_line(
+                (
+                    "Discovering Journey source: "
+                    f"mode={mode} output={_display_path(root, output_file)}"
+                ),
+                style="heading",
+            ),
+            mode=mode,
+            output_file=str(output_file),
+            targets=targets,
+        )
         if mode == "url" and args.file:
             raise JourneySelectionError(
-                "journey discover URL mode does not accept --file; generated code is printed to stdout; redirect stdout if a file is desired.",
-                hint="Run `journey discover http://127.0.0.1:3000 > journeys/discovered_journey.py`.",
+                "journey discover URL mode does not accept --file; use --output-file for generated source.",
+                hint=(
+                    "Run `journey discover http://127.0.0.1:3000 "
+                    "--output-file journeys/discovered_journey.py`."
+                ),
             )
         if mode == "step" and not args.file:
             raise JourneySelectionError(
                 "journey discover step mode requires --file to select the source Journey file.",
-                hint="Run `journey discover open_main_page --file journeys/app_journey.py`.",
+                hint=(
+                    "Run `journey discover open_main_page --file journeys/app_journey.py "
+                    "--output-file journeys/discovered_snippet.py`."
+                ),
             )
 
         start_page_state = None
@@ -2721,6 +2818,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
                 cloud_webhook_endpoints=anchor_evidence.cloud_webhook_endpoints,
             )
         )
+        _write_discover_output_file(output_file, result.source)
         if anchor_execution is not None:
             anchor_execution.close()
             anchor_execution = None
@@ -2736,7 +2834,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
             root,
             [
                 _CommandError(
-                    file=args.file,
+                    file=args.output_file or args.file,
                     journey_name=args.journey,
                     phase="discover",
                     error_type=type(exc).__name__,
@@ -2749,24 +2847,21 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         )
         return 1
 
-    if args.output == "source":
-        sys.stdout.write(result.source)
-        return 0
-
+    display_output_file = _display_path(root, output_file)
     _CLI_LOGGER.info(
         "discover_result",
-        "journey discover generated Python source",
+        "journey discover wrote generated Python source",
         pretty=[
             pretty_line(
                 (
-                    f"Generated Journey source: mode={result.mode} journey={result.journey_name} actions={result.actions} "
+                    f"Generated Journey source: {display_output_file} mode={result.mode} journey={result.journey_name} actions={result.actions} "
                     f"branches={result.branches} omitted={result.omitted_actions} "
                     f"model_calls={result.model_calls} stop={result.stop_reason}"
                 ),
                 style="success",
             ),
         ],
-        source=result.source,
+        output_file=str(output_file),
         mode=result.mode,
         journey_name=result.journey_name,
         extension_name=result.extension_name,
@@ -4390,19 +4485,19 @@ def build_touchpoints_parser() -> argparse.ArgumentParser:
 def build_discover_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey discover",
-        description="crawl app URLs or continue from a Journey browser step and print generated Journey source",
+        description="crawl app URLs or continue from a Journey browser step and write generated Journey source",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Browser discovery:\n"
-            "  journey discover http://127.0.0.1:3000 > journeys/discovered_journey.py\n"
-            "      Use Claude Haiku to discover user paths and print a deterministic Journey draft.\n"
-            "  journey discover open_main_page --file journeys/app_journey.py\n"
-            "      Run an existing browser step, discover from that page, and print a pasteable snippet.\n"
-            "  journey discover http://127.0.0.1:18081 --depth 4 --max-actions 30 --max-model-calls 8 --output jsonl\n"
-            "      Emit discovery events plus a final discover_result event containing the generated source.\n"
+            "  journey discover http://127.0.0.1:3000 --output-file journeys/discovered_journey.py\n"
+            "      Use Claude Haiku to discover user paths and write a deterministic Journey draft.\n"
+            "  journey discover open_main_page --file journeys/app_journey.py --output-file journeys/discovered_snippet.py\n"
+            "      Run an existing browser step, discover from that page, and write a pasteable snippet.\n"
+            "  journey discover http://127.0.0.1:18081 --output-file journeys/discovered_journey.py --depth 4 --max-actions 30 --max-model-calls 8 --output jsonl\n"
+            "      Emit discovery events plus a final discover_result event containing the generated source path.\n"
             "\n"
-            "Generated code is never written by this command. Redirect stdout in URL mode,\n"
-            "or paste the printed snippet into the source Journey in step mode.\n"
+            "Generated code is written only to --output-file. Stdout is reserved for live discovery logs.\n"
+            "Existing output files are refused unless --force is passed.\n"
             "\n"
             "Model selection follows --model, then JOURNEY_BROWSER_PROMPT_MODEL, then "
             "anthropic:claude-haiku-4-5."
@@ -4415,7 +4510,11 @@ def build_discover_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--file",
-        help="Source Journey file to search in step mode; rejected in URL mode",
+        help="Source Journey file to search in step mode",
+    )
+    parser.add_argument(
+        "--output-file",
+        help="Generated Journey source destination; required for URL and step mode",
     )
     parser.add_argument(
         "--journey",
@@ -4483,10 +4582,15 @@ def build_discover_parser() -> argparse.ArgumentParser:
         help="Allow discovery to follow off-origin navigations",
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing generated source file",
+    )
+    parser.add_argument(
         "--output",
-        choices=("source", "jsonl"),
-        default="source",
-        help="Set discover output format (default: source)",
+        choices=("pretty", "jsonl"),
+        default="pretty",
+        help="Set discover log output format (default: pretty)",
     )
     parser.add_argument(
         "--log-level",
@@ -4565,10 +4669,10 @@ def build_parser() -> argparse.ArgumentParser:
             "      Freshly verify the whole journey before finishing.\n"
             "  journey evidence --step <step_label>\n"
             "      Inspect traces, videos, structured logs, and touchpoint payloads.\n"
-            "  journey discover <url> > journeys/discovered_journey.py\n"
-            "      Crawl an app URL and print a draft branched Journey spec.\n"
-            "  journey discover <step_label> --file journeys/<feature>_journey.py\n"
-            "      Continue from an existing browser step and print a pasteable coverage snippet.\n"
+            "  journey discover <url> --output-file journeys/discovered_journey.py\n"
+            "      Crawl an app URL and write a draft branched Journey spec.\n"
+            "  journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/discovered_snippet.py\n"
+            "      Continue from an existing browser step and write a pasteable coverage snippet.\n"
             "  journey agent codex|claude|cursor|generic [--install]\n"
             "      Print or install packaged assistant guidance for Journey SDK loops.\n"
             "  journey touchpoints browser|docker|email|webhook|http|all\n"
@@ -4617,18 +4721,10 @@ def _preconfigure_logging(argv: list[str]) -> None:
     )
     output = _extract_option_value(argv, "--output")
     output_format = output if output in {"pretty", "jsonl"} else "pretty"
-    discover_help = argv and argv[0] == "discover" and any(
-        value in {"--help", "-h"} for value in argv[1:]
-    )
-    stream = (
-        sys.stderr
-        if argv and argv[0] == "discover" and output != "jsonl" and not discover_help
-        else None
-    )
     try:
-        configure_logging(level, stream=stream, output_format=output_format)  # type: ignore[arg-type]
+        configure_logging(level, output_format=output_format)  # type: ignore[arg-type]
     except ValueError:
-        configure_logging("info", stream=stream, output_format=output_format)
+        configure_logging("info", output_format=output_format)
 
 
 def _active_environment_python() -> Path | None:
@@ -4685,10 +4781,7 @@ def main(argv: list[str] | None = None) -> int:
     if raw_argv and raw_argv[0] == "discover":
         parser = build_discover_parser()
         args = parser.parse_args(raw_argv[1:])
-        if args.output == "source":
-            configure_logging(args.log_level, stream=sys.stderr, output_format="pretty")
-        else:
-            configure_logging(args.log_level, output_format="jsonl")
+        configure_logging(args.log_level, output_format=args.output)
         return _cmd_discover(args)
     if raw_argv and raw_argv[0] == "loop":
         parser = build_loop_parser()

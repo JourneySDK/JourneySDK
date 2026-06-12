@@ -96,14 +96,16 @@ unless `--force` is passed.
 
 If you are authoring a journey by hand, use [Getting Started](docs/01-getting-started.md). It covers imports,
 top-level `@journey` functions, running one file, selecting one journey, and JSON Lines output for tools.
-If you want a draft from a running browser app, use `journey discover <url> > journeys/<feature>_journey.py`.
+If you want a draft from a running browser app, use
+`journey discover <url> --output-file journeys/<feature>_journey.py`.
 It crawls complete same-origin user transitions, expands bounded finite choices such as selects and radios into
 branches, bounds failed exploratory actions with `--action-timeout`, adds best-effort generic API/email/webhook and SDK
-Cloud webhook evidence probes when stable identifiers are observable, and prints deterministic Playwright steps. Review
+Cloud webhook evidence probes when stable identifiers are observable, and writes deterministic Playwright steps. Review
 the generated draft, then run `journey verify --file ...`. To extend an existing
-Journey from a browser step, run `journey discover <step_label> --file journeys/<feature>_journey.py`; the command runs
-that step, uses its returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`, and prints a
-pasteable snippet instead of editing the file.
+Journey from a browser step, run
+`journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_snippet.py`; the
+command runs that step, uses its returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`, and
+writes a pasteable snippet instead of editing the file.
 
 ## Authoring Guides
 

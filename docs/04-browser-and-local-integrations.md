@@ -141,7 +141,7 @@ Use `journey touchpoints browser` for `JourneyBrowserPage`, page rehydration, li
 Use `journey discover` when a local app is running and you want Journey to draft broad browser coverage from the app UI:
 
 ```bash
-uv run journey discover http://127.0.0.1:3000 > journeys/discovered_journey.py
+uv run journey discover http://127.0.0.1:3000 --output-file journeys/discovered_journey.py
 uv run journey verify --file journeys/discovered_journey.py
 ```
 
@@ -152,20 +152,21 @@ model for uncertain next transitions. Select, radio, and checkbox choices are br
 can feed generic same-origin JSON, local email, local webhook, and SDK Cloud webhook evidence assertions when those
 endpoints are reachable. Use `JOURNEY_DISCOVER_EMAIL_EVIDENCE_URL` and
 `JOURNEY_DISCOVER_WEBHOOK_EVIDENCE_URL` to point discovery at local evidence services that are not on their usual
-development ports. It executes restricted Playwright snippets during discovery and prints deterministic `open_page(...)`
+development ports. It executes restricted Playwright snippets during discovery and writes deterministic `open_page(...)`
 step helpers with `branch(...)` where it finds alternate paths. The generated source is a draft: review step boundaries,
 fixture data, and assertions before treating it as committed coverage.
 
 Discovery can also start from an existing Journey browser step:
 
 ```bash
-uv run journey discover open_main_page --file journeys/app_journey.py
+uv run journey discover open_main_page --file journeys/app_journey.py --output-file journeys/open_main_page_snippet.py
 ```
 
 In step mode, `--file` points at the existing Journey file and `--journey` can disambiguate the existing entrypoint.
 Journey executes only through the anchor step with temporary state and no browser recording, then uses the step result
 if it is `JourneyBrowserPage`, otherwise the last browser page opened by `open_page(...)` inside that step. Discover
-restores the page URL, cookies, and local storage in its browser context and prints a pasteable snippet:
+restores the page URL, cookies, and local storage in its browser context and writes a pasteable snippet to
+`--output-file`:
 
 ```python
 main_page = step(open_main_page)

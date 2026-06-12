@@ -653,6 +653,18 @@ def discover(
         )
         try:
             for index, start_state in enumerate(_start_states_for_options(normalized), start=1):
+                _LOGGER.info(
+                    "discover_start_url",
+                    "journey discover crawling start URL",
+                    pretty=pretty_row(
+                        "Discover",
+                        f"start {index}: {start_state.url}",
+                        indent=8,
+                        label_width=27,
+                    ),
+                    index=index,
+                    url=start_state.url,
+                )
                 root, omitted = _discover_start_url(
                     browser,
                     start_state=start_state,
@@ -1263,6 +1275,25 @@ def _discover_start_url(
         if not candidates:
             cached = model_cache.get(node.snapshot.signature)
             if cached is None and budget.model_calls < budget.max_model_calls:
+                _LOGGER.info(
+                    "discover_model_fallback_start",
+                    "journey discover asking model for candidate actions",
+                    pretty=pretty_row(
+                        "Discover",
+                        (
+                            f"model fallback {budget.model_calls + 1}/{budget.max_model_calls} "
+                            f"depth={node.depth} url={node.snapshot.url}"
+                        ),
+                        indent=8,
+                        label_width=27,
+                    ),
+                    url=node.snapshot.url,
+                    depth=node.depth,
+                    remaining_actions=remaining,
+                    depth_remaining=options.depth - node.depth,
+                    model_call=budget.model_calls + 1,
+                    max_model_calls=budget.max_model_calls,
+                )
                 budget.model_calls += 1
                 cached = provider.propose_actions(
                     node.snapshot,
@@ -1343,6 +1374,26 @@ def _discover_start_url(
             edge_sequence += 1
             action_count += 1
             successful_transition = True
+            _LOGGER.info(
+                "discover_transition_found",
+                "journey discover found a transition",
+                pretty=pretty_row(
+                    "Discover",
+                    (
+                        f"transition {action_count}/{options.max_actions}: "
+                        f"{candidate.name} -> {snapshot.url}"
+                    ),
+                    indent=8,
+                    label_width=27,
+                    style="success",
+                ),
+                action=candidate.name,
+                from_url=node.snapshot.url,
+                to_url=snapshot.url,
+                depth=node.depth,
+                actions=action_count,
+                max_actions=options.max_actions,
+            )
             edge = DiscoveredEdge(
                 edge_id=f"{node_prefix}edge_{edge_sequence}",
                 parent=node,
