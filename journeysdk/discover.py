@@ -426,6 +426,12 @@ class DiscoverResult:
     stop_reason: str
 
 
+@dataclass(frozen=True)
+class SourceMergeResult:
+    source: str
+    model: str
+
+
 
 class ActionProvider(Protocol):
     def propose_actions(
@@ -1116,6 +1122,87 @@ def render_journey_source(
         "    raise AssertionError(\"Expected a stable visible identifier after the discovered transition.\")",
         "",
         "",
+        "def _cookie_consent_visible(page: JourneyBrowserPage) -> bool:",
+        "    try:",
+        "        return bool(",
+        "            page.evaluate(",
+        "                r\"\"\"",
+        "                () => {",
+        "                  function isVisible(element) {",
+        "                    if (!element || !element.isConnected) return false;",
+        "                    const style = window.getComputedStyle(element);",
+        "                    if (style.visibility === \"hidden\" || style.display === \"none\") return false;",
+        "                    if (Number(style.opacity) === 0) return false;",
+        "                    return element.getClientRects().length > 0;",
+        "                  }",
+        "                  const pattern = /(cookie|cookies|consent|privacy|tracking)/i;",
+        "                  const candidates = Array.from(document.querySelectorAll(\"[role='dialog'], [aria-modal='true'], [id], [class], [data-testid], [aria-label]\"));",
+        "                  return candidates.some((element) => {",
+        "                    if (!isVisible(element)) return false;",
+        "                    const idClass = `${element.id || \"\"} ${element.className || \"\"} ${element.getAttribute(\"data-testid\") || \"\"} ${element.getAttribute(\"aria-label\") || \"\"}`;",
+        "                    const modalLike = element.getAttribute(\"role\") === \"dialog\" || element.getAttribute(\"aria-modal\") === \"true\";",
+        "                    const consentNamed = pattern.test(idClass);",
+        "                    if (!modalLike && !consentNamed) return false;",
+        "                    const text = element.innerText || element.textContent || \"\";",
+        "                    return consentNamed || pattern.test(text);",
+        "                  });",
+        "                }",
+        "                \"\"\"",
+        "            )",
+        "        )",
+        "    except Exception:",
+        "        return False",
+        "",
+        "",
+        "def _click_first_visible_control(locator: object) -> bool:",
+        "    try:",
+        "        count = min(int(locator.count()), 5)  # type: ignore[attr-defined]",
+        "    except Exception:",
+        "        count = 1",
+        "    for index in range(count):",
+        "        try:",
+        "            control = locator.nth(index) if hasattr(locator, \"nth\") else locator",
+        "            if hasattr(control, \"is_visible\") and not control.is_visible(timeout=250):",
+        "                continue",
+        "            control.click(timeout=1000)",
+        "            return True",
+        "        except Exception:",
+        "            continue",
+        "    return False",
+        "",
+        "",
+        "def _dismiss_cookie_consent(page: JourneyBrowserPage) -> bool:",
+        "    if not _cookie_consent_visible(page):",
+        "        return False",
+        "    patterns = (",
+        "        r\"^(accept all|allow all|accept|agree|i accept|ok)(?: cookies?)?$\",",
+        "        r\"^(reject all|decline all|decline|deny all|no thanks)(?: cookies?)?$\",",
+        "        r\"^(close|dismiss)(?: cookies?)?$\",",
+        "    )",
+        "    for pattern in patterns:",
+        "        if _click_first_visible_control(page.get_by_role(\"button\", name=re.compile(pattern, re.IGNORECASE))):",
+        "            return True",
+        "    return False",
+        "",
+        "",
+        "def _settle_replay_page(page: JourneyBrowserPage, *, timeout_ms: int) -> None:",
+        "    deadline = time.monotonic() + max(timeout_ms, 1) / 1000",
+        "    for _ in range(2):",
+        "        for state, cap_ms in ((\"load\", 5000), (\"networkidle\", 1500)):",
+        "            remaining_ms = int((deadline - time.monotonic()) * 1000)",
+        "            if remaining_ms <= 0:",
+        "                return",
+        "            try:",
+        "                page.wait_for_load_state(state, timeout=max(1, min(cap_ms, remaining_ms)))",
+        "            except Exception:",
+        "                pass",
+        "        _dismiss_cookie_consent(page)",
+        "    try:",
+        "        page.wait_for_timeout(250)",
+        "    except Exception:",
+        "        pass",
+        "",
+        "",
         "def _assert_page_state(",
         "    page: JourneyBrowserPage,",
         "    *,",
@@ -1124,18 +1211,41 @@ def render_journey_source(
         "    expected_text: str | None = None,",
         f"    timeout_ms: int = {int(_GENERATED_REPLAY_TIMEOUT_SECONDS * 1000)},",
         ") -> None:",
-        "    if expected_path is not None:",
-        "        actual_path = urlsplit(page.url).path or \"/\"",
-        "        if actual_path != expected_path:",
-        "            raise AssertionError(f\"Expected path {expected_path!r}, got {actual_path!r} from {page.url!r}.\")",
-        "    if expected_title is not None:",
-        "        actual_title = page.title()",
-        "        if actual_title != expected_title:",
-        "            raise AssertionError(f\"Expected title {expected_title!r}, got {actual_title!r}.\")",
-        "    if expected_text is not None:",
-        "        body_text = page.locator(\"body\").inner_text(timeout=timeout_ms)",
-        "        if expected_text not in body_text:",
-        "            raise AssertionError(f\"Expected page text {expected_text!r} to be visible.\")",
+        "    deadline = time.monotonic() + max(timeout_ms, 1) / 1000",
+        "    last_path = None",
+        "    last_title = None",
+        "    last_text = \"\"",
+        "    while True:",
+        "        remaining_ms = int((deadline - time.monotonic()) * 1000)",
+        "        if remaining_ms <= 0:",
+        "            break",
+        "        _settle_replay_page(page, timeout_ms=max(1, min(remaining_ms, 3000)))",
+        "        ok = True",
+        "        if expected_path is not None:",
+        "            last_path = urlsplit(page.url).path or \"/\"",
+        "            ok = ok and last_path == expected_path",
+        "        if expected_title is not None:",
+        "            try:",
+        "                last_title = page.title()",
+        "            except Exception:",
+        "                last_title = None",
+        "            ok = ok and last_title == expected_title",
+        "        if expected_text is not None:",
+        "            try:",
+        "                text_timeout = max(1, min(1000, int((deadline - time.monotonic()) * 1000)))",
+        "                last_text = page.locator(\"body\").inner_text(timeout=text_timeout)",
+        "            except Exception:",
+        "                last_text = \"\"",
+        "            ok = ok and expected_text in last_text",
+        "        if ok:",
+        "            return",
+        "        time.sleep(0.25)",
+        "    raise AssertionError(",
+        "        \"Expected page state was not reached: \"",
+        "        f\"path={expected_path!r} actual={last_path!r}; \"",
+        "        f\"title={expected_title!r} actual={last_title!r}; \"",
+        "        f\"text={expected_text!r} visible={last_text[:500]!r}.\"",
+        "    )",
         "",
         "",
     ]
@@ -1279,6 +1389,84 @@ def validate_generated_extension_source(source: str, *, extension_name: str) -> 
             extension_fn(anchor_result)
 
         compile_journey(_journey_discover_validation)
+
+
+def merge_extension_source_with_model(
+    *,
+    original_source: str,
+    generated_extension_source: str,
+    journey_name: str,
+    anchor_step: str,
+    model: str | None = None,
+) -> SourceMergeResult:
+    resolved_model = _resolve_discover_model(model)
+    model_obj = _load_langchain_model(resolved_model, max_tokens=32000)
+    prompt = _merge_extension_prompt(
+        original_source=original_source,
+        generated_extension_source=generated_extension_source,
+        journey_name=journey_name,
+        anchor_step=anchor_step,
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You merge Journey SDK Python source files. Return complete, valid Python "
+                "source only. Do not include markdown, explanations, or code fences."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    response = _PromptUsageTracker().call(
+        operation="discover_merge_source",
+        configured_model=resolved_model,
+        logger=_LOGGER,
+        callback=lambda config: model_obj.invoke(messages, config=config),
+    )
+    merged_source = _strip_code_fences(
+        _extract_langchain_text(response, owner="journey discover merge")
+    ).strip()
+    if not merged_source:
+        raise RuntimeError("journey discover merge returned empty source.")
+    try:
+        ast.parse(merged_source)
+    except SyntaxError as exc:
+        raise RuntimeError(f"journey discover merge returned invalid Python: {exc}") from exc
+    return SourceMergeResult(source=merged_source.rstrip() + "\n", model=resolved_model)
+
+
+def _merge_extension_prompt(
+    *,
+    original_source: str,
+    generated_extension_source: str,
+    journey_name: str,
+    anchor_step: str,
+) -> str:
+    return textwrap.dedent(
+        f"""
+        Merge generated Journey discovery code into an existing Journey file.
+
+        Requirements:
+        - Return one complete Python source file and nothing else.
+        - Preserve unrelated existing code, comments, imports, fixtures, and Journey functions.
+        - Target Journey function: {journey_name!r}.
+        - Anchor step label/function: {anchor_step!r}.
+        - Add the generated helper and step functions from the extension source.
+        - In the target Journey, call the generated extension immediately after the existing anchor step result is assigned.
+        - Preserve existing branch structure and only add the discovered coverage below the anchor step.
+        - Ensure the merged source can be imported, compiled by Journey SDK, and executed.
+
+        Existing source:
+        ```python
+        {original_source}
+        ```
+
+        Generated extension source:
+        ```python
+        {generated_extension_source}
+        ```
+        """
+    ).strip()
 
 
 def _discover_start_url(
@@ -2333,6 +2521,8 @@ def _visible_capture_assertions(
         text = " ".join(value.split())
         if not 3 <= len(text) <= 160:
             continue
+        if _weak_assertion_text(text):
+            continue
         if text in visible_text and text not in assertions:
             assertions.append(text)
     return tuple(assertions[:5])
@@ -2786,6 +2976,7 @@ def _render_root_function(root: DiscoveredNode, *, function_name: str) -> list[s
         f"    page = open_page({root.start_url!r})",
         f"    timeout_ms = {int(_GENERATED_REPLAY_TIMEOUT_SECONDS * 1000)}",
         "    page.wait_for_load_state(\"load\", timeout=timeout_ms)",
+        "    _settle_replay_page(page, timeout_ms=timeout_ms)",
         (
             "    _assert_page_state("
             f"page, expected_path={expected_path!r}, expected_title={expected_title!r}, "
@@ -2807,6 +2998,7 @@ def _render_edge_function(edge: DiscoveredEdge) -> list[str]:
         f"    \"\"\"{_docstring_text(edge.action.description)}\"\"\"",
         "    page = open_page(saved_page)",
         f"    timeout_ms = {int(_GENERATED_REPLAY_TIMEOUT_SECONDS * 1000)}",
+        "    _settle_replay_page(page, timeout_ms=timeout_ms)",
         "",
         "    def unique_email(prefix: str) -> str:",
         "        return _unique_email(prefix)",
@@ -2817,6 +3009,7 @@ def _render_edge_function(edge: DiscoveredEdge) -> list[str]:
     lines.extend(
         [
             "    page.wait_for_load_state(\"load\", timeout=timeout_ms)",
+            "    _settle_replay_page(page, timeout_ms=timeout_ms)",
             (
                 "    _assert_page_state("
                 f"page, expected_path={expected_path!r}, expected_title={expected_title!r}, "
@@ -3133,14 +3326,45 @@ def _state_slug(snapshot: PageSnapshot) -> str:
 def _visible_assertion_text(snapshot: PageSnapshot) -> str | None:
     for line in snapshot.visible_text.splitlines():
         text = " ".join(line.strip().split())
-        if 3 <= len(text) <= 100:
+        if 3 <= len(text) <= 100 and not _weak_assertion_text(text):
             return text
     words = " ".join(snapshot.visible_text.split())
-    if 3 <= len(words) <= 100:
+    if 3 <= len(words) <= 100 and not _weak_assertion_text(words):
         return words
     if len(words) > 100:
-        return words[:100].rstrip()
+        truncated = words[:100].rstrip()
+        if not _weak_assertion_text(truncated):
+            return truncated
     return None
+
+
+def _weak_assertion_text(text: str) -> bool:
+    normalized = " ".join(text.strip().split())
+    lowered = normalized.lower()
+    if not normalized:
+        return True
+    if normalized.upper() == "TEST":
+        return True
+    if len(normalized.split()) <= 1:
+        return True
+    if any(token in lowered for token in ("cookie", "cookies", "consent", "privacy", "tracking")):
+        return True
+    if lowered in {
+        "loading",
+        "please wait",
+        "sign up",
+        "log in",
+        "home",
+        "help",
+        "close",
+        "dismiss",
+        "accept",
+        "accept all",
+        "reject all",
+        "decline all",
+    }:
+        return True
+    return False
 
 
 def _sanitize_identifier(raw: str, *, default: str) -> str:

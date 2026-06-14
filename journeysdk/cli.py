@@ -303,6 +303,13 @@ class _DiscoverAnchorExecution:
             self.cleanup()
 
 
+@dataclass(frozen=True)
+class _DiscoverVerificationResult:
+    cases: int
+    steps: tuple[str, ...]
+    duration_seconds: float
+
+
 def _labels_for_case(case: CasePlan) -> list[str]:
     return [
         node.label
@@ -1405,7 +1412,7 @@ def _classify_discover_targets(values: Sequence[str]) -> tuple[str, tuple[str, .
             "journey discover requires a URL or one Journey step label.",
             hint=(
                 "Run `journey discover http://127.0.0.1:3000 --output-file journeys/discovered.py` "
-                "or `journey discover open_main_page --file journeys/app.py --output-file journeys/discovered_snippet.py`."
+                "or `journey discover open_main_page --file journeys/app.py --output-file journeys/app.py --force`."
             ),
         )
     url_flags = [_is_discover_url_like(value) for value in values]
@@ -1421,7 +1428,7 @@ def _classify_discover_targets(values: Sequence[str]) -> tuple[str, tuple[str, .
             "journey discover step mode accepts exactly one step label.",
             hint=(
                 "Run `journey discover <step_label> --file journeys/app.py "
-                "--output-file journeys/discovered_snippet.py`."
+                "--output-file journeys/app.py --force`."
             ),
         )
     return "step", (values[0],)
@@ -2653,12 +2660,12 @@ def _resolve_discover_output_file(
         source_file = Path(args.file)
         if not source_file.is_absolute():
             source_file = root / source_file
-        if output_file == source_file.resolve():
+        if output_file == source_file.resolve() and not args.force:
             raise JourneySelectionError(
-                "journey discover --output-file must be different from step mode --file.",
+                "journey discover step mode needs --force when --output-file is the same as --file.",
                 hint=(
-                    "Write the generated snippet to a separate file, review it, "
-                    "then paste the helper into the source Journey file."
+                    "Pass --force only when you want discovery to replace the source Journey "
+                    "file after the merged result verifies."
                 ),
             )
 
@@ -2677,26 +2684,216 @@ def _resolve_discover_output_file(
     return output_file
 
 
-def _write_discover_output_file(output_file: Path, source: str) -> None:
+def _write_temporary_discover_source(output_file: Path, source: str) -> Path:
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=output_file.parent,
-            prefix=f".{output_file.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary_path = Path(handle.name)
-            handle.write(source)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, output_file)
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=output_file.parent,
+        prefix=f".{output_file.name}.verify.",
+        suffix=".py",
+        delete=False,
+    ) as handle:
+        temporary_path = Path(handle.name)
+        handle.write(source)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return temporary_path
+
+
+def _replace_with_verified_source(temporary_path: Path, output_file: Path) -> None:
+    os.replace(temporary_path, output_file)
+
+
+def _discover_generated_step_labels(roots: Sequence[object]) -> tuple[str, ...]:
+    labels: list[str] = []
+
+    def visit(node: object) -> None:
+        for edge in getattr(node, "edges", ()):
+            function_name = getattr(edge, "function_name", "")
+            if isinstance(function_name, str) and function_name and function_name not in labels:
+                labels.append(function_name)
+            child = getattr(edge, "child", None)
+            if child is not None:
+                visit(child)
+
+    for root in roots:
+        visit(root)
+    return tuple(labels)
+
+
+def _plan_step_labels(plan: JourneyPlan) -> set[str]:
+    return {
+        node.label
+        for case in plan.case_plans
+        for node in case.nodes
+        if isinstance(node, StepNode) and node.label is not None
+    }
+
+
+def _report_step_labels(report: ExecutionReport) -> set[str]:
+    return {
+        record.label
+        for case in report.case_reports
+        for record in case.records
+        if record.node_type == "step" and record.label is not None
+    }
+
+
+def _verify_discover_source_file(
+    *,
+    root: Path,
+    source_path: Path,
+    journey_name: str,
+    expected_step_labels: Sequence[str],
+) -> tuple[_DiscoverVerificationResult | None, list[_CommandError]]:
+    started_at = time.perf_counter()
+    _CLI_LOGGER.info(
+        "discover_verification_start",
+        "verifying generated Journey source",
+        pretty=pretty_line(
+            f"Verifying generated Journey source: {_display_path(root, source_path)}",
+            style="heading",
+        ),
+        file=str(source_path),
+        journey=journey_name,
+        expected_steps=list(expected_step_labels),
+    )
+    discovery_args = argparse.Namespace(
+        file=str(source_path),
+        journey=journey_name,
+        fail_fast=True,
+    )
+    verify_root, discovered, discovery_errors = _discover_targets(discovery_args)
+    compiled, compile_errors = _compile_targets(discovered, fail_fast=True)
+    plan_errors = [*discovery_errors, *compile_errors]
+    _emit_plan_output(verify_root, compiled, plan_errors)
+    _emit_execution_section()
+    if plan_errors:
+        _emit_execute_output(
+            verify_root,
+            [],
+            [],
+            result_errors=plan_errors,
+            failure_count=len(plan_errors),
+            duration_seconds=time.perf_counter() - started_at,
+        )
+        return None, plan_errors
+    if len(compiled) != 1:
+        error = JourneySelectionError(
+            f"journey discover expected exactly one generated Journey named {journey_name!r}.",
+            hint="Check the generated source merge preserved the selected Journey function name.",
+        )
+        command_error = _error_from_exception(
+            error,
+            phase="plan",
+            file_path=str(source_path),
+            journey_name=journey_name,
+        )
+        _emit_execute_output(
+            verify_root,
+            [],
+            [command_error],
+            result_errors=[command_error],
+            failure_count=1,
+            duration_seconds=time.perf_counter() - started_at,
+        )
+        return None, [command_error]
+
+    expected_labels = set(expected_step_labels)
+    plan_labels = _plan_step_labels(compiled[0].plan)
+    missing_from_plan = sorted(expected_labels - plan_labels)
+    if missing_from_plan:
+        command_error = _CommandError(
+            file=str(source_path),
+            journey_name=journey_name,
+            phase="plan",
+            error_type="JourneySelectionError",
+            message=(
+                "Generated Journey merge omitted discovered step labels: "
+                + ", ".join(missing_from_plan)
+            ),
+            hint="Retry discovery or inspect the merge output before replacing the source file.",
+        )
+        _emit_execute_output(
+            verify_root,
+            [],
+            [command_error],
+            result_errors=[command_error],
+            failure_count=1,
+            duration_seconds=time.perf_counter() - started_at,
+        )
+        return None, [command_error]
+
+    executed, run_errors = _execute_all_targets(
+        compiled,
+        root=verify_root,
+        fail_fast=True,
+        no_state=True,
+        no_state_update=True,
+        stream_live=True,
+        no_memory=True,
+        no_memory_update=True,
+        no_browser_recording=False,
+        no_logs=False,
+    )
+    all_errors = list(run_errors)
+    if executed:
+        report_labels = set().union(*(_report_step_labels(item.report) for item in executed))
+        missing_from_report = sorted(expected_labels - report_labels)
+        if missing_from_report:
+            all_errors.append(
+                _CommandError(
+                    file=str(source_path),
+                    journey_name=journey_name,
+                    phase="execute",
+                    error_type="JourneySelectionError",
+                    message=(
+                        "Generated Journey verification did not execute discovered step labels: "
+                        + ", ".join(missing_from_report)
+                    ),
+                    hint="Check that the merged extension call is reachable from the selected Journey.",
+                )
+            )
+    _emit_execute_output(
+        verify_root,
+        executed,
+        all_errors,
+        result_errors=all_errors,
+        failure_count=len(all_errors),
+        duration_seconds=time.perf_counter() - started_at,
+    )
+    if all_errors:
+        return None, all_errors
+    verified_steps = sorted(
+        {
+            label
+            for item in executed
+            for label in _report_step_labels(item.report)
+        }
+    )
+    result = _DiscoverVerificationResult(
+        cases=sum(len(item.report.case_reports) for item in executed),
+        steps=tuple(verified_steps),
+        duration_seconds=time.perf_counter() - started_at,
+    )
+    _CLI_LOGGER.info(
+        "discover_verification_success",
+        "generated Journey source verified",
+        pretty=pretty_line(
+            (
+                "Generated Journey source verified: "
+                f"{_count(result.cases, 'case')} executed"
+            ),
+            style="success",
+        ),
+        file=str(source_path),
+        journey=journey_name,
+        cases=result.cases,
+        steps=list(result.steps),
+        duration_seconds=result.duration_seconds,
+    )
+    return result, []
 
 
 def _cmd_discover(args: argparse.Namespace) -> int:
@@ -2706,11 +2903,13 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         browser_state_from_step_anchor,
         discover,
         evidence_context_from_step_anchor,
+        merge_extension_source_with_model,
     )
 
     root = Path.cwd().resolve()
     anchor_execution: _DiscoverAnchorExecution | None = None
     anchor_evidence = AnchorEvidenceContext()
+    temporary_source_path: Path | None = None
     try:
         mode, targets = _classify_discover_targets(tuple(args.target))
         output_file = _resolve_discover_output_file(args, root=root, mode=mode)
@@ -2741,13 +2940,16 @@ def _cmd_discover(args: argparse.Namespace) -> int:
                 "journey discover step mode requires --file to select the source Journey file.",
                 hint=(
                     "Run `journey discover open_main_page --file journeys/app_journey.py "
-                    "--output-file journeys/discovered_snippet.py`."
+                    "--output-file journeys/app_journey.py --force`."
                 ),
             )
 
         start_page_state = None
         anchor_step = None
         urls: tuple[str, ...] = ()
+        verification_journey_name = args.journey_name
+        original_source = ""
+        merge_model: str | None = None
         if mode == "step":
             anchor_step = targets[0]
             discovery_args = argparse.Namespace(
@@ -2763,6 +2965,34 @@ def _cmd_discover(args: argparse.Namespace) -> int:
             if compile_errors:
                 _emit_errors(root, compile_errors)
                 return 1
+            anchor_selection, anchor_select_errors = _select_discover_anchor(
+                compiled,
+                step=anchor_step,
+            )
+            if anchor_select_errors:
+                _emit_errors(root, anchor_select_errors)
+                return 1
+            if anchor_selection is None:
+                _emit_errors(
+                    root,
+                    [
+                        _CommandError(
+                            file=str(Path(args.file)),
+                            journey_name=args.journey,
+                            phase="execute",
+                            error_type="JourneySelectionError",
+                            message=f"Journey discover could not select anchor step {anchor_step!r}.",
+                            hint="Check --file, --journey, and the selected step label.",
+                            step_label=anchor_step,
+                        )
+                    ],
+                )
+                return 1
+            verification_journey_name = anchor_selection.journey.journey_name
+            original_source = anchor_selection.journey.file_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
             anchor_execution, anchor_errors = _execute_discover_anchor_step(
                 compiled,
                 root=root,
@@ -2818,10 +3048,88 @@ def _cmd_discover(args: argparse.Namespace) -> int:
                 cloud_webhook_endpoints=anchor_evidence.cloud_webhook_endpoints,
             )
         )
-        _write_discover_output_file(output_file, result.source)
         if anchor_execution is not None:
             anchor_execution.close()
             anchor_execution = None
+        final_source = result.source
+        verification_mode = "full_journey"
+        if mode == "step":
+            assert anchor_step is not None
+            _CLI_LOGGER.info(
+                "discover_merge_start",
+                "merging generated discovery source into Journey file",
+                pretty=pretty_row(
+                    "Discover",
+                    f"merging generated source into {verification_journey_name}",
+                    indent=8,
+                    label_width=27,
+                ),
+                file=args.file,
+                journey=verification_journey_name,
+                anchor_step=anchor_step,
+            )
+            merge_result = merge_extension_source_with_model(
+                original_source=original_source,
+                generated_extension_source=result.source,
+                journey_name=verification_journey_name,
+                anchor_step=anchor_step,
+                model=args.model,
+            )
+            final_source = merge_result.source
+            merge_model = merge_result.model
+            _CLI_LOGGER.info(
+                "discover_merge_success",
+                "merged generated discovery source",
+                pretty=pretty_row(
+                    "Discover",
+                    f"merged generated source model={merge_model}",
+                    indent=8,
+                    label_width=27,
+                    style="success",
+                ),
+                file=args.file,
+                journey=verification_journey_name,
+                anchor_step=anchor_step,
+                merge_model=merge_model,
+            )
+        expected_step_labels = _discover_generated_step_labels(getattr(result, "roots", ()))
+        temporary_source_path = _write_temporary_discover_source(output_file, final_source)
+        verification, verification_errors = _verify_discover_source_file(
+            root=root,
+            source_path=temporary_source_path,
+            journey_name=verification_journey_name,
+            expected_step_labels=expected_step_labels,
+        )
+        if verification_errors or verification is None:
+            _CLI_LOGGER.error(
+                "discover_output_not_written",
+                "journey discover did not write output because verification failed",
+                pretty=pretty_line(
+                    "Generated Journey source was not written because verification failed.",
+                    style="error",
+                ),
+                output_file=str(output_file),
+                temporary_file=str(temporary_source_path),
+                errors=len(verification_errors),
+            )
+            return 1
+        _replace_with_verified_source(temporary_source_path, output_file)
+        temporary_source_path = None
+        _CLI_LOGGER.info(
+            "discover_output_written",
+            "journey discover wrote verified Python source",
+            pretty=pretty_row(
+                "Discover",
+                f"wrote verified source {_display_path(root, output_file)}",
+                indent=8,
+                label_width=27,
+                style="success",
+            ),
+            output_file=str(output_file),
+            verification_mode=verification_mode,
+            verified_cases=verification.cases,
+            verified_steps=list(verification.steps),
+        )
     except Exception as exc:
         if anchor_execution is not None:
             try:
@@ -2846,6 +3154,9 @@ def _cmd_discover(args: argparse.Namespace) -> int:
             ],
         )
         return 1
+    finally:
+        if temporary_source_path is not None and temporary_source_path.exists():
+            temporary_source_path.unlink()
 
     display_output_file = _display_path(root, output_file)
     _CLI_LOGGER.info(
@@ -2854,22 +3165,28 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         pretty=[
             pretty_line(
                 (
-                    f"Generated Journey source: {display_output_file} mode={result.mode} journey={result.journey_name} actions={result.actions} "
+                    f"Generated verified Journey source: {display_output_file} mode={result.mode} journey={verification_journey_name} actions={result.actions} "
                     f"branches={result.branches} omitted={result.omitted_actions} "
-                    f"model_calls={result.model_calls} stop={result.stop_reason}"
+                    f"model_calls={result.model_calls} verified_cases={verification.cases} stop={result.stop_reason}"
                 ),
                 style="success",
             ),
         ],
         output_file=str(output_file),
         mode=result.mode,
-        journey_name=result.journey_name,
+        journey_name=verification_journey_name,
         extension_name=result.extension_name,
         actions=result.actions,
         branches=result.branches,
         omitted_actions=result.omitted_actions,
         model_calls=result.model_calls,
         stop_reason=result.stop_reason,
+        verified=True,
+        verification_mode=verification_mode,
+        verified_cases=verification.cases,
+        verified_steps=list(verification.steps),
+        verification_duration_seconds=verification.duration_seconds,
+        merge_model=merge_model,
     )
     return 0
 
@@ -4485,19 +4802,19 @@ def build_touchpoints_parser() -> argparse.ArgumentParser:
 def build_discover_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey discover",
-        description="crawl app URLs or continue from a Journey browser step and write generated Journey source",
+        description="crawl app URLs or continue from a Journey browser step and write verified Journey source",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Browser discovery:\n"
             "  journey discover http://127.0.0.1:3000 --output-file journeys/discovered_journey.py\n"
-            "      Use Claude Haiku to discover user paths and write a deterministic Journey draft.\n"
-            "  journey discover open_main_page --file journeys/app_journey.py --output-file journeys/discovered_snippet.py\n"
-            "      Run an existing browser step, discover from that page, and write a pasteable snippet.\n"
+            "      Discover user paths, execute the generated Journey, and write verified source.\n"
+            "  journey discover open_main_page --file journeys/app_journey.py --output-file journeys/app_journey.py --force\n"
+            "      Run an existing browser step, merge discovered coverage, verify it, and replace the source file.\n"
             "  journey discover http://127.0.0.1:18081 --output-file journeys/discovered_journey.py --depth 4 --max-actions 30 --max-model-calls 8 --output jsonl\n"
-            "      Emit discovery events plus a final discover_result event containing the generated source path.\n"
+            "      Emit discovery and verification events plus a final discover_result event containing the generated source path.\n"
             "\n"
-            "Generated code is written only to --output-file. Stdout is reserved for live discovery logs.\n"
-            "Existing output files are refused unless --force is passed.\n"
+            "Generated code is written only after verification passes. Stdout is reserved for live discovery logs and verification logs.\n"
+            "Existing output files, including step-mode --file, are refused unless --force is passed.\n"
             "\n"
             "Model selection follows --model, then JOURNEY_BROWSER_PROMPT_MODEL, then "
             "anthropic:claude-haiku-4-5."
@@ -4514,7 +4831,7 @@ def build_discover_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-file",
-        help="Generated Journey source destination; required for URL and step mode",
+        help="Verified generated Journey source destination; required for URL and step mode",
     )
     parser.add_argument(
         "--journey",
@@ -4670,9 +4987,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  journey evidence --step <step_label>\n"
             "      Inspect traces, videos, structured logs, and touchpoint payloads.\n"
             "  journey discover <url> --output-file journeys/discovered_journey.py\n"
-            "      Crawl an app URL and write a draft branched Journey spec.\n"
-            "  journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/discovered_snippet.py\n"
-            "      Continue from an existing browser step and write a pasteable coverage snippet.\n"
+            "      Crawl an app URL, verify the generated Journey, and write source.\n"
+            "  journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_journey.py --force\n"
+            "      Continue from an existing browser step, merge coverage, verify, and write source.\n"
             "  journey agent codex|claude|cursor|generic [--install]\n"
             "      Print or install packaged assistant guidance for Journey SDK loops.\n"
             "  journey touchpoints browser|docker|email|webhook|http|all\n"

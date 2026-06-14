@@ -1724,12 +1724,12 @@ def _extract_langchain_text(response: object, *, owner: str) -> str:
     raise RuntimeError(f"{owner} expected the model response to include text content.")
 
 
-def _load_langchain_model(model: str) -> object:
+def _load_langchain_model(model: str, *, max_tokens: int = 1000) -> object:
     try:
         return init_chat_model(
             model,
             temperature=0.0,
-            max_tokens=1000,
+            max_tokens=max_tokens,
         )
     except Exception as exc:
         raise _runtime_error_with_hint(

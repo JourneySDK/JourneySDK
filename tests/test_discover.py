@@ -192,6 +192,86 @@ def test_rendered_journey_source_compiles_with_branches() -> None:
     validate_generated_source(source, journey_name="discovered_demo")
 
 
+def test_generated_replay_helpers_settle_consent_and_poll_assertions() -> None:
+    root = DiscoveredNode(
+        node_id="root",
+        start_url="http://example.test/",
+        snapshot=_snapshot("http://example.test/", "Home", "Ready page text"),
+        depth=0,
+    )
+
+    source = render_journey_source((root,), journey_name="discovered_demo")
+
+    assert "def _dismiss_cookie_consent" in source
+    assert "def _settle_replay_page" in source
+    assert "    _settle_replay_page(page, timeout_ms=timeout_ms)" in source
+    assert "while True:" in source
+    validate_generated_source(source, journey_name="discovered_demo")
+
+    namespace: dict[str, object] = {}
+    exec(source, namespace, namespace)
+
+    class FakeBody:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def inner_text(self, *, timeout: int) -> str:
+            assert timeout > 0
+            self.calls += 1
+            return "Ready page text" if self.calls >= 2 else ""
+
+    class FakePage:
+        url = "http://example.test/"
+
+        def __init__(self) -> None:
+            self.body = FakeBody()
+
+        def wait_for_load_state(self, state: str, *, timeout: int) -> None:
+            assert state in {"load", "networkidle"}
+
+        def evaluate(self, script: str) -> bool:
+            assert "cookie" in script.lower()
+            return False
+
+        def wait_for_timeout(self, timeout: int) -> None:
+            assert timeout == 250
+
+        def title(self) -> str:
+            return "Home"
+
+        def locator(self, selector: str) -> FakeBody:
+            assert selector == "body"
+            return self.body
+
+    namespace["_assert_page_state"](
+        FakePage(),
+        expected_path="/",
+        expected_title="Home",
+        expected_text="Ready page text",
+        timeout_ms=3000,
+    )
+
+
+def test_generated_assertion_text_skips_weak_anchors() -> None:
+    root = DiscoveredNode(
+        node_id="root",
+        start_url="http://example.test/",
+        snapshot=_snapshot(
+            "http://example.test/",
+            "Home",
+            "TEST\nLoading\nCookie consent\nStart a new chat",
+        ),
+        depth=0,
+    )
+
+    source = render_journey_source((root,), journey_name="discovered_demo")
+
+    assert "expected_text='Start a new chat'" in source
+    assert "expected_text='TEST'" not in source
+    assert "expected_text='Loading'" not in source
+    assert "expected_text='Cookie consent'" not in source
+
+
 def test_rendered_extension_source_compiles_from_anchor_page() -> None:
     root = DiscoveredNode(
         node_id="root",

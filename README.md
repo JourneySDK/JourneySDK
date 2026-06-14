@@ -96,16 +96,16 @@ unless `--force` is passed.
 
 If you are authoring a journey by hand, use [Getting Started](docs/01-getting-started.md). It covers imports,
 top-level `@journey` functions, running one file, selecting one journey, and JSON Lines output for tools.
-If you want a draft from a running browser app, use
+If you want verified coverage from a running browser app, use
 `journey discover <url> --output-file journeys/<feature>_journey.py`.
 It crawls complete same-origin user transitions, expands bounded finite choices such as selects and radios into
 branches, bounds failed exploratory actions with `--action-timeout` (default 8 seconds), adds best-effort generic API/email/webhook and SDK
-Cloud webhook evidence probes when stable identifiers are observable, and writes deterministic Playwright steps. Review
-the generated draft, then run `journey verify --file ...`. To extend an existing
+Cloud webhook evidence probes when stable identifiers are observable, verifies the generated Journey with the normal
+executor, and then writes deterministic Playwright steps. To extend an existing
 Journey from a browser step, run
-`journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_snippet.py`; the
-command runs that step, uses its returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`, and
-writes a pasteable snippet instead of editing the file.
+`journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_journey.py --force`; the
+command runs that step, uses its returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`, merges
+the discovered coverage into the full Journey file, verifies the merged result, and only then replaces the output.
 
 ## Authoring Guides
 
@@ -124,7 +124,7 @@ The docs index is [Journey Docs](docs/README.md).
 
 Use `journey --help` as the short command index. Use `journey loop --help` for the focused edit loop,
 `journey verify --help` for branch/full verification, `journey evidence --help` for artifact inspection,
-`journey discover --help` before generating a draft journey from a URL or existing browser step, and
+`journey discover --help` before generating a verified journey from a URL or existing browser step, and
 `journey agent --help` before printing or installing assistant guidance.
 
 ## Touchpoint References

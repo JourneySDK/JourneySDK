@@ -120,23 +120,18 @@ When you are already working from a Journey step that lands on the page under de
 step instead of starting over from a URL:
 
 ```bash
-journey discover open_main_page --file journeys/app_journey.py --output-file journeys/open_main_page_snippet.py
+journey discover open_main_page --file journeys/app_journey.py --output-file journeys/app_journey.py --force
 ```
 
 Step mode uses `--file` as the existing Journey source file to search, accepts `--journey` to disambiguate the existing
 entrypoint, executes only through the requested step with temporary state and no browser recording, and starts from the
-step's returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`. It then writes an extension
-snippet to `--output-file`. Paste the helper functions into the Journey file and call the generated function near the
-anchor, for example:
+step's returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`. It then asks the configured model
+to merge the discovered coverage into the full Journey source, executes the merged Journey, and writes `--output-file`
+only after verification passes.
 
-```python
-main_page = step(open_main_page)
-discover_after_open_main_page(main_page)
-```
-
-`journey discover` writes generated code only to `--output-file`, creates missing parent directories, and refuses to
-replace existing files unless `--force` is passed. In URL mode, `--file` is rejected. In step mode, `--file` selects the
-source Journey file and `--output-file` selects the generated snippet destination.
+`journey discover` creates missing parent directories and refuses to replace existing files unless `--force` is passed.
+In URL mode, `--file` is rejected. In step mode, `--file` selects the source Journey file; `--output-file` selects the
+verified merged output and may equal `--file` only when `--force` is passed.
 
 ## Ctrl-C And Resumable Runs
 

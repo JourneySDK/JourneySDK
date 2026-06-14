@@ -59,7 +59,7 @@ journey verify --step target_step --file journeys/<feature>_journey.py --fresh
 journey verify --file journeys/<feature>_journey.py --fresh
 journey verify --step target_step --file journeys/<feature>_journey.py --output jsonl
 journey discover http://127.0.0.1:3000 --output-file journeys/<feature>_journey.py
-journey discover open_main_page --file journeys/<feature>_journey.py --output-file journeys/<feature>_snippet.py
+journey discover open_main_page --file journeys/<feature>_journey.py --output-file journeys/<feature>_journey.py --force
 ```
 
 If the CLI prints `Retry failed step: ...`, copy that command as the focused loop. Read every `What happened`,
@@ -94,16 +94,16 @@ If the CLI prints `Retry failed step: ...`, copy that command as the focused loo
   branch replay. Rename them only when updating those references intentionally.
 - Keep planning side-effect free. Acquire browsers, cloud resources, services, and handles inside step execution.
 - If asked to bootstrap coverage from a running browser app, use
-  `journey discover <url> --output-file journeys/<feature>_journey.py` as a draft generator. If asked to cover a new
+  `journey discover <url> --output-file journeys/<feature>_journey.py` as a verified generator. If asked to cover a new
   feature reachable from an existing browser step, use
-  `journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_snippet.py`;
-  the anchor step may return `JourneyBrowserPage` or simply call `open_page(...)`, and discover writes a pasteable
-  extension snippet. Expect
+  `journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_journey.py --force`;
+  the anchor step may return `JourneyBrowserPage` or simply call `open_page(...)`, and discover merges and verifies the
+  full Journey file before replacing the output. Expect
   complete transition steps, bounded finite-choice branches, 8-second default `--action-timeout` bounded exploratory attempts,
   automatic consent overlay dismissal, filtering of disabled or ambiguous controls, and best-effort generic
-  API/email/webhook or SDK Cloud webhook evidence probes when stable identifiers and reachable endpoints are observed. Review or paste the generated source and run
-  `journey verify --file ...` before claiming coverage. `journey discover` writes generated code only to
-  `--output-file`; stdout is reserved for live logs, and `--output jsonl` reports `discover_result.output_file`.
+  API/email/webhook or SDK Cloud webhook evidence probes when stable identifiers and reachable endpoints are observed.
+  `journey discover` writes generated code only after verification passes; stdout is reserved for live logs, and
+  `--output jsonl` reports `discover_result.output_file` plus verification metadata.
 
 ## Branches
 
