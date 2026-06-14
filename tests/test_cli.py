@@ -337,6 +337,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert default_discover_args.max_actions == 30
     assert default_discover_args.max_model_calls == 8
     assert default_discover_args.max_variants_per_control == 3
+    assert default_discover_args.action_timeout == 8.0
     assert default_discover_args.side_effect_probes == "auto"
     assert default_discover_args.browser == "chromium"
     assert default_discover_args.headed is False

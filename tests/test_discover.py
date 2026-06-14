@@ -13,12 +13,17 @@ from journeysdk.discover import (
     PageSnapshot,
     ProbeSpec,
     _dedupe_candidates,
+    _click_candidate,
+    _deterministic_candidates_for_page,
     _discover_json_state_url,
+    _dismiss_cookie_consent,
+    _emit_discover_omission_summary,
     _first_stable_identifier,
     _form_submit_candidate,
     _form_submit_candidates,
     _json_contains_value,
     _normalize_options,
+    _omission_reason_for_exception,
     browser_state_from_step_anchor,
     evidence_context_from_step_anchor,
     parse_candidate_actions,
@@ -27,6 +32,7 @@ from journeysdk.discover import (
     validate_generated_extension_source,
     validate_generated_source,
 )
+from journeysdk.logger import configure_logging
 from journeysdk.touchpoints.webhook import CloudWebhookEndpoint
 
 
@@ -616,6 +622,242 @@ def test_select_options_expand_into_bounded_transition_variants() -> None:
     assert "plan = 'workshop'" in workshop_candidate.code
     assert ".select_option(plan, timeout=timeout_ms)" in workshop_candidate.code
     assert "vip" not in "\n".join(candidate.code for candidate in candidates)
+
+
+def test_generic_aria_button_uses_unique_visible_text_filter() -> None:
+    candidate = _click_candidate(
+        {
+            "selector": "body > div:nth-of-type(1) > button:nth-of-type(2)",
+            "selectorKind": "css_path",
+            "tag": "button",
+            "aria": "Button",
+            "text": "Sign up",
+            "textUnique": True,
+            "visible": True,
+        },
+        kind="button",
+    )
+
+    assert candidate is not None
+    assert "page.locator('button').filter(has_text='Sign up').click(timeout=timeout_ms)" in candidate.code
+    assert "aria-label" not in candidate.code
+
+
+def test_non_unique_selector_requires_unique_visible_text_repair() -> None:
+    candidate = _click_candidate(
+        {
+            "selector": "[data-testid=\"reused-button\"]",
+            "selectorKind": "testid",
+            "selectorUnique": False,
+            "tag": "button",
+            "testid": "reused-button",
+            "text": "Continue",
+            "textUnique": True,
+            "visible": True,
+        },
+        kind="button",
+    )
+
+    assert candidate is not None
+    assert "page.locator('button').filter(has_text='Continue').click(timeout=timeout_ms)" in candidate.code
+
+    assert (
+        _click_candidate(
+            {
+                "selector": "[data-testid=\"reused-button\"]",
+                "selectorKind": "testid",
+                "selectorUnique": False,
+                "tag": "button",
+                "testid": "reused-button",
+                "text": "Continue",
+                "textUnique": False,
+                "visible": True,
+            },
+            kind="button",
+        )
+        is None
+    )
+
+
+def test_disabled_and_anonymous_controls_do_not_become_candidates() -> None:
+    assert (
+        _click_candidate(
+            {
+                "selector": "[data-testid=\"send-message-button\"]",
+                "selectorKind": "testid",
+                "testid": "send-message-button",
+                "text": "Send",
+                "disabled": True,
+            },
+            kind="button",
+        )
+        is None
+    )
+    assert (
+        _click_candidate(
+            {
+                "selector": "[data-testid=\"send-message-button\"]",
+                "selectorKind": "testid",
+                "testid": "send-message-button",
+                "text": "Send",
+                "ariaDisabled": "true",
+            },
+            kind="button",
+        )
+        is None
+    )
+    assert (
+        _click_candidate(
+            {
+                "selector": "body > button:nth-of-type(1)",
+                "selectorKind": "css_path",
+                "aria": "Button",
+                "text": "",
+                "visible": True,
+            },
+            kind="button",
+        )
+        is None
+    )
+
+
+def test_candidate_dedupe_uses_normalized_action_intent() -> None:
+    candidates = _dedupe_candidates(
+        [
+            CandidateAction("Sign up", "first", "page.locator('button').nth(0).click(timeout=timeout_ms)"),
+            CandidateAction("sign_up", "second", "page.locator('button').nth(1).click(timeout=timeout_ms)"),
+            CandidateAction("Log in", "third", "page.locator('button').nth(2).click(timeout=timeout_ms)"),
+        ]
+    )
+
+    assert [candidate.name for candidate in candidates] == ["Sign up", "Log in"]
+
+
+class _FakeConsentLocator:
+    def __init__(self, page: "_FakeConsentPage", matches: bool) -> None:
+        self.page = page
+        self.matches = matches
+
+    def count(self) -> int:
+        return 1 if self.matches else 0
+
+    def nth(self, index: int) -> "_FakeConsentLocator":
+        assert index == 0
+        return self
+
+    def is_visible(self, *, timeout: int) -> bool:
+        assert timeout == 250
+        return True
+
+    def click(self, *, timeout: int) -> None:
+        assert timeout == 1000
+        self.page.clicked = True
+
+
+class _FakeConsentPage:
+    def __init__(self, *, button_name: str = "Accept all cookies") -> None:
+        self.button_name = button_name
+        self.clicked = False
+
+    def evaluate(self, script: str) -> bool:
+        assert "cookie" in script.lower()
+        return True
+
+    def get_by_role(self, role: str, *, name: object) -> _FakeConsentLocator:
+        assert role == "button"
+        assert name is not None
+        return _FakeConsentLocator(self, bool(name.search(self.button_name)))
+
+    def wait_for_load_state(self, state: str, *, timeout: int) -> None:
+        assert state in {"load", "networkidle"}
+
+
+def test_cookie_consent_overlay_is_dismissed() -> None:
+    page = _FakeConsentPage()
+
+    assert _dismiss_cookie_consent(page) is True
+    assert page.clicked is True
+
+
+def test_cookie_consent_overlay_accepts_cookie_suffix_controls() -> None:
+    page = _FakeConsentPage(button_name="Decline all cookies")
+
+    assert _dismiss_cookie_consent(page) is True
+    assert page.clicked is True
+
+
+def test_cookie_consent_is_dismissed_before_candidate_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePage:
+        dismissed = False
+
+    page = FakePage()
+
+    def fake_dismiss(target: object) -> bool:
+        assert target is page
+        page.dismissed = True
+        return True
+
+    def fake_extract(target: object) -> dict[str, object]:
+        assert target is page
+        assert page.dismissed is True
+        return {
+            "forms": [],
+            "links": [],
+            "buttons": [
+                {
+                    "selector": "[data-testid=\"sign-up\"]",
+                    "selectorKind": "testid",
+                    "testid": "sign-up",
+                    "text": "Sign up",
+                    "visible": True,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(discover_module, "_dismiss_cookie_consent", fake_dismiss)
+    monkeypatch.setattr(discover_module, "_extract_affordances", fake_extract)
+
+    candidates = _deterministic_candidates_for_page(page)  # type: ignore[arg-type]
+
+    assert [candidate.name for candidate in candidates] == ["sign_up"]
+
+
+def test_default_discovery_timeout_is_short_but_generated_replay_stays_conservative() -> None:
+    normalized = _normalize_options(DiscoverOptions(urls=("http://example.test",)))
+    root = DiscoveredNode(
+        node_id="root",
+        start_url="http://example.test/",
+        snapshot=_snapshot("http://example.test/", "Home", "Home"),
+        depth=0,
+    )
+
+    source = render_journey_source((root,), journey_name="discovered_demo")
+
+    assert normalized.action_timeout_seconds == 8.0
+    assert "timeout_ms = 30000" in source
+
+
+def test_omission_reason_categorization_and_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert _omission_reason_for_exception(RuntimeError("strict mode violation")) == "non_unique_selector"
+    assert _omission_reason_for_exception(RuntimeError("element is not enabled")) == "disabled_control"
+    assert (
+        _omission_reason_for_exception(RuntimeError("Cookie dialog intercepts pointer events"))
+        == "overlay_blocked"
+    )
+    assert _omission_reason_for_exception(TimeoutError("Timeout 8000ms exceeded")) == "timeout"
+
+    configure_logging("info")
+    _emit_discover_omission_summary({"timeout": 2, "non_unique_selector": 1})
+    output = capsys.readouterr().out
+    configure_logging("info")
+
+    assert "omitted actions:" in output
+    assert "non_unique_selector=1" in output
+    assert "timeout=2" in output
 
 
 def test_probe_helpers_match_identifiers_and_json_state_urls(

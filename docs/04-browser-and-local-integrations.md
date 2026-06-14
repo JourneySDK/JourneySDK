@@ -148,7 +148,9 @@ uv run journey verify --file journeys/discovered_journey.py
 The discoverer opens the start URL, extracts forms, links, buttons, labels, `data-testid`s, finite controls, and route
 text, then tries complete deterministic transitions such as fill-select-submit before asking the configured Claude Haiku
 model for uncertain next transitions. Select, radio, and checkbox choices are branched up to
-`--max-variants-per-control`; failed exploratory actions are bounded by `--action-timeout`. Discovered stable identifiers
+`--max-variants-per-control`; failed exploratory actions are bounded by `--action-timeout`, which defaults to 8 seconds
+while generated replay code keeps a 30 second timeout. Discovery dismisses common consent overlays and filters disabled
+or ambiguous controls before trying candidates. Discovered stable identifiers
 can feed generic same-origin JSON, local email, local webhook, and SDK Cloud webhook evidence assertions when those
 endpoints are reachable. Use `JOURNEY_DISCOVER_EMAIL_EVIDENCE_URL` and
 `JOURNEY_DISCOVER_WEBHOOK_EVIDENCE_URL` to point discovery at local evidence services that are not on their usual

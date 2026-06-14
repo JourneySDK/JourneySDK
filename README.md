@@ -99,7 +99,7 @@ top-level `@journey` functions, running one file, selecting one journey, and JSO
 If you want a draft from a running browser app, use
 `journey discover <url> --output-file journeys/<feature>_journey.py`.
 It crawls complete same-origin user transitions, expands bounded finite choices such as selects and radios into
-branches, bounds failed exploratory actions with `--action-timeout`, adds best-effort generic API/email/webhook and SDK
+branches, bounds failed exploratory actions with `--action-timeout` (default 8 seconds), adds best-effort generic API/email/webhook and SDK
 Cloud webhook evidence probes when stable identifiers are observable, and writes deterministic Playwright steps. Review
 the generated draft, then run `journey verify --file ...`. To extend an existing
 Journey from a browser step, run

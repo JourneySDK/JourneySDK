@@ -52,7 +52,8 @@ _LOGGER = get_logger("discover")
 _MAX_OBSERVATION_TEXT_LENGTH = 8000
 _DEFAULT_CANDIDATES_PER_STATE = 5
 _DEFAULT_MAX_MODEL_CALLS = 8
-_DEFAULT_ACTION_TIMEOUT_SECONDS = 30.0
+_DEFAULT_DISCOVER_ACTION_TIMEOUT_SECONDS = 8.0
+_GENERATED_REPLAY_TIMEOUT_SECONDS = 30.0
 _DEFAULT_MAX_VARIANTS_PER_CONTROL = 3
 _JSON_STATE_PATHS = (
     "/api/state",
@@ -145,15 +146,42 @@ _AFFORDANCE_SCRIPT = r"""
     return parts.length ? `body > ${parts.join(" > ")}` : null;
   }
 
+  function uniqueSelector(selector) {
+    if (!selector) return false;
+    try {
+      return document.querySelectorAll(selector).length === 1;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function genericAriaLabel(value) {
+    const normalized = cleanText(value).toLowerCase();
+    return ["", "button", "link", "menu", "close", "icon"].includes(normalized);
+  }
+
   function selectorFor(element) {
     const testid = element.getAttribute("data-testid");
-    if (testid) return `[data-testid="${attrValue(testid)}"]`;
-    if (element.id) return `#${cssEscape(element.id)}`;
+    if (testid) {
+      const selector = `[data-testid="${attrValue(testid)}"]`;
+      if (uniqueSelector(selector)) return { selector, kind: "testid", unique: true };
+    }
+    if (element.id) {
+      const selector = `#${cssEscape(element.id)}`;
+      if (uniqueSelector(selector)) return { selector, kind: "id", unique: true };
+    }
     const name = element.getAttribute("name");
-    if (name) return `${element.tagName.toLowerCase()}[name="${attrValue(name)}"]`;
+    if (name) {
+      const selector = `${element.tagName.toLowerCase()}[name="${attrValue(name)}"]`;
+      if (uniqueSelector(selector)) return { selector, kind: "name", unique: true };
+    }
     const aria = element.getAttribute("aria-label");
-    if (aria) return `${element.tagName.toLowerCase()}[aria-label="${attrValue(aria)}"]`;
-    return cssPath(element);
+    if (aria && !genericAriaLabel(aria)) {
+      const selector = `${element.tagName.toLowerCase()}[aria-label="${attrValue(aria)}"]`;
+      if (uniqueSelector(selector)) return { selector, kind: "aria", unique: true };
+    }
+    const selector = cssPath(element);
+    return { selector, kind: selector ? "css_path" : "", unique: Boolean(selector) };
   }
 
   function labelFor(element) {
@@ -172,10 +200,13 @@ _AFFORDANCE_SCRIPT = r"""
     const tag = element.tagName.toLowerCase();
     const type = tag === "input" ? String(element.getAttribute("type") || "text").toLowerCase() : tag;
     if (["hidden", "submit", "button", "image", "reset", "file"].includes(type)) return null;
+    const selector = selectorFor(element);
     const info = {
       tag,
       type,
-      selector: selectorFor(element),
+      selector: selector.selector,
+      selectorKind: selector.kind,
+      selectorUnique: selector.unique,
       id: element.getAttribute("id") || "",
       name: element.getAttribute("name") || "",
       testid: element.getAttribute("data-testid") || "",
@@ -183,7 +214,7 @@ _AFFORDANCE_SCRIPT = r"""
       placeholder: element.getAttribute("placeholder") || "",
       value: "value" in element ? String(element.value || "") : "",
       required: Boolean(element.required),
-      disabled: Boolean(element.disabled),
+      disabled: Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true",
       readonly: Boolean(element.readOnly),
       checked: Boolean(element.checked),
       visible: isVisible(element),
@@ -200,14 +231,30 @@ _AFFORDANCE_SCRIPT = r"""
   }
 
   function controlInfo(element) {
+    const tag = element.tagName.toLowerCase();
+    const text = cleanText(element.innerText || element.textContent || element.value || element.getAttribute("aria-label") || "");
+    const selector = selectorFor(element);
+    const matchingTextControls = text
+      ? Array.from(document.querySelectorAll(tag))
+          .filter((candidate) => isVisible(candidate))
+          .filter((candidate) => cleanText(candidate.innerText || candidate.textContent || candidate.value || candidate.getAttribute("aria-label") || "") === text)
+          .length
+      : 0;
     return {
-      selector: selectorFor(element),
+      tag,
+      selector: selector.selector,
+      selectorKind: selector.kind,
+      selectorUnique: selector.unique,
       testid: element.getAttribute("data-testid") || "",
       id: element.getAttribute("id") || "",
       name: element.getAttribute("name") || "",
-      text: cleanText(element.innerText || element.textContent || element.value || element.getAttribute("aria-label") || ""),
+      role: element.getAttribute("role") || "",
+      aria: element.getAttribute("aria-label") || "",
+      text,
+      textUnique: Boolean(text && matchingTextControls === 1),
       href: element.href || element.getAttribute("href") || "",
       type: String(element.getAttribute("type") || "").toLowerCase(),
+      disabled: Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true",
       visible: isVisible(element),
     };
   }
@@ -217,8 +264,9 @@ _AFFORDANCE_SCRIPT = r"""
       .map(fieldInfo)
       .filter((field) => field && field.selector && !field.disabled);
     const submitElement = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+    const selector = selectorFor(form);
     return {
-      selector: selectorFor(form),
+      selector: selector.selector,
       action: form.action || form.getAttribute("action") || "",
       method: String(form.method || "get").toLowerCase(),
       fields,
@@ -234,7 +282,7 @@ _AFFORDANCE_SCRIPT = r"""
   const buttons = Array.from(document.querySelectorAll("button, [role='button']"))
     .filter((button) => isVisible(button) && !button.closest("form"))
     .map(controlInfo)
-    .filter((button) => button.selector);
+    .filter((button) => button.selector && !button.disabled);
 
   return {
     route: window.location.pathname || "/",
@@ -262,7 +310,7 @@ class DiscoverOptions:
     headless: bool = True
     model: str | None = None
     allow_external: bool = False
-    action_timeout_seconds: float = _DEFAULT_ACTION_TIMEOUT_SECONDS
+    action_timeout_seconds: float = _DEFAULT_DISCOVER_ACTION_TIMEOUT_SECONDS
     email_evidence_urls: tuple[str, ...] = ()
     webhook_evidence_urls: tuple[str, ...] = ()
     cloud_webhook_endpoints: tuple[object, ...] = ()
@@ -642,6 +690,7 @@ def discover(
 
     roots: list[DiscoveredNode] = []
     omitted_actions = 0
+    omitted_by_reason: dict[str, int] = {}
     stop_reasons: set[str] = set()
     model_cache: dict[str, list[CandidateAction]] = {}
     budget = _CrawlBudget(max_model_calls=normalized.max_model_calls)
@@ -665,7 +714,7 @@ def discover(
                     index=index,
                     url=start_state.url,
                 )
-                root, omitted = _discover_start_url(
+                root, omitted, start_omitted_by_reason = _discover_start_url(
                     browser,
                     start_state=start_state,
                     options=normalized,
@@ -676,6 +725,7 @@ def discover(
                 )
                 roots.append(root)
                 omitted_actions += omitted
+                _merge_counts(omitted_by_reason, start_omitted_by_reason)
                 stop_reasons.update(root.stop_reasons)
         finally:
             browser.close()
@@ -738,6 +788,7 @@ def discover(
         model=model,
         stop_reason=result.stop_reason,
     )
+    _emit_discover_omission_summary(omitted_by_reason)
     return result
 
 
@@ -1071,7 +1122,7 @@ def render_journey_source(
         "    expected_path: str | None = None,",
         "    expected_title: str | None = None,",
         "    expected_text: str | None = None,",
-        f"    timeout_ms: int = {int(_DEFAULT_ACTION_TIMEOUT_SECONDS * 1000)},",
+        f"    timeout_ms: int = {int(_GENERATED_REPLAY_TIMEOUT_SECONDS * 1000)},",
         ") -> None:",
         "    if expected_path is not None:",
         "        actual_path = urlsplit(page.url).path or \"/\"",
@@ -1239,7 +1290,7 @@ def _discover_start_url(
     model_cache: dict[str, list[CandidateAction]],
     budget: _CrawlBudget,
     node_prefix: str,
-) -> tuple[DiscoveredNode, int]:
+) -> tuple[DiscoveredNode, int, dict[str, int]]:
     root_snapshot = _snapshot_for_path(browser, start_state, ())
     root = DiscoveredNode(
         node_id=f"{node_prefix}node_1",
@@ -1253,6 +1304,7 @@ def _discover_start_url(
     edge_sequence = 0
     action_count = 0
     omitted_actions = 0
+    omitted_by_reason: dict[str, int] = {}
     allowed_origins = _allowed_origins(options)
 
     while queue and action_count < options.max_actions:
@@ -1331,22 +1383,27 @@ def _discover_start_url(
                 snapshot = action_result.snapshot
             except Exception as exc:
                 omitted_actions += 1
+                reason = _omission_reason_for_exception(exc)
+                _increment_count(omitted_by_reason, reason)
+                error = _short_exception(exc)
                 _LOGGER.warning(
                     "discover_action_omitted",
                     "journey discover omitted a failed action",
                     pretty=pretty_row(
                         "Discover",
-                        f"omitted {candidate.name}: {_format_exception(exc)}",
+                        f"omitted {candidate.name}: {reason} ({error})",
                         indent=8,
                         label_width=27,
                         style="warning",
                     ),
                     action=candidate.name,
-                    error=_format_exception(exc),
+                    reason=reason,
+                    error=error,
                 )
                 continue
             if not options.allow_external and _origin(snapshot.url) not in allowed_origins:
                 omitted_actions += 1
+                _increment_count(omitted_by_reason, "external_navigation")
                 _LOGGER.warning(
                     "discover_external_omitted",
                     "journey discover omitted an external navigation",
@@ -1363,6 +1420,7 @@ def _discover_start_url(
                 continue
             if snapshot.signature == node.snapshot.signature:
                 omitted_actions += 1
+                _increment_count(omitted_by_reason, "unchanged_state")
                 _LOGGER.debug(
                     "discover_action_omitted",
                     "journey discover omitted a non-transition action",
@@ -1429,7 +1487,7 @@ def _discover_start_url(
         root.stop_reasons.update(discovered_node.stop_reasons)
     if not root.stop_reasons:
         root.stop_reasons.add("frontier_exhausted")
-    return root, omitted_actions
+    return root, omitted_actions, omitted_by_reason
 
 
 def _snapshot_for_path(
@@ -1477,12 +1535,14 @@ def _snapshot_after_action(
             timeout_seconds=timeout_seconds,
         )
         for edge in path:
+            _dismiss_cookie_consent(active_page)
             active_page = _execute_discover_code(
                 active_page,
                 edge.action.code,
                 timeout_seconds=timeout_seconds,
             )
             _settle_page(active_page)
+        _dismiss_cookie_consent(active_page)
         active_page = _execute_discover_code(
             active_page,
             action.code,
@@ -1531,12 +1591,14 @@ def _deterministic_candidates_for_path(
             timeout_seconds=timeout_seconds,
         )
         for edge in path:
+            _dismiss_cookie_consent(active_page)
             active_page = _execute_discover_code(
                 active_page,
                 edge.action.code,
                 timeout_seconds=timeout_seconds,
             )
             _settle_page(active_page)
+        _dismiss_cookie_consent(active_page)
         return _deterministic_candidates_for_page(
             active_page,
             max_variants_per_control=max_variants_per_control,
@@ -1570,7 +1632,84 @@ def _new_page_for_start_state(
         )
         page.reload(wait_until="load", timeout=timeout_ms)
     _settle_page(page)
+    _dismiss_cookie_consent(page)
     return cast(PlaywrightPage, page)
+
+
+def _dismiss_cookie_consent(page: PlaywrightPage) -> bool:
+    if not _cookie_consent_visible(page):
+        return False
+
+    patterns = (
+        r"^(accept all|allow all|accept|agree|i accept|ok)(?: cookies?)?$",
+        r"^(reject all|decline all|decline|deny all|no thanks)(?: cookies?)?$",
+        r"^(close|dismiss)(?: cookies?)?$",
+    )
+    for pattern in patterns:
+        matcher = re.compile(pattern, re.IGNORECASE)
+        if _click_first_visible_control(page.get_by_role("button", name=matcher)):
+            _LOGGER.info(
+                "discover_cookie_consent_dismissed",
+                "journey discover dismissed a cookie consent overlay",
+                pretty=pretty_row(
+                    "Discover",
+                    "dismissed cookie consent overlay",
+                    indent=8,
+                    label_width=27,
+                ),
+            )
+            _settle_page(page)
+            return True
+    return False
+
+
+def _cookie_consent_visible(page: PlaywrightPage) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                r"""
+                () => {
+                  function isVisible(element) {
+                    if (!element || !element.isConnected) return false;
+                    const style = window.getComputedStyle(element);
+                    if (style.visibility === "hidden" || style.display === "none") return false;
+                    if (Number(style.opacity) === 0) return false;
+                    return element.getClientRects().length > 0;
+                  }
+                  const pattern = /(cookie|cookies|consent|privacy|tracking)/i;
+                  const candidates = Array.from(document.querySelectorAll("[role='dialog'], [aria-modal='true'], [id], [class], [data-testid], [aria-label]"));
+                  return candidates.some((element) => {
+                    if (!isVisible(element)) return false;
+                    const idClass = `${element.id || ""} ${element.className || ""} ${element.getAttribute("data-testid") || ""} ${element.getAttribute("aria-label") || ""}`;
+                    const modalLike = element.getAttribute("role") === "dialog" || element.getAttribute("aria-modal") === "true";
+                    const consentNamed = pattern.test(idClass);
+                    if (!modalLike && !consentNamed) return false;
+                    const text = element.innerText || element.textContent || "";
+                    return consentNamed || pattern.test(text);
+                  });
+                }
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _click_first_visible_control(locator: object) -> bool:
+    try:
+        count = min(int(locator.count()), 5)  # type: ignore[attr-defined]
+    except Exception:
+        count = 1
+    for index in range(count):
+        try:
+            control = locator.nth(index) if hasattr(locator, "nth") else locator
+            if hasattr(control, "is_visible") and not control.is_visible(timeout=250):
+                continue
+            control.click(timeout=1000)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def _deterministic_candidates_for_page(
@@ -1578,6 +1717,7 @@ def _deterministic_candidates_for_page(
     *,
     max_variants_per_control: int = _DEFAULT_MAX_VARIANTS_PER_CONTROL,
 ) -> list[CandidateAction]:
+    _dismiss_cookie_consent(page)
     affordances = _extract_affordances(page)
     candidates: list[CandidateAction] = []
     for form in _as_list(affordances.get("forms")):
@@ -1613,6 +1753,8 @@ def _form_submit_candidates(
 ) -> list[CandidateAction]:
     submit = form.get("submit")
     if not isinstance(submit, dict):
+        return []
+    if _control_is_disabled(submit):
         return []
     submit_selector = _string_value(submit.get("selector"))
     if not submit_selector:
@@ -1771,16 +1913,60 @@ def _form_submit_candidate_for_choices(
 
 
 def _click_candidate(item: dict[str, object], *, kind: str) -> CandidateAction | None:
-    selector = _string_value(item.get("selector"))
-    if not selector:
+    if _control_is_disabled(item):
+        return None
+    if not _control_has_actionable_identity(item):
+        return None
+    locator = _click_locator_expression(item, kind=kind)
+    if locator is None:
         return None
     lines = [
-        f"page.locator({selector!r}).click(timeout=timeout_ms)",
+        f"{locator}.click(timeout=timeout_ms)",
         'page.wait_for_load_state("load", timeout=timeout_ms)',
     ]
     action_name = _transition_name(item, fallback=f"open {kind}")
     description = f"Click {kind} {action_name.replace('_', ' ')}."
     return CandidateAction(name=action_name, description=description, code="\n".join(lines))
+
+
+def _control_is_disabled(item: dict[str, object]) -> bool:
+    return bool(item.get("disabled")) or _string_value(item.get("ariaDisabled")).lower() == "true"
+
+
+def _control_has_actionable_identity(item: dict[str, object]) -> bool:
+    if any(
+        _string_value(item.get(key))
+        for key in ("testid", "id", "text", "name", "href")
+    ):
+        return True
+    aria = _string_value(item.get("aria"))
+    return bool(aria and not _is_generic_aria_label(aria))
+
+
+def _is_generic_aria_label(value: str) -> bool:
+    return value.strip().lower() in {"", "button", "link", "menu", "close", "icon"}
+
+
+def _click_locator_expression(item: dict[str, object], *, kind: str) -> str | None:
+    selector = _string_value(item.get("selector"))
+    text = _string_value(item.get("text"))
+    selector_kind = _string_value(item.get("selectorKind"))
+    selector_unique = item.get("selectorUnique")
+    text_unique = bool(item.get("textUnique"))
+    if selector_unique is False and not text_unique:
+        return None
+    if text and text_unique and (selector_unique is False or selector_kind in {"css_path", "aria", ""}):
+        tag = _string_value(item.get("tag")) or ("a" if kind == "link" else "button")
+        role = _string_value(item.get("role"))
+        base_selector = (
+            f"[role={role!r}]"
+            if role and tag not in {"button", "a"}
+            else tag
+        )
+        return f"page.locator({base_selector!r}).filter(has_text={text!r})"
+    if selector:
+        return f"page.locator({selector!r})"
+    return None
 
 
 def _transition_name(item: dict[str, object], *, fallback: str) -> str:
@@ -1994,9 +2180,9 @@ def _first_select_option_value(field: dict[str, object]) -> str | None:
 
 def _dedupe_candidates(candidates: Sequence[CandidateAction]) -> list[CandidateAction]:
     deduped: list[CandidateAction] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[str] = set()
     for candidate in candidates:
-        key = (candidate.name, candidate.code)
+        key = _sanitize_identifier(candidate.name, default="discover_action")
         if key in seen:
             continue
         seen.add(key)
@@ -2598,7 +2784,7 @@ def _render_root_function(root: DiscoveredNode, *, function_name: str) -> list[s
     return [
         f"def {function_name}() -> JourneyBrowserPage:",
         f"    page = open_page({root.start_url!r})",
-        f"    timeout_ms = {int(_DEFAULT_ACTION_TIMEOUT_SECONDS * 1000)}",
+        f"    timeout_ms = {int(_GENERATED_REPLAY_TIMEOUT_SECONDS * 1000)}",
         "    page.wait_for_load_state(\"load\", timeout=timeout_ms)",
         (
             "    _assert_page_state("
@@ -2620,7 +2806,7 @@ def _render_edge_function(edge: DiscoveredEdge) -> list[str]:
         ") -> JourneyBrowserPage:",
         f"    \"\"\"{_docstring_text(edge.action.description)}\"\"\"",
         "    page = open_page(saved_page)",
-        f"    timeout_ms = {int(_DEFAULT_ACTION_TIMEOUT_SECONDS * 1000)}",
+        f"    timeout_ms = {int(_GENERATED_REPLAY_TIMEOUT_SECONDS * 1000)}",
         "",
         "    def unique_email(prefix: str) -> str:",
         "        return _unique_email(prefix)",
@@ -2990,6 +3176,54 @@ def _format_exception(exc: BaseException) -> str:
     if message:
         return f"{type(exc).__name__}: {message}"
     return type(exc).__name__
+
+
+def _short_exception(exc: BaseException, *, max_length: int = 220) -> str:
+    return _truncate(" ".join(_format_exception(exc).split()), max_length)
+
+
+def _omission_reason_for_exception(exc: BaseException) -> str:
+    text = _format_exception(exc).lower()
+    if "intercepts pointer events" in text and any(
+        token in text for token in ("cookie", "consent", "privacy", "cybot")
+    ):
+        return "overlay_blocked"
+    if "strict mode violation" in text or "resolved to" in text:
+        return "non_unique_selector"
+    if "element is not enabled" in text or "disabled" in text:
+        return "disabled_control"
+    if "timeout" in text:
+        return "timeout"
+    return "execution_error"
+
+
+def _increment_count(counts: dict[str, int], key: str) -> None:
+    counts[key] = counts.get(key, 0) + 1
+
+
+def _merge_counts(target: dict[str, int], source: dict[str, int]) -> None:
+    for key, value in source.items():
+        target[key] = target.get(key, 0) + value
+
+
+def _emit_discover_omission_summary(counts: dict[str, int]) -> None:
+    if not counts:
+        return
+    summary = ", ".join(
+        f"{key}={value}" for key, value in sorted(counts.items())
+    )
+    _LOGGER.info(
+        "discover_omissions_summary",
+        "journey discover omitted actions by reason",
+        pretty=pretty_row(
+            "Discover",
+            f"omitted actions: {summary}",
+            indent=8,
+            label_width=27,
+            style="warning",
+        ),
+        omitted_by_reason=dict(sorted(counts.items())),
+    )
 
 
 class _NameAllocator:

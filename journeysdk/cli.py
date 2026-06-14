@@ -4552,8 +4552,8 @@ def build_discover_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--action-timeout",
         type=float,
-        default=30.0,
-        help="Maximum seconds for one exploratory action attempt (default: 30)",
+        default=8.0,
+        help="Maximum seconds for one exploratory action attempt (default: 8)",
     )
     parser.add_argument(
         "--side-effect-probes",

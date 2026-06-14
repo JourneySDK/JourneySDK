@@ -101,7 +101,9 @@ journey verify --file journeys/discovered_journey.py
 The discoverer composes deterministic form submits and navigation transitions first, expands bounded finite controls
 with `--max-variants-per-control`, then uses Claude Haiku by default through `JOURNEY_BROWSER_PROMPT_MODEL` model
 resolution when the next transition is uncertain. It crawls same-origin scenarios within `--depth`, `--max-actions`,
-`--max-model-calls`, and `--action-timeout`, and writes deterministic Playwright step helpers. When a transition exposes
+`--max-model-calls`, and the exploratory `--action-timeout` default of 8 seconds, while generated replay code keeps a
+30 second timeout. Discovery dismisses common consent overlays before extracting actions and filters disabled or
+ambiguous controls before spending time on them. It writes deterministic Playwright step helpers. When a transition exposes
 a stable visible identifier, `--side-effect-probes auto` can attach generic same-origin JSON, local email, local webhook,
 and SDK Cloud webhook evidence assertions if reachable endpoints are discovered. Model calls happen during discovery, not during later
 `journey verify` runs. Review the generated file before committing it, especially for credentials, fixture data, and

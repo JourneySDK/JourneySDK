@@ -99,9 +99,9 @@ If the CLI prints `Retry failed step: ...`, copy that command as the focused loo
   `journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_snippet.py`;
   the anchor step may return `JourneyBrowserPage` or simply call `open_page(...)`, and discover writes a pasteable
   extension snippet. Expect
-  complete transition steps, bounded finite-choice branches, `--action-timeout` bounded exploratory attempts, and
-  best-effort generic API/email/webhook or SDK Cloud webhook evidence probes when stable identifiers and reachable
-  endpoints are observed. Review or paste the generated source and run
+  complete transition steps, bounded finite-choice branches, 8-second default `--action-timeout` bounded exploratory attempts,
+  automatic consent overlay dismissal, filtering of disabled or ambiguous controls, and best-effort generic
+  API/email/webhook or SDK Cloud webhook evidence probes when stable identifiers and reachable endpoints are observed. Review or paste the generated source and run
   `journey verify --file ...` before claiming coverage. `journey discover` writes generated code only to
   `--output-file`; stdout is reserved for live logs, and `--output jsonl` reports `discover_result.output_file`.
 
