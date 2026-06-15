@@ -15,16 +15,13 @@ import pytest
 from journeysdk.cli import (
     _CliStepInterruptController,
     _CompiledJourney,
-    _DiscoverAnchorExecution,
     _active_environment_python,
-    _classify_discover_targets,
-    _execute_discover_anchor_step,
-    _is_discover_url_like,
+    _DevStepExecution,
+    _execute_dev_step,
     _read_pause_choice,
-    _select_discover_anchor,
-    _verify_discover_source_file,
+    _select_dev_step,
     build_agent_parser,
-    build_discover_parser,
+    build_dev_parser,
     build_loop_parser,
     build_logs_parser,
     build_parser,
@@ -54,32 +51,6 @@ def _reset_logging() -> None:
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(content), encoding="utf-8")
-
-
-def _stub_discover_verification(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-    verified_paths: list[Path] = []
-
-    def fake_verify(
-        *,
-        root: Path,
-        source_path: Path,
-        journey_name: str,
-        expected_step_labels: Any,
-    ) -> tuple[SimpleNamespace, list[object]]:
-        del root, journey_name
-        assert source_path.exists()
-        verified_paths.append(source_path)
-        return (
-            SimpleNamespace(
-                cases=1,
-                steps=tuple(expected_step_labels),
-                duration_seconds=0.01,
-            ),
-            [],
-        )
-
-    monkeypatch.setattr("journeysdk.cli._verify_discover_source_file", fake_verify)
-    return verified_paths
 
 
 def _assert_ordered(output: str, *needles: str) -> None:
@@ -255,7 +226,7 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     capsys: pytest.CaptureFixture[str],
 ):
     parser = build_parser()
-    discover_parser = build_discover_parser()
+    dev_parser = build_dev_parser()
     loop_parser = build_loop_parser()
     verify_parser = build_verify_parser()
 
@@ -310,83 +281,40 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert install_args.install is True
     assert install_args.force is True
 
-    discover_args = discover_parser.parse_args(
-        [
-            "http://127.0.0.1:18081",
-            "--journey-name",
-            "discovered_agentic_loop_journey",
-            "--depth",
-            "4",
-            "--max-actions",
-            "30",
-            "--max-model-calls",
-            "6",
-            "--max-variants-per-control",
-            "3",
-            "--side-effect-probes",
-            "auto",
-            "--browser",
-            "chromium",
-            "--headed",
-            "--model",
-            "anthropic:claude-haiku-4-5",
-            "--allow-external",
-            "--output-file",
-            "journeys/discovered.py",
-            "--force",
-            "--output",
-            "jsonl",
-        ]
-    )
-    assert discover_args.target == ["http://127.0.0.1:18081"]
-    assert discover_args.file is None
-    assert discover_args.output_file == "journeys/discovered.py"
-    assert discover_args.journey is None
-    assert discover_args.journey_name == "discovered_agentic_loop_journey"
-    assert discover_args.depth == 4
-    assert discover_args.max_actions == 30
-    assert discover_args.max_model_calls == 6
-    assert discover_args.max_variants_per_control == 3
-    assert discover_args.side_effect_probes == "auto"
-    assert discover_args.browser == "chromium"
-    assert discover_args.headed is True
-    assert discover_args.model == "anthropic:claude-haiku-4-5"
-    assert discover_args.allow_external is True
-    assert discover_args.force is True
-    assert discover_args.output == "jsonl"
-
-    default_discover_args = discover_parser.parse_args(["example.test"])
-    assert default_discover_args.target == ["example.test"]
-    assert default_discover_args.file is None
-    assert default_discover_args.journey is None
-    assert default_discover_args.journey_name == "discovered_journey"
-    assert default_discover_args.depth == 4
-    assert default_discover_args.max_actions == 30
-    assert default_discover_args.max_model_calls == 8
-    assert default_discover_args.max_variants_per_control == 3
-    assert default_discover_args.action_timeout == 8.0
-    assert default_discover_args.side_effect_probes == "auto"
-    assert default_discover_args.browser == "chromium"
-    assert default_discover_args.headed is False
-    assert default_discover_args.output_file is None
-    assert default_discover_args.force is False
-    assert default_discover_args.output == "pretty"
-
-    step_discover_args = discover_parser.parse_args(
+    dev_args = dev_parser.parse_args(
         [
             "open_main_page",
             "--file",
             "journeys/app_journey.py",
             "--journey",
             "app_journey",
-            "--output-file",
-            "journeys/discovered_snippet.py",
+            "--url",
+            "http://127.0.0.1:18081",
+            "--agent",
+            "--no-memory",
+            "--no-memory-update",
+            "--no-browser-recording",
+            "--output",
+            "jsonl",
         ]
     )
-    assert step_discover_args.target == ["open_main_page"]
-    assert step_discover_args.file == "journeys/app_journey.py"
-    assert step_discover_args.output_file == "journeys/discovered_snippet.py"
-    assert step_discover_args.journey == "app_journey"
+    assert dev_args.step_label == "open_main_page"
+    assert dev_args.file == "journeys/app_journey.py"
+    assert dev_args.journey == "app_journey"
+    assert dev_args.url == "http://127.0.0.1:18081"
+    assert dev_args.agent is True
+    assert dev_args.no_memory is True
+    assert dev_args.no_memory_update is True
+    assert dev_args.no_browser_recording is True
+    assert dev_args.output == "jsonl"
+
+    default_dev_args = dev_parser.parse_args([])
+    assert default_dev_args.step_label is None
+    assert default_dev_args.file is None
+    assert default_dev_args.journey is None
+    assert default_dev_args.url is None
+    assert default_dev_args.agent is False
+    assert default_dev_args.output == "pretty"
 
     alias_args = parser.parse_args(["--level", "warning"])
     assert alias_args.log_level == "warning"
@@ -439,35 +367,14 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     with pytest.raises(SystemExit):
         parser.parse_args(["--output", "structured"])
     with pytest.raises(SystemExit):
-        discover_parser.parse_args(["http://127.0.0.1:3000", "--output", "source"])
+        dev_parser.parse_args(["open_main_page", "--output", "source"])
 
     assert parser.parse_args(["--output", "pretty"]).output == "pretty"
     assert parser.parse_args(["--output", "jsonl"]).output == "jsonl"
 
 
-def test_discover_target_classification() -> None:
-    assert _is_discover_url_like("http://127.0.0.1:3000")
-    assert _is_discover_url_like("localhost:3000")
-    assert _is_discover_url_like("127.0.0.1:3000")
-    assert _is_discover_url_like("example.test")
-    assert _is_discover_url_like("file:///tmp/app.html")
-    assert not _is_discover_url_like("open_main_page")
 
-    assert _classify_discover_targets(["http://127.0.0.1:3000"]) == (
-        "url",
-        ("http://127.0.0.1:3000",),
-    )
-    assert _classify_discover_targets(["open_main_page"]) == (
-        "step",
-        ("open_main_page",),
-    )
-    with pytest.raises(Exception, match="cannot mix URL targets with step labels"):
-        _classify_discover_targets(["http://127.0.0.1:3000", "open_main_page"])
-    with pytest.raises(Exception, match="step mode accepts exactly one step label"):
-        _classify_discover_targets(["open_main_page", "open_settings"])
-
-
-def _compiled_anchor_plan(case_plans: list[CasePlan]) -> _CompiledJourney:
+def _compiled_dev_plan(case_plans: list[CasePlan]) -> _CompiledJourney:
     def flow() -> None:
         return None
 
@@ -483,7 +390,7 @@ def _compiled_anchor_plan(case_plans: list[CasePlan]) -> _CompiledJourney:
     )
 
 
-def test_discover_anchor_resolution_collapses_shared_prefix_cases() -> None:
+def test_dev_step_selection_defaults_to_first_shared_step() -> None:
     shared_step = StepNode(
         node_id="step_open_main_page",
         label="open_main_page",
@@ -518,18 +425,19 @@ def test_discover_anchor_resolution_collapses_shared_prefix_cases() -> None:
         ],
     )
 
-    selection, errors = _select_discover_anchor(
-        [_compiled_anchor_plan([case_b, case_a])],
-        step="open_main_page",
+    selection, errors = _select_dev_step(
+        [_compiled_dev_plan([case_b, case_a])],
+        step=None,
     )
 
     assert errors == []
     assert selection is not None
     assert selection.case.case_id == "case_a"
+    assert selection.target_index == 0
     assert len(selection.candidates) == 2
 
 
-def test_discover_anchor_resolution_rejects_branch_specific_matches() -> None:
+def test_dev_step_selection_rejects_branch_specific_ambiguity() -> None:
     case_a = CasePlan(
         case_id="case_a",
         branch_env={"group": "a"},
@@ -569,8 +477,8 @@ def test_discover_anchor_resolution_rejects_branch_specific_matches() -> None:
         ],
     )
 
-    selection, errors = _select_discover_anchor(
-        [_compiled_anchor_plan([case_a, case_b])],
+    selection, errors = _select_dev_step(
+        [_compiled_dev_plan([case_a, case_b])],
         step="open_settings",
     )
 
@@ -581,7 +489,7 @@ def test_discover_anchor_resolution_rejects_branch_specific_matches() -> None:
     assert "case_b" in (errors[0].hint or "")
 
 
-def test_discover_anchor_execution_pauses_after_target_step(
+def test_dev_step_execution_pauses_after_target_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from journeysdk.executor import _PausedExecution
@@ -593,7 +501,7 @@ def test_discover_anchor_execution_pauses_after_target_step(
         args=(),
         kwargs={},
     )
-    compiled = _compiled_anchor_plan(
+    compiled = _compiled_dev_plan(
         [
             CasePlan(
                 case_id="case_checkout",
@@ -635,7 +543,7 @@ def test_discover_anchor_execution_pauses_after_target_step(
 
     monkeypatch.setattr("journeysdk.cli._execute_plan", fake_execute_plan)
 
-    execution, errors = _execute_discover_anchor_step(
+    execution, errors = _execute_dev_step(
         [compiled],
         root=Path.cwd(),
         step="open_checkout",
@@ -649,721 +557,197 @@ def test_discover_anchor_execution_pauses_after_target_step(
     assert captured_kwargs["selected_stop_after_index"] == 0
     assert execution.result == {"workspace_id": "w-1"}
     assert execution.side_outputs == {"browser_page": ("page",)}
+    assert execution.step_label == "open_checkout"
     execution.close()
 
 
-def test_discover_missing_output_file_fails_before_discovery(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def fail_discover(*args: object, **kwargs: object) -> None:
-        raise AssertionError("missing --output-file should fail before discovery")
-
-    monkeypatch.setattr("journeysdk.discover.discover", fail_discover)
-
-    exit_code = main(["discover", "http://127.0.0.1:3000"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert captured.err == ""
-    assert "requires --output-file so stdout can stream live discovery logs" in captured.out
-    assert "--output-file journeys/discovered_journey.py" in captured.out
-
-
-def test_discover_output_file_writes_source_and_logs_to_stdout(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    captured_options: list[Any] = []
-    verified_paths = _stub_discover_verification(monkeypatch)
-
-    def fake_discover(options: Any) -> SimpleNamespace:
-        captured_options.append(options)
-        return SimpleNamespace(
-            source="from journeysdk import journey\n",
-            mode="url",
-            journey_name="discovered_journey",
-            extension_name=None,
-            actions=0,
-            branches=0,
-            omitted_actions=0,
-            model_calls=0,
-            stop_reason="frontier_exhausted",
-        )
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fake_discover)
-
-    exit_code = main(
-        [
-            "discover",
-            "http://127.0.0.1:3000",
-            "--output-file",
-            "journeys/generated.py",
-        ]
+def _fake_dev_result(tmp_path: Path):
+    from journeysdk.dev import (
+        DevInspectionContext,
+        DevInspectionResult,
+        ExtensionInstruction,
+        RenderedPage,
+        ActionableElement,
     )
 
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    assert "Discovering Journey source: mode=url output=journeys/generated.py" in captured.out
-    assert "Generated verified Journey source: journeys/generated.py" in captured.out
-    assert "from journeysdk import journey" not in captured.out
-    assert (tmp_path / "journeys" / "generated.py").read_text(encoding="utf-8") == (
-        "from journeysdk import journey\n"
-    )
-    assert len(verified_paths) == 1
-    assert captured_options[0].urls == ("http://127.0.0.1:3000",)
-    assert captured_options[0].start_page_state is None
-
-
-def test_discover_output_file_refuses_existing_without_force(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    output_file = tmp_path / "journeys" / "generated.py"
-    output_file.parent.mkdir()
-    output_file.write_text("keep me\n", encoding="utf-8")
-
-    def fail_discover(*args: object, **kwargs: object) -> None:
-        raise AssertionError("existing output file should fail before discovery")
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fail_discover)
-
-    exit_code = main(
-        [
-            "discover",
-            "http://127.0.0.1:3000",
-            "--output-file",
-            "journeys/generated.py",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert output_file.read_text(encoding="utf-8") == "keep me\n"
-    assert "output file already exists" in captured.out
-    assert "Pass --force with --output-file" in captured.out
-
-
-def test_discover_output_file_force_replaces_existing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    output_file = tmp_path / "journeys" / "generated.py"
-    output_file.parent.mkdir()
-    output_file.write_text("replace me\n", encoding="utf-8")
-    _stub_discover_verification(monkeypatch)
-
-    def fake_discover(options: Any) -> SimpleNamespace:
-        del options
-        return SimpleNamespace(
-            source="new source\n",
-            mode="url",
-            journey_name="discovered_journey",
-            extension_name=None,
-            actions=0,
-            branches=0,
-            omitted_actions=0,
-            model_calls=0,
-            stop_reason="frontier_exhausted",
-        )
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fake_discover)
-
-    exit_code = main(
-        [
-            "discover",
-            "http://127.0.0.1:3000",
-            "--output-file",
-            "journeys/generated.py",
-            "--force",
-        ]
-    )
-
-    assert exit_code == 0
-    assert output_file.read_text(encoding="utf-8") == "new source\n"
-
-
-def test_discover_verification_failure_leaves_output_unchanged(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    output_file = tmp_path / "journeys" / "generated.py"
-    output_file.parent.mkdir()
-    output_file.write_text("keep me\n", encoding="utf-8")
-
-    def fake_discover(options: Any) -> SimpleNamespace:
-        del options
-        return SimpleNamespace(
-            source="unverified source\n",
-            mode="url",
-            journey_name="discovered_journey",
-            extension_name=None,
-            actions=0,
-            branches=0,
-            omitted_actions=0,
-            model_calls=0,
-            stop_reason="frontier_exhausted",
-        )
-
-    def fail_verify(**kwargs: Any) -> tuple[None, list[object]]:
-        assert Path(kwargs["source_path"]).read_text(encoding="utf-8") == "unverified source\n"
-        return None, [object()]
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fake_discover)
-    monkeypatch.setattr("journeysdk.cli._verify_discover_source_file", fail_verify)
-
-    exit_code = main(
-        [
-            "discover",
-            "http://127.0.0.1:3000",
-            "--output-file",
-            "journeys/generated.py",
-            "--force",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert output_file.read_text(encoding="utf-8") == "keep me\n"
-    assert "Generated Journey source was not written because verification failed" in captured.out
-
-
-def test_discover_source_verification_requires_generated_labels(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    source_path = tmp_path / "generated.py"
-    source_path.write_text("source\n", encoding="utf-8")
-
-    def generated_journey() -> None:
-        return None
-
-    plan = JourneyPlan(
-        journey_id="generated",
-        function_ref="generated:generated_journey",
-        case_plans=[
-            CasePlan(
-                case_id="case_1",
-                branch_env={},
-                nodes=[
-                    StepNode(
-                        node_id="n_1",
-                        label="generated_step",
-                        fn_ref="generated:generated_step",
-                        args=(),
-                        kwargs={},
-                    )
-                ],
-            )
-        ],
-    )
-    compiled = _CompiledJourney(
-        file_path=source_path,
-        journey_name="generated_journey",
-        function=generated_journey,
-        plan=plan,
-    )
-    executed = [
-        SimpleNamespace(
-            file_path=source_path,
-            journey_name="generated_journey",
-            plan=plan,
-            report=ExecutionReport(
-                journey_id="generated",
-                function_ref="generated:generated_journey",
-                case_reports=[
-                    CaseExecutionReport(
-                        case_id="case_1",
-                        branch_env={},
-                        records=[
-                            NodeExecutionRecord(
-                                node_id="n_1",
-                                node_type="step",
-                                label="generated_step",
-                                status="executed",
-                            )
-                        ],
-                        completed=True,
-                    )
-                ],
+    artifact_dir = tmp_path / ".journey" / "dev" / "fake"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    html_path = artifact_dir / "page.html"
+    text_path = artifact_dir / "visible-text.txt"
+    screenshot_path = artifact_dir / "page.png"
+    html_path.write_text("<button>Start chat</button>", encoding="utf-8")
+    text_path.write_text("Start chat", encoding="utf-8")
+    screenshot_path.write_bytes(b"png")
+    return DevInspectionResult(
+        status="paused",
+        context=DevInspectionContext(
+            file="journeys/app.py",
+            journey="app_journey",
+            case_id="case_checkout",
+            paused_step="open_checkout",
+            paused_step_result_name="open_checkout_page",
+        ),
+        artifact_dir=str(artifact_dir),
+        rendered_page=RenderedPage(
+            url="http://example.test/checkout",
+            title="Checkout",
+            screenshot_path=str(screenshot_path),
+            html_path=str(html_path),
+            text_path=str(text_path),
+        ),
+        actionable_elements=(
+            ActionableElement(
+                id="element_1",
+                tag="button",
+                role="button",
+                label="Start chat",
+                text="Start chat",
+                selector="#start-chat",
+                event_types=("click",),
+                detection="inline_handler",
+                enabled=True,
+                visible=True,
+                bounding_box={"x": 1, "y": 2, "width": 3, "height": 4},
+                suggested_intent="Interact with Start chat",
+                code_hint="page.locator('#start-chat').click(timeout=timeout_ms)",
             ),
-        )
-    ]
-
-    monkeypatch.setattr(
-        "journeysdk.cli._discover_targets",
-        lambda args: (tmp_path, [object()], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._compile_targets",
-        lambda discovered, fail_fast: ([compiled], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._execute_all_targets",
-        lambda *args, **kwargs: (executed, []),
+        ),
+        extension_instructions=ExtensionInstruction(
+            summary="Add a branch after open_checkout.",
+            step_function_template="def open_start_chat(saved_page):\n    return saved_page",
+            journey_insertion_template="if branch(replay_from=open_checkout_page):\n    step(open_start_chat, open_checkout_page)",
+            verification_commands=(
+                "journey loop open_start_chat --file journeys/app.py --journey app_journey",
+            ),
+        ),
     )
 
-    result, errors = _verify_discover_source_file(
-        root=tmp_path,
-        source_path=source_path,
-        journey_name="generated_journey",
-        expected_step_labels=("generated_step",),
-    )
 
-    assert errors == []
-    assert result is not None
-    assert result.cases == 1
-    assert result.steps == ("generated_step",)
-
-    result, errors = _verify_discover_source_file(
-        root=tmp_path,
-        source_path=source_path,
-        journey_name="generated_journey",
-        expected_step_labels=("missing_step",),
-    )
-
-    assert result is None
-    assert errors
-    assert "omitted discovered step labels" in capsys.readouterr().out
-
-
-def test_discover_jsonl_output_includes_output_file_without_source(
+def test_dev_agent_jsonl_output_includes_page_actions_and_instructions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _stub_discover_verification(monkeypatch)
+    _write(
+        tmp_path / "journeys" / "app.py",
+        """
+        import journeysdk as journey
 
-    def fake_discover(options: Any) -> SimpleNamespace:
-        del options
-        return SimpleNamespace(
-            source="from journeysdk import journey\n",
-            mode="url",
-            journey_name="discovered_journey",
-            extension_name=None,
-            actions=2,
-            branches=1,
-            omitted_actions=0,
-            model_calls=1,
-            stop_reason="frontier_exhausted",
+        def open_checkout():
+            return object()
+
+        @journey.journey
+        def app_journey():
+            journey.step(open_checkout)
+        """,
+    )
+
+    def fake_execute_dev_step(*args: object, **kwargs: object) -> tuple[_DevStepExecution, list[object]]:
+        del args, kwargs
+        return (
+            _DevStepExecution(
+                result=object(),
+                side_outputs={},
+                file_path=tmp_path / "journeys" / "app.py",
+                journey_name="app_journey",
+                case_id="case_checkout",
+                step_label="open_checkout",
+            ),
+            [],
         )
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fake_discover)
+    monkeypatch.setattr("journeysdk.cli._execute_dev_step", fake_execute_dev_step)
+    monkeypatch.setattr("journeysdk.cli._dev_page_from_execution", lambda execution: object())
+    monkeypatch.setattr(
+        "journeysdk.cli.inspect_dev_page",
+        lambda page, *, context, artifact_root: _fake_dev_result(tmp_path),
+    )
 
     exit_code = main(
         [
-            "discover",
-            "http://127.0.0.1:3000",
-            "--output-file",
-            "journeys/generated.py",
+            "dev",
+            "open_checkout",
+            "--file",
+            "journeys/app.py",
+            "--journey",
+            "app_journey",
             "--output",
             "jsonl",
         ]
     )
 
-    events = _jsonl_events(capsys.readouterr().out)
-    result_events = [event for event in events if event["event"] == "discover_result"]
+    captured = capsys.readouterr()
     assert exit_code == 0
+    events = [json.loads(line) for line in captured.out.splitlines()]
+    result_events = [event for event in events if event["event"] == "dev_result"]
     assert len(result_events) == 1
-    assert result_events[0]["output_file"] == str(tmp_path / "journeys" / "generated.py")
-    assert "source" not in result_events[0]
-    assert result_events[0]["mode"] == "url"
-    assert result_events[0]["verified"] is True
-    assert result_events[0]["verification_mode"] == "full_journey"
-    assert result_events[0]["verified_cases"] == 1
-    assert "verification_duration_seconds" in result_events[0]
-    assert (tmp_path / "journeys" / "generated.py").read_text(encoding="utf-8") == (
-        "from journeysdk import journey\n"
-    )
+    result = result_events[0]
+    assert result["agent"] is True
+    assert result["rendered_page"]["url"] == "http://example.test/checkout"
+    assert result["actionable_elements"][0]["label"] == "Start chat"
+    assert "journey loop open_start_chat" in result["extension_instructions"]["verification_commands"][0]
 
 
-def test_discover_url_mode_rejects_file(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def fail_discover(*args: object, **kwargs: object) -> None:
-        raise AssertionError("URL mode with --file should fail before discovery")
-
-    monkeypatch.setattr("journeysdk.discover.discover", fail_discover)
-
-    exit_code = main(
-        [
-            "discover",
-            "http://127.0.0.1:3000",
-            "--file",
-            "journeys/app.py",
-            "--output-file",
-            "journeys/out.py",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert captured.err == ""
-    assert "URL mode does not accept --file; use --output-file" in captured.out
-
-
-def test_discover_step_mode_uses_anchor_page_state(
+def test_dev_initializes_missing_file_with_first_browser_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from journeysdk.touchpoints.browser import JourneyBrowserPage, _PageSnapshot
-
-    anchor_page = JourneyBrowserPage(
-        snapshot=_PageSnapshot.from_payload(
-            {
-                "url": "http://example.test/main",
-                "cookies": [
-                    {
-                        "name": "session",
-                        "value": "abc",
-                        "url": "http://example.test",
-                    }
-                ],
-                "local_storage": {"feature": "enabled"},
-            }
-        )
-    )
-    captured_options: list[Any] = []
-    verified_paths = _stub_discover_verification(monkeypatch)
-    source_file = tmp_path / "journeys" / "app.py"
-    _write(
-        source_file,
-        """
-        from journeysdk import journey, step
-
-        def open_main_page():
-            pass
-
-        @journey
-        def app():
-            open_main_page_page = step(open_main_page)
-        """,
-    )
-
-    monkeypatch.setattr(
-        "journeysdk.cli._discover_targets",
-        lambda args: (Path.cwd(), [object()], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._compile_targets",
-        lambda discovered, fail_fast: ([object()], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._execute_discover_anchor_step",
-        lambda compiled, root, step: (
-            _DiscoverAnchorExecution(result=anchor_page, side_outputs={}),
-            [],
-        ),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._select_discover_anchor",
-        lambda compiled, step: (
-            SimpleNamespace(journey=SimpleNamespace(journey_name="app", file_path=source_file)),
-            [],
-        ),
-    )
-
-    def fake_discover(options: Any) -> SimpleNamespace:
-        captured_options.append(options)
-        return SimpleNamespace(
-            source="def discover_after_open_main_page(anchor_page):\n    pass\n",
-            mode="step",
-            journey_name="discovered_journey",
-            extension_name="discover_after_open_main_page",
-            actions=0,
-            branches=0,
-            omitted_actions=0,
-            model_calls=0,
-            stop_reason="frontier_exhausted",
-        )
-
-    merge_inputs: dict[str, object] = {}
-
-    def fake_merge(**kwargs: Any) -> SimpleNamespace:
-        merge_inputs.update(kwargs)
-        return SimpleNamespace(source="merged full source\n", model="test:model")
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fake_discover)
-    monkeypatch.setattr("journeysdk.discover.merge_extension_source_with_model", fake_merge)
-
-    exit_code = main(
-        [
-            "discover",
-            "open_main_page",
-            "--file",
-            "journeys/app.py",
-            "--journey",
-            "app",
-            "--output-file",
-            "journeys/open_main_page_snippet.py",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "Generated verified Journey source: journeys/open_main_page_snippet.py" in captured.out
-    assert (
-        tmp_path / "journeys" / "open_main_page_snippet.py"
-    ).read_text(encoding="utf-8") == "merged full source\n"
-    assert merge_inputs["original_source"] == source_file.read_text(encoding="utf-8")
-    assert merge_inputs["generated_extension_source"] == "def discover_after_open_main_page(anchor_page):\n    pass\n"
-    assert merge_inputs["journey_name"] == "app"
-    assert merge_inputs["anchor_step"] == "open_main_page"
-    assert len(verified_paths) == 1
-    assert captured_options[0].urls == ()
-    assert captured_options[0].anchor_step == "open_main_page"
-    assert captured_options[0].start_page_state.url == "http://example.test/main"
-    assert captured_options[0].start_page_state.local_storage == (("feature", "enabled"),)
-
-
-def test_discover_step_mode_rejects_output_file_equal_to_anchor_file(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def fail_discover(*args: object, **kwargs: object) -> None:
-        raise AssertionError("same --file and --output-file should fail before discovery")
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fail_discover)
-
-    exit_code = main(
-        [
-            "discover",
-            "open_main_page",
-            "--file",
-            "journeys/app.py",
-            "--output-file",
-            "journeys/app.py",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "needs --force when --output-file is the same as --file" in captured.out
-
-
-def test_discover_step_mode_force_replaces_same_file_after_verification(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from journeysdk.touchpoints.browser import JourneyBrowserPage, _PageSnapshot
-
-    source_file = tmp_path / "journeys" / "app.py"
-    _write(
-        source_file,
-        """
-        from journeysdk import journey, step
-
-        def open_main_page():
-            pass
-
-        @journey
-        def app():
-            open_main_page_page = step(open_main_page)
-        """,
-    )
-    anchor_page = JourneyBrowserPage(
-        snapshot=_PageSnapshot.from_payload(
-            {"url": "http://example.test/main", "cookies": [], "local_storage": {}}
-        )
-    )
-    _stub_discover_verification(monkeypatch)
-    monkeypatch.setattr(
-        "journeysdk.cli._discover_targets",
-        lambda args: (Path.cwd(), [object()], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._compile_targets",
-        lambda discovered, fail_fast: ([object()], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._select_discover_anchor",
-        lambda compiled, step: (
-            SimpleNamespace(journey=SimpleNamespace(journey_name="app", file_path=source_file)),
-            [],
-        ),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._execute_discover_anchor_step",
-        lambda compiled, root, step: (
-            _DiscoverAnchorExecution(result=anchor_page, side_outputs={}),
-            [],
-        ),
-    )
-    monkeypatch.setattr(
-        "journeysdk.discover.discover",
-        lambda options: SimpleNamespace(
-            source="def discover_after_open_main_page(anchor_page):\n    pass\n",
-            mode="step",
-            journey_name="discovered_journey",
-            extension_name="discover_after_open_main_page",
-            actions=1,
-            branches=0,
-            omitted_actions=0,
-            model_calls=0,
-            stop_reason="frontier_exhausted",
-        ),
-    )
-    monkeypatch.setattr(
-        "journeysdk.discover.merge_extension_source_with_model",
-        lambda **kwargs: SimpleNamespace(source="verified merged source\n", model="test:model"),
-    )
-
-    monkeypatch.chdir(tmp_path)
-    exit_code = main(
-        [
-            "discover",
-            "open_main_page",
-            "--file",
-            "journeys/app.py",
-            "--journey",
-            "app",
-            "--output-file",
-            "journeys/app.py",
-            "--force",
-        ]
-    )
-
-    assert exit_code == 0
-    assert source_file.read_text(encoding="utf-8") == "verified merged source\n"
-
-
-def test_discover_step_mode_uses_browser_side_output_for_non_page_anchor(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    from journeysdk.touchpoints.browser import JourneyBrowserPage, _PageSnapshot
-
-    opened_page = JourneyBrowserPage(
-        snapshot=_PageSnapshot.from_payload(
-            {
-                "url": "http://example.test/checkout",
-                "cookies": [],
-                "local_storage": {"cart": "ready"},
-            }
-        )
-    )
-    workspace_context = {"workspace_id": "w-1"}
-    captured_options: list[Any] = []
-    cleanup_calls: list[str] = []
-    _stub_discover_verification(monkeypatch)
-    source_file = tmp_path / "journeys" / "app.py"
-    _write(
-        source_file,
-        """
-        from journeysdk import journey, step
-
-        def prepare_configured_workspace():
-            pass
-
-        @journey
-        def app():
-            prepare_configured_workspace_page = step(prepare_configured_workspace)
-        """,
-    )
-
-    monkeypatch.setattr(
-        "journeysdk.cli._discover_targets",
-        lambda args: (Path.cwd(), [object()], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._compile_targets",
-        lambda discovered, fail_fast: ([object()], []),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._execute_discover_anchor_step",
-        lambda compiled, root, step: (
-            _DiscoverAnchorExecution(
-                result=workspace_context,
-                side_outputs={"browser_page": (opened_page,)},
-                release_step_resources=lambda: cleanup_calls.append("step_closed"),
-                cleanup=lambda: cleanup_calls.append("case_closed"),
+    def fake_execute_dev_step(*args: object, **kwargs: object) -> tuple[_DevStepExecution, list[object]]:
+        del args, kwargs
+        return (
+            _DevStepExecution(
+                result=object(),
+                side_outputs={},
+                file_path=tmp_path / "journeys" / "app.py",
+                journey_name="dev_journey",
+                case_id="case_1",
+                step_label="open_initial_page",
             ),
             [],
-        ),
-    )
-    monkeypatch.setattr(
-        "journeysdk.cli._select_discover_anchor",
-        lambda compiled, step: (
-            SimpleNamespace(journey=SimpleNamespace(journey_name="app", file_path=source_file)),
-            [],
-        ),
-    )
-
-    def fake_discover(options: Any) -> SimpleNamespace:
-        assert cleanup_calls == ["step_closed"]
-        captured_options.append(options)
-        return SimpleNamespace(
-            source="def discover_after_prepare_configured_workspace(anchor_result):\n    pass\n",
-            mode="step",
-            journey_name="discovered_journey",
-            extension_name="discover_after_prepare_configured_workspace",
-            actions=0,
-            branches=0,
-            omitted_actions=0,
-            model_calls=0,
-            stop_reason="frontier_exhausted",
         )
 
-    monkeypatch.setattr(
-        "journeysdk.discover.merge_extension_source_with_model",
-        lambda **kwargs: SimpleNamespace(source="merged side-output source\n", model="test:model"),
-    )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("journeysdk.discover.discover", fake_discover)
+    monkeypatch.setattr("journeysdk.cli._execute_dev_step", fake_execute_dev_step)
+    monkeypatch.setattr("journeysdk.cli._dev_page_from_execution", lambda execution: object())
+    monkeypatch.setattr(
+        "journeysdk.cli.inspect_dev_page",
+        lambda page, *, context, artifact_root: _fake_dev_result(tmp_path),
+    )
 
     exit_code = main(
         [
-            "discover",
-            "prepare_configured_workspace",
+            "dev",
             "--file",
             "journeys/app.py",
-            "--journey",
-            "app",
-            "--output-file",
-            "journeys/prepare_configured_workspace_snippet.py",
+            "--url",
+            "http://example.test",
+            "--output",
+            "jsonl",
         ]
     )
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Generated verified Journey source: journeys/prepare_configured_workspace_snippet.py" in captured.out
-    assert (
-        tmp_path / "journeys" / "prepare_configured_workspace_snippet.py"
-    ).read_text(encoding="utf-8") == "merged side-output source\n"
-    assert captured_options[0].anchor_step == "prepare_configured_workspace"
-    assert captured_options[0].start_page_state.url == "http://example.test/checkout"
-    assert captured_options[0].start_page_state.local_storage == (("cart", "ready"),)
-    assert cleanup_calls == ["step_closed", "case_closed"]
+    source = (tmp_path / "journeys" / "app.py").read_text(encoding="utf-8")
+    assert "def open_initial_page() -> JourneyBrowserPage:" in source
+    assert "return open_page('http://example.test')" in source
+    assert "def dev_journey() -> None:" in source
+    assert any(json.loads(line)["event"] == "dev_result" for line in captured.out.splitlines())
 
 
 def test_help_outputs_include_agentic_command_manual():
     root_help = build_parser().format_help()
     logs_help = build_logs_parser().format_help()
     agent_help = build_agent_parser().format_help()
-    discover_help = build_discover_parser().format_help()
+    dev_help = build_dev_parser().format_help()
 
     assert "replay and verify real user journeys for agentic coding loops" in root_help
     assert "Self-healing agent loop" in root_help
+    assert "journey dev [step_label]" in root_help
     assert "journey loop <step_label>" in root_help
     assert "journey verify --step <step_label>" in root_help
-    assert "journey discover <url>" in root_help
-    assert "journey discover <step_label>" in root_help
     assert "journey agent codex|claude|cursor|generic [--install]" in root_help
     assert "journey evidence --help" in root_help
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
@@ -1372,14 +756,11 @@ def test_help_outputs_include_agentic_command_manual():
     assert "journey evidence --list-scopes" in logs_help
     assert "Recovery:" in logs_help
     assert "Agent verification packet" in agent_help
-    assert "crawl app URLs or continue from a Journey browser step" in discover_help
-    assert "--output-file" in discover_help
-    assert "Stdout is reserved for live discovery logs" in discover_help
-    assert "--max-model-calls" in discover_help
-    assert "--max-variants-per-control" in discover_help
-    assert "--action-timeout" in discover_help
-    assert "--side-effect-probes" in discover_help
-    assert "anthropic:claude-haiku-4-5" in discover_help
+    assert "pause at a Journey step" in dev_help
+    assert "--agent" in dev_help
+    assert "--url" in dev_help
+    assert "rendered_page" in dev_help
+    assert "actionable_elements" in dev_help
     assert "journey loop --help" in agent_help
     assert "journey verify --help" in agent_help
     assert "journey agent <target>" in agent_help
@@ -1582,6 +963,16 @@ def test_removed_agent_flags_are_rejected(argv: list[str]):
         main(argv)
 
     assert exc_info.value.code == 2
+
+
+def test_removed_discover_command_is_rejected(capsys: pytest.CaptureFixture[str]):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["discover", "--help"])
+
+    output = capsys.readouterr().out
+    assert exc_info.value.code == 2
+    assert "unknown command: discover" in output
+    assert "journey dev" in output
 
 
 def test_execute_develop_step_rejects_json_mode(

@@ -40,7 +40,7 @@ journey --help
 journey loop --help
 journey verify --help
 journey evidence --help
-journey discover --help
+journey dev --help
 journey touchpoints browser
 journey touchpoints docker
 journey touchpoints email
@@ -58,8 +58,8 @@ journey evidence --step target_step
 journey verify --step target_step --file journeys/<feature>_journey.py --fresh
 journey verify --file journeys/<feature>_journey.py --fresh
 journey verify --step target_step --file journeys/<feature>_journey.py --output jsonl
-journey discover http://127.0.0.1:3000 --output-file journeys/<feature>_journey.py
-journey discover open_main_page --file journeys/<feature>_journey.py --output-file journeys/<feature>_journey.py --force
+journey dev open_main_page --file journeys/<feature>_journey.py --output jsonl
+journey dev --file journeys/<feature>_journey.py --url http://127.0.0.1:3000 --output jsonl
 ```
 
 If the CLI prints `Retry failed step: ...`, copy that command as the focused loop. Read every `What happened`,
@@ -93,17 +93,13 @@ If the CLI prints `Retry failed step: ...`, copy that command as the focused loo
 - Step function names are stable CLI labels used by `journey loop`, `journey verify --step`, state files, retries, and
   branch replay. Rename them only when updating those references intentionally.
 - Keep planning side-effect free. Acquire browsers, cloud resources, services, and handles inside step execution.
-- If asked to bootstrap coverage from a running browser app, use
-  `journey discover <url> --output-file journeys/<feature>_journey.py` as a verified generator. If asked to cover a new
-  feature reachable from an existing browser step, use
-  `journey discover <step_label> --file journeys/<feature>_journey.py --output-file journeys/<feature>_journey.py --force`;
-  the anchor step may return `JourneyBrowserPage` or simply call `open_page(...)`, and discover merges and verifies the
-  full Journey file before replacing the output. Expect
-  complete transition steps, bounded finite-choice branches, 8-second default `--action-timeout` bounded exploratory attempts,
-  automatic consent overlay dismissal, filtering of disabled or ambiguous controls, and best-effort generic
-  API/email/webhook or SDK Cloud webhook evidence probes when stable identifiers and reachable endpoints are observed.
-  `journey discover` writes generated code only after verification passes; stdout is reserved for live logs, and
-  `--output jsonl` reports `discover_result.output_file` plus verification metadata.
+- If asked to bootstrap or extend browser coverage from a running app, use `journey dev`, then edit the Journey source
+  yourself and verify the new branch. For a new or empty Journey file, run
+  `journey dev --file journeys/<feature>_journey.py --url http://127.0.0.1:3000 --output jsonl`; this initializes a
+  minimal first browser step and emits a `dev_result`. For an existing browser step, run
+  `journey dev <step_label> --file journeys/<feature>_journey.py --output jsonl`. Read `rendered_page`,
+  `actionable_elements`, and `extension_instructions`, add the smallest useful next branch with coarse step boundaries,
+  and prove it with `journey loop <new_step> --file ...` or `journey verify --step <new_step> --file ...`.
 
 ## Branches
 

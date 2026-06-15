@@ -67,14 +67,14 @@ journey --help
 journey loop --help
 journey verify --help
 journey evidence --help
-journey discover --help
+journey dev --help
 journey agent --help
 ```
 
 `journey --help` is the short command index. `journey loop --help` explains the focused replay loop for one step.
 `journey verify --help` explains branch and full-journey verification. `journey evidence --help` explains how to
-discover scopes and sources before reading artifacts. `journey discover --help` explains how to crawl a running app URL
-or continue from an existing browser step and write generated Journey source. `journey agent --help` explains
+discover scopes and sources before reading artifacts. `journey dev --help` explains how to pause at a browser step,
+inspect rendered page state, and get branch-extension guidance. `journey agent --help` explains
 print/install modes for packaged assistant guidance.
 
 When a Journey command fails, the CLI prints an instructional block:
@@ -89,49 +89,35 @@ Next commands:
 Structured and JSON Lines output include the same recovery data in `instructions`, `next_commands`, and
 `help_command` fields so agents can continue without external docs.
 
-## Generate Draft Journey Source
+## Develop Browser Branches
 
-Use `journey discover` when an app is already running and you want a first Journey spec with broad browser coverage:
-
-```bash
-journey discover http://127.0.0.1:3000 --output-file journeys/discovered_journey.py
-journey verify --file journeys/discovered_journey.py
-```
-
-The discoverer composes deterministic form submits and navigation transitions first, expands bounded finite controls
-with `--max-variants-per-control`, then uses Claude Haiku by default through `JOURNEY_BROWSER_PROMPT_MODEL` model
-resolution when the next transition is uncertain. It crawls same-origin scenarios within `--depth`, `--max-actions`,
-`--max-model-calls`, and the exploratory `--action-timeout` default of 8 seconds, while generated replay code keeps a
-30 second timeout. Discovery dismisses common consent overlays before extracting actions and filters disabled or
-ambiguous controls before spending time on them. It writes deterministic Playwright step helpers. When a transition exposes
-a stable visible identifier, `--side-effect-probes auto` can attach generic same-origin JSON, local email, local webhook,
-and SDK Cloud webhook evidence assertions if reachable endpoints are discovered. Model calls happen during discovery, not during later
-`journey verify` runs. Review the generated file before committing it, especially for credentials, fixture data, and
-side-effectful flows.
-
-Discovery writes live logs to stdout while it runs. For agent workflows that need structured diagnostics, use JSON Lines
-output and read the final `discover_result.output_file` field:
+Use `journey dev` when an app is already running and you want to extend Journey coverage from an actual rendered page:
 
 ```bash
-journey discover http://127.0.0.1:3000 --output-file journeys/discovered_journey.py --output jsonl
+journey dev open_main_page --file journeys/app_journey.py
+journey loop new_branch_step --file journeys/app_journey.py
 ```
 
-When you are already working from a Journey step that lands on the page under development, anchor discovery at that
-step instead of starting over from a URL:
+The dev command executes the selected Journey through a step, pauses on the live browser page, writes rendered-page
+artifacts under `.journey/dev/...`, lists actionable elements found on the page, and prints concrete instructions for
+adding the next step or branch. Omit the step label to pause after the first step in the selected Journey. Human pretty
+mode keeps browser resources open until the prompt is answered.
+
+For agent workflows, use JSON Lines output. `--output jsonl` implies `--agent`, closes resources after inspection, and
+emits a structured `dev_result` with `rendered_page`, `actionable_elements`, and `extension_instructions`:
 
 ```bash
-journey discover open_main_page --file journeys/app_journey.py --output-file journeys/app_journey.py --force
+journey dev open_main_page --file journeys/app_journey.py --output jsonl
 ```
 
-Step mode uses `--file` as the existing Journey source file to search, accepts `--journey` to disambiguate the existing
-entrypoint, executes only through the requested step with temporary state and no browser recording, and starts from the
-step's returned `JourneyBrowserPage` or the last page it opened with `open_page(...)`. It then asks the configured model
-to merge the discovered coverage into the full Journey source, executes the merged Journey, and writes `--output-file`
-only after verification passes.
+When starting a new browser Journey file, let dev initialize a minimal first step from a start URL:
 
-`journey discover` creates missing parent directories and refuses to replace existing files unless `--force` is passed.
-In URL mode, `--file` is rejected. In step mode, `--file` selects the source Journey file; `--output-file` selects the
-verified merged output and may equal `--file` only when `--force` is passed.
+```bash
+journey dev --file journeys/app_journey.py --url http://127.0.0.1:3000
+```
+
+The generated skeleton opens the provided URL with `open_page(...)`. After that, edit the Journey source using the
+dev result, choose coarse step boundaries, and prove the new behavior with `journey loop` or `journey verify`.
 
 ## Ctrl-C And Resumable Runs
 

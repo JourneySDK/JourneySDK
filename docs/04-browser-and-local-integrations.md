@@ -136,42 +136,38 @@ uv run journey verify --reuse-state --file docs/browser_resume_journey/browser_r
 Use `journey touchpoints browser` for `JourneyBrowserPage`, page rehydration, lifecycle, evidence, and
 `open_page(saved_page)` details.
 
-## Browser Discover
+## Browser Dev
 
-Use `journey discover` when a local app is running and you want Journey to generate verified broad browser coverage from the app UI:
-
-```bash
-uv run journey discover http://127.0.0.1:3000 --output-file journeys/discovered_journey.py
-uv run journey verify --file journeys/discovered_journey.py
-```
-
-The discoverer opens the start URL, extracts forms, links, buttons, labels, `data-testid`s, finite controls, and route
-text, then tries complete deterministic transitions such as fill-select-submit before asking the configured Claude Haiku
-model for uncertain next transitions. Select, radio, and checkbox choices are branched up to
-`--max-variants-per-control`; failed exploratory actions are bounded by `--action-timeout`, which defaults to 8 seconds
-while generated replay code keeps a 30 second timeout. Discovery dismisses common consent overlays and filters disabled
-or ambiguous controls before trying candidates. Discovered stable identifiers
-can feed generic same-origin JSON, local email, local webhook, and SDK Cloud webhook evidence assertions when those
-endpoints are reachable. Use `JOURNEY_DISCOVER_EMAIL_EVIDENCE_URL` and
-`JOURNEY_DISCOVER_WEBHOOK_EVIDENCE_URL` to point discovery at local evidence services that are not on their usual
-development ports. It executes restricted Playwright snippets during discovery, renders deterministic `open_page(...)`
-step helpers with `branch(...)` where it finds alternate paths, verifies the rendered Journey, and only then writes the
-output file. Review step boundaries, fixture data, and assertions before committing the verified source.
-
-Discovery can also start from an existing Journey browser step:
+Use `journey dev` when a local app is running and you want to inspect the next useful branches from a real browser
+state:
 
 ```bash
-uv run journey discover open_main_page --file journeys/app_journey.py --output-file journeys/app_journey.py --force
+uv run journey dev open_main_page --file journeys/app_journey.py
+uv run journey loop new_branch_step --file journeys/app_journey.py
 ```
 
-In step mode, `--file` points at the existing Journey file and `--journey` can disambiguate the existing entrypoint.
-Journey executes only through the anchor step with temporary state and no browser recording, then uses the step result
-if it is `JourneyBrowserPage`, otherwise the last browser page opened by `open_page(...)` inside that step. Discover
-restores the page URL, cookies, and local storage in its browser context, asks the configured model to merge the
-discovered coverage into the full Journey file, verifies the merged Journey, and only then writes `--output-file`.
+The dev command executes the selected Journey through a browser step, pauses on the live page, captures rendered-page
+artifacts under `.journey/dev/...`, extracts actionable elements, and prints instructions for extending the current
+Journey with the next step or branch. Omit the step label to pause after the first step in the selected Journey.
 
-Use this when a new feature is reachable from a known page in an existing Journey. Passing `--output-file` equal to
-`--file` requires `--force`; if merge or verification fails, the original file is left unchanged.
+For coding agents, JSON Lines output is the most useful form:
+
+```bash
+uv run journey dev open_main_page --file journeys/app_journey.py --output jsonl
+```
+
+`--output jsonl` implies `--agent`, closes resources after inspection, and emits one `dev_result` event containing
+`rendered_page`, `actionable_elements`, and `extension_instructions`. The agent should edit the Journey source using
+that structured result, then run `journey loop` or `journey verify` for executable evidence.
+
+When starting a new browser Journey file, let dev initialize a minimal first step from a start URL:
+
+```bash
+uv run journey dev --file journeys/app_journey.py --url http://127.0.0.1:3000
+```
+
+`--url` is only used when the target file is missing or empty. Existing Journey files continue to use `--file`,
+`--journey`, and an optional step label to select the page state to inspect.
 
 ## Browser Prompt Tutorial
 
@@ -207,8 +203,8 @@ output details.
 - `branch(replay_from=...)` lets later cases reuse durable setup from a saved step boundary.
 - Browser, webhook, file, and Docker details belong inside coarse user-flow steps, not as one Journey step per click,
   poll, or assertion.
-- `journey discover` is a fast way to bootstrap or extend browser coverage, but generated specs still need executable
-  `journey verify` evidence before they count as complete.
+- `journey dev` is a fast way to inspect rendered browser state and branch candidates; edited specs still need
+  executable `journey loop` or `journey verify` evidence before they count as complete.
 - `journey loop` and `journey verify --step` are the fastest way to iterate on one branch or late user-flow step.
 - Touchpoints remain ordinary Python helpers used from step functions.
 

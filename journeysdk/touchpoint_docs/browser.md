@@ -101,5 +101,5 @@ objects through step results.
 
 When a step opens a page with `open_page(...)` but returns a different domain object, Journey also records that browser
 page as a replayable side output for the step. Use `browser_page_from_step_result(anchor_result)` inside a later step to
-recover the last page opened by the step that produced `anchor_result`. This is what `journey discover <step_label>`
-uses when extending an existing Journey from an ordinary setup step.
+recover the last page opened by the step that produced `anchor_result`. `journey dev <step_label>` uses the same
+browser side output to inspect the rendered page after an ordinary setup step.
