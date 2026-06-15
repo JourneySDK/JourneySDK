@@ -147,8 +147,9 @@ uv run journey loop new_branch_step --file journeys/app_journey.py
 ```
 
 The dev command executes the selected Journey through a browser step, pauses on the live page, captures rendered-page
-artifacts under `.journey/dev/...`, extracts actionable elements, and prints instructions for extending the current
-Journey with the next step or branch. Omit the step label to pause after the first step in the selected Journey.
+artifacts under `.journey/dev/...`, extracts candidate flows plus actionable controls, and prints instructions for
+extending the current Journey with the next step or branch. Omit the step label to pause after the first step in the
+selected Journey.
 
 For coding agents, JSON Lines output is the most useful form:
 
@@ -157,8 +158,10 @@ uv run journey dev open_main_page --file journeys/app_journey.py --output jsonl
 ```
 
 `--output jsonl` implies `--agent`, closes resources after inspection, and emits one `dev_result` event containing
-`rendered_page`, `actionable_elements`, and `extension_instructions`. The agent should edit the Journey source using
-that structured result, then run `journey loop` or `journey verify` for executable evidence.
+`candidate_flows`, `rendered_page`, `actionable_elements`, and `extension_instructions`. The `rendered_page` object
+points to the screenshot, HTML, visible text, and structured result artifacts. The agent should prefer
+`candidate_flows`, edit the Journey source using that structured result, then run `journey loop` or `journey verify`
+for executable evidence.
 
 When starting a new browser Journey file, let dev initialize a minimal first step from a start URL:
 

@@ -99,10 +99,12 @@ top-level `@journey` functions, running one file, selecting one journey, and JSO
 If you want to extend browser coverage from a rendered app state, use
 `journey dev <step_label> --file journeys/<feature>_journey.py`.
 It executes the Journey through that step, inspects the live page, captures rendered-page artifacts, lists actionable
-elements, and prints instructions for adding the next branch. Omit `<step_label>` to pause after the first step. For a
-new empty spec, run `journey dev --file journeys/<feature>_journey.py --url http://127.0.0.1:3000` to initialize a
-minimal browser Journey and inspect its first page. Agents should use `--agent --output jsonl`, read the `dev_result`
-object, edit the Journey source themselves, and then prove the added branch with `journey loop` or `journey verify`.
+artifacts, lists candidate flows and actionable controls, and prints instructions for adding the next branch. Omit
+`<step_label>` to pause after the first step. For a new empty spec, run
+`journey dev --file journeys/<feature>_journey.py --url http://127.0.0.1:3000` to initialize a minimal browser Journey
+and inspect its first page. Agents should use `--agent --output jsonl`, prefer `dev_result.candidate_flows`, inspect
+the rendered-page artifact paths when uncertain, edit the Journey source themselves, and then prove the added branch
+with `journey loop` or `journey verify`.
 
 ## Authoring Guides
 

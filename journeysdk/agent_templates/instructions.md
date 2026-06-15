@@ -97,9 +97,10 @@ If the CLI prints `Retry failed step: ...`, copy that command as the focused loo
   yourself and verify the new branch. For a new or empty Journey file, run
   `journey dev --file journeys/<feature>_journey.py --url http://127.0.0.1:3000 --output jsonl`; this initializes a
   minimal first browser step and emits a `dev_result`. For an existing browser step, run
-  `journey dev <step_label> --file journeys/<feature>_journey.py --output jsonl`. Read `rendered_page`,
-  `actionable_elements`, and `extension_instructions`, add the smallest useful next branch with coarse step boundaries,
-  and prove it with `journey loop <new_step> --file ...` or `journey verify --step <new_step> --file ...`.
+  `journey dev <step_label> --file journeys/<feature>_journey.py --output jsonl`. Prefer `candidate_flows`, use
+  `rendered_page` artifact paths when the page needs inspection, fall back to `actionable_elements` for exact controls,
+  then add the smallest useful next branch with coarse step boundaries and prove it with `journey loop <new_step> --file ...`
+  or `journey verify --step <new_step> --file ...`.
 
 ## Branches
 

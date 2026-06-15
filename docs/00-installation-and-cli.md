@@ -104,7 +104,8 @@ adding the next step or branch. Omit the step label to pause after the first ste
 mode keeps browser resources open until the prompt is answered.
 
 For agent workflows, use JSON Lines output. `--output jsonl` implies `--agent`, closes resources after inspection, and
-emits a structured `dev_result` with `rendered_page`, `actionable_elements`, and `extension_instructions`:
+emits a structured `dev_result` with `candidate_flows`, `rendered_page` artifact paths, `actionable_elements`, and
+`extension_instructions`:
 
 ```bash
 journey dev open_main_page --file journeys/app_journey.py --output jsonl

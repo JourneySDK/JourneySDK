@@ -568,6 +568,7 @@ def _fake_dev_result(tmp_path: Path):
         ExtensionInstruction,
         RenderedPage,
         ActionableElement,
+        CandidateFlow,
     )
 
     artifact_dir = tmp_path / ".journey" / "dev" / "fake"
@@ -575,9 +576,11 @@ def _fake_dev_result(tmp_path: Path):
     html_path = artifact_dir / "page.html"
     text_path = artifact_dir / "visible-text.txt"
     screenshot_path = artifact_dir / "page.png"
+    dev_result_path = artifact_dir / "dev_result.json"
     html_path.write_text("<button>Start chat</button>", encoding="utf-8")
     text_path.write_text("Start chat", encoding="utf-8")
     screenshot_path.write_bytes(b"png")
+    dev_result_path.write_text("{}", encoding="utf-8")
     return DevInspectionResult(
         status="paused",
         context=DevInspectionContext(
@@ -588,6 +591,7 @@ def _fake_dev_result(tmp_path: Path):
             paused_step_result_name="open_checkout_page",
         ),
         artifact_dir=str(artifact_dir),
+        dev_result_path=str(dev_result_path),
         rendered_page=RenderedPage(
             url="http://example.test/checkout",
             title="Checkout",
@@ -609,6 +613,23 @@ def _fake_dev_result(tmp_path: Path):
                 visible=True,
                 bounding_box={"x": 1, "y": 2, "width": 3, "height": 4},
                 suggested_intent="Interact with Start chat",
+                code_hint="page.locator('#start-chat').click(timeout=timeout_ms)",
+                action_type="click",
+                section="main",
+                locator_hint="page.locator('#start-chat')",
+                state_note="",
+                priority=10,
+            ),
+        ),
+        candidate_flows=(
+            CandidateFlow(
+                id="flow_1",
+                title="Start a new chat",
+                action_type="click",
+                priority=10,
+                element_ids=("element_1",),
+                precondition="",
+                action_hints=("page.locator('#start-chat').click(timeout=timeout_ms)",),
                 code_hint="page.locator('#start-chat').click(timeout=timeout_ms)",
             ),
         ),
@@ -684,8 +705,12 @@ def test_dev_agent_jsonl_output_includes_page_actions_and_instructions(
     assert len(result_events) == 1
     result = result_events[0]
     assert result["agent"] is True
+    assert result["dev_result_path"].endswith("dev_result.json")
     assert result["rendered_page"]["url"] == "http://example.test/checkout"
+    assert result["candidate_flows"][0]["title"] == "Start a new chat"
     assert result["actionable_elements"][0]["label"] == "Start chat"
+    assert result["actionable_elements"][0]["locator_hint"] == "page.locator('#start-chat')"
+    assert result["actionable_elements"][0]["action_type"] == "click"
     assert "journey loop open_start_chat" in result["extension_instructions"]["verification_commands"][0]
 
 
