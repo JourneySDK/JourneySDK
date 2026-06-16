@@ -64,18 +64,17 @@ these commands as the self-contained command manuals before choosing flags or re
 
 ```bash
 journey --help
-journey loop --help
+journey dev --help
 journey verify --help
 journey evidence --help
-journey dev --help
+journey touchpoints all
 journey agent --help
 ```
 
-`journey --help` is the short command index. `journey loop --help` explains the focused replay loop for one step.
-`journey verify --help` explains branch and full-journey verification. `journey evidence --help` explains how to
-discover scopes and sources before reading artifacts. `journey dev --help` explains how to pause at a browser step,
-inspect rendered page state, and get branch-extension guidance. `journey agent --help` explains
-print/install modes for packaged assistant guidance.
+`journey --help` is the short command index. `journey dev --help` explains focused development for one step, including
+rendered page artifacts and branch-extension guidance when touchpoints contribute it. `journey verify --help` explains
+branch and full-journey verification. `journey evidence --help` explains how to discover scopes and sources before
+reading artifacts. `journey agent --help` explains print/install modes for packaged assistant guidance.
 
 When a Journey command fails, the CLI prints an instructional block:
 
@@ -95,15 +94,15 @@ Use `journey dev` when an app is already running and you want to extend Journey 
 
 ```bash
 journey dev open_main_page --file journeys/app_journey.py
-journey loop new_branch_step --file journeys/app_journey.py
+journey dev new_branch_step --file journeys/app_journey.py
 ```
 
-The dev command executes the selected Journey through a step, pauses on the live browser page, writes rendered-page
-artifacts under `.journey/dev/...`, lists actionable elements found on the page, and prints concrete instructions for
-adding the next step or branch. Omit the step label to pause after the first step in the selected Journey. Human pretty
-mode keeps browser resources open until the prompt is answered.
+The dev command executes the selected Journey through a step, stops after that target, writes rendered-page artifacts
+under `.journey/dev/...` when a browser page is available, lists actionable elements found on the page, and prints
+concrete instructions for adding the next step or branch. Omit the step label to target the first step in the selected
+Journey. Pass `--interactive` only when a human wants continue/retry prompts.
 
-For agent workflows, use JSON Lines output. `--output jsonl` implies `--agent`, closes resources after inspection, and
+For agent workflows, use JSON Lines output. When touchpoint dev guidance is available, `journey dev --output jsonl`
 emits a structured `dev_result` with `candidate_flows`, `rendered_page` artifact paths, `actionable_elements`, and
 `extension_instructions`:
 
@@ -118,7 +117,7 @@ journey dev --file journeys/app_journey.py --url http://127.0.0.1:3000
 ```
 
 The generated skeleton opens the provided URL with `open_page(...)`. After that, edit the Journey source using the
-dev result, choose coarse step boundaries, and prove the new behavior with `journey loop` or `journey verify`.
+dev result, choose coarse step boundaries, and prove the new behavior with `journey dev` or `journey verify`.
 
 ## Ctrl-C And Resumable Runs
 
@@ -215,7 +214,7 @@ live in that shared instruction body so the user prompt can stay short. The defa
 write files.
 
 When an agent is asked to fix a failing Journey file, it should run the failing command or full journey once, use the
-first failed step and any `Retry failed step:` command as the focused `journey loop` command, inspect correlated
+first failed step and any `Retry failed step:` command as the focused `journey dev` command, inspect correlated
 `.journey/logs` evidence, and rerun until executable Journey evidence passes.
 
 Install assistant-specific guidance when a project-level agent file or skill should be available persistently:

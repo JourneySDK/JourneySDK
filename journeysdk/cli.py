@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import signal
@@ -22,10 +23,8 @@ from .agent_instructions import (
     supported_agent_instruction_targets,
 )
 from .dev import (
-    DevInspectionContext,
-    inspect_dev_page,
-    page_from_execution_result,
-    render_dev_pretty,
+    JourneyDevContext,
+    JourneyDevContribution,
 )
 from .discovery import DiscoveredJourney, discover_journeys
 from .errors import (
@@ -292,25 +291,6 @@ class _DevStepSelection:
     candidates: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class _DevStepExecution:
-    result: object
-    side_outputs: dict[str, tuple[object, ...]]
-    file_path: Path
-    journey_name: str
-    case_id: str
-    step_label: str
-    release_step_resources: Callable[[], None] | None = None
-    cleanup: Callable[[], None] | None = None
-
-    def close_step_resources(self) -> None:
-        if self.release_step_resources is not None:
-            self.release_step_resources()
-
-    def close(self) -> None:
-        if self.cleanup is not None:
-            self.cleanup()
-
 def _labels_for_case(case: CasePlan) -> list[str]:
     return [
         node.label
@@ -339,6 +319,11 @@ def _python_identifier(raw: str) -> str:
     if value[0].isdigit():
         value = f"journey_{value}"
     return value
+
+
+def _safe_dev_segment(raw: str) -> str:
+    value = re.sub(r"[^0-9A-Za-z_.-]+", "-", raw.strip().lower()).strip(".-")
+    return value or "value"
 
 
 def _format_branch_env(branch_env: dict[str, str]) -> str:
@@ -382,8 +367,6 @@ def _help_command_for_prog(prog: str) -> str:
         return "journey agent --help"
     if prog == "journey dev":
         return "journey dev --help"
-    if prog == "journey loop":
-        return "journey loop --help"
     if prog == "journey verify":
         return "journey verify --help"
     if prog == "journey touchpoints":
@@ -414,7 +397,7 @@ def _parser_error_instructions(prog: str, message: str) -> str:
             "--file plus --journey when the target is ambiguous."
         )
     return (
-        "Run `journey --help`, choose `journey loop` for focused replay or "
+        "Run `journey --help`, choose `journey dev` for focused replay or "
         "`journey verify` for fresh confidence, and use "
         "`journey agent <target>` or `journey touchpoints <name>` "
         "when you need packaged Journey guidance."
@@ -430,7 +413,7 @@ def _parser_error_next_commands(prog: str, message: str) -> tuple[str, ...]:
     if prog == "journey agent":
         return ("journey agent --help", "journey agent codex")
     if prog == "journey dev":
-        return ("journey dev --help", "journey loop --help", "journey verify --help")
+        return ("journey dev --help", "journey verify --help")
     return ("journey --help", "journey agent codex", "journey evidence --help")
 
 
@@ -455,7 +438,7 @@ def _default_hint_for_error(error: _CommandError) -> str:
     if error.phase == "execute":
         return (
             "Use the first failed step as the source of truth, inspect logs when "
-            "artifacts exist, then rerun the focused `journey loop` command "
+            "artifacts exist, then rerun the focused `journey dev` command "
             "until it passes."
         )
     if error.phase == "logs":
@@ -488,9 +471,9 @@ def _default_instructions_for_error(error: _CommandError) -> str:
     if error.phase == "execute":
         return (
             "Execution failed at a Journey step. Use `Retry failed step:` when "
-            "present; otherwise select the failing label with `journey loop`, "
+            "present; otherwise select the failing label with `journey dev`, "
             "inspect `journey evidence`, and broaden to `journey verify --step` or a full fresh run after "
-            "the focused loop passes."
+            "the focused dev command passes."
         )
     if error.phase == "logs":
         return (
@@ -505,7 +488,7 @@ def _default_instructions_for_error(error: _CommandError) -> str:
         )
     if error.phase == "dev":
         return (
-            "Journey dev inspection failed before page guidance could be produced. "
+            "Journey dev guidance failed before touchpoint guidance could be produced. "
             "Read the `What happened` line, fix the selected Journey step or "
             "initial URL, then rerun `journey dev`."
         )
@@ -1224,7 +1207,7 @@ def _retry_command_for_error(root: Path, error: _CommandError) -> str | None:
         shlex.quote(part)
         for part in (
             "journey",
-            "loop",
+            "dev",
             error.step_label,
             "--file",
             display_file,
@@ -1535,17 +1518,17 @@ def _step_stop_status(paused: _PausedExecution, *, verb: str) -> str:
     step_name = paused.paused_step.label or paused.paused_step.node_id
     if paused.paused_step.ok:
         return (
-            f"Loop {action} after step "
+            f"Dev {action} after step "
             f"{step_name} attempt={paused.paused_step.attempt} executed."
         )
     if paused.paused_step.error:
         return (
-            f"Loop {action} after step "
+            f"Dev {action} after step "
             f"{step_name} attempt={paused.paused_step.attempt} "
             f"failed ({paused.paused_step.error})."
         )
     return (
-        f"Loop {action} after step "
+        f"Dev {action} after step "
         f"{step_name} attempt={paused.paused_step.attempt} failed."
     )
 
@@ -1679,7 +1662,7 @@ def _infer_develop_pause_action(
                     f"{develop_step!r}."
                 ),
                 hint=(
-                    "Rerun the same journey loop target to retry the failed step, "
+                    "Rerun the same journey dev target to retry the failed step, "
                     "or delete the state file to start fresh."
                 ),
             )
@@ -1691,7 +1674,7 @@ def _infer_develop_pause_action(
             f"{develop_step!r}."
         ),
         hint=(
-            "Rerun the paused journey loop target to retry it, target the next "
+            "Rerun the paused journey dev target to retry it, target the next "
             "later step to continue, or delete the state file to start fresh."
         ),
     )
@@ -1886,137 +1869,6 @@ def _execute_target_step(
     ], []
 
 
-def _execute_dev_step(
-    compiled: list[_CompiledJourney],
-    *,
-    root: Path,
-    step: str | None,
-    no_memory: bool = True,
-    no_memory_update: bool = True,
-    no_browser_recording: bool = False,
-    no_logs: bool = False,
-) -> tuple[_DevStepExecution | None, list[_CommandError]]:
-    selected, errors = _select_dev_step(compiled, step=step)
-    if selected is None:
-        return None, errors
-
-    target_node = selected.case.nodes[selected.target_index]
-    step_label = (
-        target_node.label
-        if isinstance(target_node, StepNode) and target_node.label is not None
-        else target_node.node_id
-    )
-
-    try:
-        _CLI_LOGGER.info(
-            "dev_step_execution_start",
-            "executing journey step for dev inspection",
-            pretty=False,
-            file=str(selected.journey.file_path),
-            journey=selected.journey.journey_name,
-            step=step_label,
-            case=selected.case.case_id,
-        )
-        report = _execute_plan(
-            selected.journey.function,
-            plan=selected.journey.plan,
-            develop_step=step_label,
-            selected_case_id=selected.case.case_id,
-            selected_stop_after_index=selected.target_index,
-            state=None,
-            observer=None,
-            no_state=True,
-            no_state_update=True,
-            no_memory=no_memory,
-            no_memory_update=no_memory_update,
-            no_browser_recording=no_browser_recording,
-            no_logs=no_logs,
-            prompt_memory_root=_prompt_memory_root_for_target(selected.journey),
-        )
-    except Exception as exc:
-        _CLI_LOGGER.error(
-            "dev_step_execution_failure",
-            "journey dev step execution failed",
-            pretty=(
-                f"{_pretty_target(display_file=_display_path(root, selected.journey.file_path), journey=selected.journey.journey_name)} "
-                f"failed: {_format_exception(exc)}"
-            ),
-            file=str(selected.journey.file_path),
-            journey=selected.journey.journey_name,
-            step=step_label,
-            error=_format_exception(exc),
-        )
-        return None, [
-            _error_from_exception(
-                exc,
-                phase="execute",
-                file_path=str(selected.journey.file_path),
-                journey_name=selected.journey.journey_name,
-            )
-        ]
-
-    target_node_id = target_node.node_id if isinstance(target_node, StepNode) else None
-    cleanup: Callable[[], None] | None = None
-    if isinstance(report, _PausedExecution):
-        if report.case_report is None:
-            report.close_pending_exits()
-            return None, [
-                _CommandError(
-                    file=str(selected.journey.file_path),
-                    journey_name=selected.journey.journey_name,
-                    phase="execute",
-                    error_type="JourneySelectionError",
-                    message=f"Journey dev step {step_label!r} paused before reporting its result.",
-                    hint="Use a stable completed step that returns JourneyBrowserPage or calls open_page(...).",
-                )
-            ]
-        case_reports = [report.case_report]
-        release_step_resources = report.close_pending_step_exits
-        cleanup = report.close_pending_case_exits
-    else:
-        case_reports = report.case_reports
-        release_step_resources = None
-
-    for case_report in case_reports:
-        if case_report.case_id != selected.case.case_id:
-            continue
-        for record in case_report.records:
-            if record.node_type != "StepNode":
-                continue
-            if target_node_id is not None and record.node_id != target_node_id:
-                continue
-            return (
-                _DevStepExecution(
-                    result=record.result,
-                    side_outputs={
-                        key: tuple(values)
-                        for key, values in record.side_outputs.items()
-                    },
-                    file_path=selected.journey.file_path,
-                    journey_name=selected.journey.journey_name,
-                    case_id=selected.case.case_id,
-                    step_label=step_label,
-                    release_step_resources=release_step_resources,
-                    cleanup=cleanup,
-                ),
-                [],
-            )
-
-    if cleanup is not None:
-        cleanup()
-    return None, [
-        _CommandError(
-            file=str(selected.journey.file_path),
-            journey_name=selected.journey.journey_name,
-            phase="execute",
-            error_type="StepNotFoundError",
-            message=f"Journey dev did not receive a result for step {step_label!r}.",
-            hint="Check that the selected step executes successfully and returns JourneyBrowserPage or calls open_page(...).",
-            step_label=step_label,
-        )
-    ]
-
-
 def _reload_develop_target(
     selected: _CompiledJourney,
     *,
@@ -2059,6 +1911,239 @@ def _reload_develop_target(
     return _select_targeted_journey(recompiled, step=develop_step)
 
 
+def _paused_step_record(paused: _PausedExecution) -> NodeExecutionRecord | None:
+    case_report = paused.case_report
+    if case_report is None:
+        return None
+    for record in reversed(case_report.records):
+        if record.node_type == "StepNode" and record.node_id == paused.paused_step.node_id:
+            return record
+    return None
+
+
+def _dev_lifecycle_objects_from_value(value: object) -> list[object]:
+    objects: list[object] = []
+    seen_objects: set[int] = set()
+    seen_containers: set[int] = set()
+
+    def visit(item: object) -> None:
+        dev_method = getattr(item, "__dev__", None)
+        if callable(dev_method):
+            identity = id(item)
+            if identity not in seen_objects:
+                seen_objects.add(identity)
+                objects.append(item)
+            return
+
+        if type(item) is tuple or type(item) is list:
+            identity = id(item)
+            if identity in seen_containers:
+                return
+            seen_containers.add(identity)
+            for child in item:
+                visit(child)
+            return
+
+        if type(item) is dict:
+            identity = id(item)
+            if identity in seen_containers:
+                return
+            seen_containers.add(identity)
+            for key, child in item.items():
+                visit(key)
+                visit(child)
+
+    visit(value)
+    return objects
+
+
+def _dev_lifecycle_objects(
+    paused: _PausedExecution,
+    record: NodeExecutionRecord,
+) -> tuple[object, ...]:
+    objects: list[object] = []
+    seen: set[int] = set()
+
+    def extend(values: Sequence[object]) -> None:
+        for value in values:
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            objects.append(value)
+
+    extend(_dev_lifecycle_objects_from_value(record.result))
+    for values in record.side_outputs.values():
+        extend(
+            item
+            for value in values
+            for item in _dev_lifecycle_objects_from_value(value)
+        )
+    extend(
+        item
+        for value in getattr(paused, "_pending_exit_objects", ())
+        for item in _dev_lifecycle_objects_from_value(value)
+    )
+    return tuple(objects)
+
+
+def _dev_result_payload(
+    *,
+    root: Path,
+    selected: _CompiledJourney,
+    paused: _PausedExecution,
+    run_artifact_dir: Path,
+    contributions: Sequence[JourneyDevContribution],
+    errors: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    step_name = paused.paused_step.label or paused.paused_step.node_id
+    dev_result_path = run_artifact_dir / "dev_result.json"
+    payload: dict[str, object] = {
+        "status": "paused",
+        "file": _display_path(root, selected.file_path),
+        "journey": selected.journey_name,
+        "case_id": paused.case_report.case_id if paused.case_report is not None else None,
+        "paused_step": step_name,
+        "artifact_dir": str(run_artifact_dir),
+        "dev_result_path": str(dev_result_path),
+        "contributions": [
+            contribution.to_log_fields()
+            for contribution in contributions
+        ],
+        "errors": list(errors),
+    }
+    browser = next(
+        (contribution for contribution in contributions if contribution.kind == "browser"),
+        None,
+    )
+    if browser is not None:
+        for key in (
+            "rendered_page",
+            "candidate_flows",
+            "actionable_elements",
+            "extension_instructions",
+        ):
+            if key in browser.payload:
+                payload[key] = browser.payload[key]
+        payload["browser_artifact_dir"] = browser.artifact_dir
+    return payload
+
+
+def _emit_dev_lifecycle_contributions(
+    *,
+    root: Path,
+    selected: _CompiledJourney,
+    paused: _PausedExecution,
+) -> None:
+    if not paused.paused_step.ok:
+        return
+    record = _paused_step_record(paused)
+    if record is None:
+        return
+    objects = _dev_lifecycle_objects(paused, record)
+    if not objects:
+        return
+
+    step_name = paused.paused_step.label or paused.paused_step.node_id
+    run_artifact_dir = (
+        root
+        / ".journey"
+        / "dev"
+        / f"{int(time.time() * 1000)}-{_safe_dev_segment(step_name)}"
+    )
+    contributions: list[JourneyDevContribution] = []
+    errors: list[dict[str, object]] = []
+
+    for index, value in enumerate(objects, start=1):
+        artifact_dir = run_artifact_dir / f"{index}-{_safe_dev_segment(type(value).__name__)}"
+        context = JourneyDevContext(
+            file=_display_path(root, selected.file_path),
+            journey=selected.journey_name,
+            case_id=paused.case_report.case_id if paused.case_report is not None else "",
+            step_label=step_name,
+            step_result_name=f"{_python_identifier(step_name)}_result",
+            artifact_dir=artifact_dir,
+        )
+        dev_method = getattr(value, "__dev__", None)
+        if not callable(dev_method):
+            continue
+        try:
+            contribution = dev_method(context)
+        except Exception as exc:  # pragma: no cover - exercised by CLI tests
+            error = {
+                "kind": _safe_dev_segment(type(value).__name__),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc) or type(exc).__name__,
+            }
+            errors.append(error)
+            _CLI_LOGGER.warning(
+                "dev_contribution_failure",
+                "journey dev lifecycle hook failed",
+                pretty=pretty_line(
+                    f"Dev hook warning: {type(value).__name__}.__dev__ failed: {_format_exception(exc)}",
+                    style="warning",
+                ),
+                **error,
+            )
+            continue
+        if contribution is None:
+            continue
+        if not isinstance(contribution, JourneyDevContribution):
+            error = {
+                "kind": _safe_dev_segment(type(value).__name__),
+                "error_type": "TypeError",
+                "error_message": "__dev__ returned an unsupported value.",
+            }
+            errors.append(error)
+            _CLI_LOGGER.warning(
+                "dev_contribution_invalid",
+                "__dev__ returned an unsupported value",
+                pretty=pretty_line(
+                    f"Dev hook warning: {type(value).__name__}.__dev__ returned an unsupported value.",
+                    style="warning",
+                ),
+                **error,
+            )
+            continue
+        contributions.append(contribution)
+
+    if not contributions and not errors:
+        return
+
+    run_artifact_dir.mkdir(parents=True, exist_ok=True)
+    payload = _dev_result_payload(
+        root=root,
+        selected=selected,
+        paused=paused,
+        run_artifact_dir=run_artifact_dir,
+        contributions=contributions,
+        errors=errors,
+    )
+    Path(str(payload["dev_result_path"])).write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    pretty: list[object] = []
+    for contribution in contributions:
+        if contribution.pretty:
+            pretty.extend(contribution.pretty)
+        else:
+            pretty.append(
+                pretty_line(
+                    f"Journey dev contribution: {contribution.kind} - {contribution.summary}",
+                    style="heading",
+                )
+            )
+    if not pretty and errors:
+        pretty.append(pretty_line("Journey dev lifecycle hooks produced warnings.", style="warning"))
+    _CLI_LOGGER.info(
+        "dev_result",
+        "journey dev lifecycle result",
+        pretty=pretty or False,
+        **payload,
+    )
+
+
 def _execute_target_pause(
     compiled: list[_CompiledJourney],
     *,
@@ -2096,7 +2181,7 @@ def _execute_target_pause(
     try:
         _CLI_LOGGER.info(
             "execution_start",
-            "executing develop step",
+            "executing dev step",
             pretty=False,
             file=str(selected.file_path),
             journey=selected.journey_name,
@@ -2141,6 +2226,11 @@ def _execute_target_pause(
                 prompt_memory_root=_prompt_memory_root_for_target(selected),
             )
             if isinstance(outcome, _PausedExecution):
+                _emit_dev_lifecycle_contributions(
+                    root=root,
+                    selected=selected,
+                    paused=outcome,
+                )
                 outcome.close_pending_exits()
                 if stream_live:
                     _CLI_LOGGER.info(
@@ -2159,7 +2249,7 @@ def _execute_target_pause(
 
             _CLI_LOGGER.info(
                 "execution_success",
-                "loop execution succeeded",
+                "dev execution succeeded",
                 pretty=False,
                 file=str(selected.file_path),
                 journey=selected.journey_name,
@@ -2195,6 +2285,11 @@ def _execute_target_pause(
             )
             clean_browser_recordings = False
             if isinstance(outcome, _PausedExecution):
+                _emit_dev_lifecycle_contributions(
+                    root=root,
+                    selected=selected,
+                    paused=outcome,
+                )
                 try:
                     choice = _prompt_for_pause_action(outcome)
                 except KeyboardInterrupt as exc:
@@ -2243,7 +2338,7 @@ def _execute_target_pause(
             report = outcome
             _CLI_LOGGER.info(
                 "execution_success",
-                "loop execution succeeded",
+                "dev execution succeeded",
                 pretty=False,
                 file=str(selected.file_path),
                 journey=selected.journey_name,
@@ -2261,7 +2356,7 @@ def _execute_target_pause(
     except Exception as exc:
         _CLI_LOGGER.error(
             "execution_failure",
-            "loop execution failed",
+            "dev execution failed",
             pretty=(
                 f"{_pretty_target(display_file=_display_path(root, selected.file_path), journey=selected.journey_name)} "
                 f"failed: {_format_exception(exc)}"
@@ -2398,7 +2493,7 @@ def _emit_execute_output(
         "errors": [_command_error_payload(root, error) for error in payload_errors],
     }
     summary = (
-        f"Summary: loop {develop_step_stopped} stopped after target, {failed} failed"
+        f"Summary: dev {develop_step_stopped} stopped after target, {failed} failed"
         if develop_step_stopped is not None
         else (
             "Summary: "
@@ -2708,137 +2803,124 @@ def _maybe_initialize_dev_skeleton(args: argparse.Namespace, *, root: Path) -> N
     )
 
 
-def _dev_page_from_execution(execution: _DevStepExecution) -> object:
-    page = page_from_execution_result(execution.result, execution.side_outputs)
-    if page is not None:
-        return page
-    raise JourneySelectionError(
-        f"journey dev step {execution.step_label!r} did not return or open a browser page.",
-        hint="Use a step that calls open_page(...) or returns JourneyBrowserPage.",
-    )
-
-
-def _read_dev_choice(prompt: str) -> str:
-    _CLI_LOGGER.info("dev_prompt", prompt, pretty=prompt)
-    return input("").strip().lower()
+def _infer_dev_step_label(
+    compiled: list[_CompiledJourney],
+    *,
+    step: str | None,
+) -> tuple[str | None, list[_CommandError]]:
+    if step is not None:
+        return step, []
+    selected, errors = _select_dev_step(compiled, step=None)
+    if selected is None:
+        return None, errors
+    target_node = selected.case.nodes[selected.target_index]
+    if isinstance(target_node, StepNode):
+        return target_node.label or target_node.node_id, []
+    return None, [
+        _CommandError(
+            file=str(selected.journey.file_path),
+            journey_name=selected.journey.journey_name,
+            phase="execute",
+            error_type="JourneySelectionError",
+            message="journey dev could not select a step target.",
+            hint="Pass an explicit step label.",
+        )
+    ]
 
 
 def _cmd_dev(args: argparse.Namespace) -> int:
     started_at = time.perf_counter()
     root = Path.cwd().resolve()
-    execution: _DevStepExecution | None = None
-    if args.output == "jsonl":
-        args.agent = True
     try:
         _maybe_initialize_dev_skeleton(args, root=root)
-        discovery_args = argparse.Namespace(
-            file=args.file,
-            journey=args.journey,
-            fail_fast=True,
-        )
-        root, discovered, discovery_errors = _discover_targets(discovery_args)
-        compiled, compile_errors = _compile_targets(discovered, fail_fast=True)
-        plan_errors = [*discovery_errors, *compile_errors]
-        if plan_errors:
-            _emit_errors(root, plan_errors)
-            return 1
-        execution, dev_errors = _execute_dev_step(
-            compiled,
-            root=root,
-            step=args.step_label,
-            no_memory=args.no_memory,
-            no_memory_update=args.no_memory_update,
-            no_browser_recording=args.no_browser_recording,
-            no_logs=args.no_logs,
-        )
-        if dev_errors:
-            _emit_errors(root, dev_errors)
-            return 1
-        if execution is None:
-            _emit_errors(
-                root,
-                [
-                    _CommandError(
-                        file=args.file,
-                        journey_name=args.journey,
-                        phase="execute",
-                        error_type="JourneySelectionError",
-                        message="journey dev did not execute a step.",
-                        hint="Check --file, --journey, and optional STEP.",
-                    )
-                ],
-            )
-            return 1
-        page = _dev_page_from_execution(execution)
-        context = DevInspectionContext(
-            file=_display_path(root, execution.file_path),
-            journey=execution.journey_name,
-            case_id=execution.case_id,
-            paused_step=execution.step_label,
-            paused_step_result_name=f"{_python_identifier(execution.step_label)}_page",
-        )
-        result = inspect_dev_page(
-            page,
-            context=context,
-            artifact_root=root / ".journey" / "dev",
-        )
-        _CLI_LOGGER.info(
-            "dev_result",
-            "journey dev inspected paused browser page",
-            pretty=render_dev_pretty(result),
-            duration_seconds=time.perf_counter() - started_at,
-            agent=bool(args.agent),
-            **result.to_log_fields(),
-        )
-        if not args.agent:
-            choice = _read_dev_choice("Journey dev paused. Press q to close, r to retry, or c to continue: ")
-            if choice not in {"q", "r", "c"}:
-                _CLI_LOGGER.info(
-                    "dev_prompt_invalid_choice",
-                    "Unknown choice; closing paused resources.",
-                    pretty="Unknown choice; closing paused resources.",
-                )
-        return 0
-    except Exception as exc:
-        _emit_errors(
+    except JourneySelectionError as exc:
+        error = _error_from_exception(exc, phase="plan")
+        _emit_plan_output(root, [], [error])
+        _emit_execution_section()
+        _emit_execute_output(
             root,
-            [
-                _CommandError(
-                    file=args.file,
-                    journey_name=args.journey,
-                    phase="dev",
-                    error_type=type(exc).__name__,
-                    message=str(exc) or type(exc).__name__,
-                    hint=getattr(exc, "hint", None),
-                    next_commands=("journey dev --help",),
-                    help_command="journey dev --help",
-                )
-            ],
+            [],
+            [],
+            result_errors=[error],
+            failure_count=1,
+            duration_seconds=time.perf_counter() - started_at,
         )
         return 1
-    finally:
-        if execution is not None:
-            try:
-                execution.close_step_resources()
-                execution.close()
-            except Exception as cleanup_exc:  # pragma: no cover - defensive cleanup
-                _CLI_LOGGER.warning(
-                    "dev_cleanup_failure",
-                    "journey dev cleanup failed",
-                    pretty=False,
-                    error=_format_exception(cleanup_exc),
+
+    discovery_args = argparse.Namespace(
+        file=args.file,
+        journey=args.journey,
+        fail_fast=False,
+    )
+    try:
+        root, targets, errors = _discover_targets(discovery_args)
+    except JourneySelectionError as exc:
+        error = _error_from_exception(exc, phase="plan")
+        _emit_plan_output(root, [], [error])
+        _emit_execution_section()
+        _emit_execute_output(
+            root,
+            [],
+            [],
+            result_errors=[error],
+            failure_count=1,
+            duration_seconds=time.perf_counter() - started_at,
+        )
+        return 1
+
+    compiled, compile_errors = _compile_targets(targets, fail_fast=False)
+    errors.extend(compile_errors)
+    develop_step, selection_errors = _infer_dev_step_label(compiled, step=args.step_label)
+    errors.extend(selection_errors)
+
+    _emit_plan_output(root, compiled, errors)
+    _emit_execution_section()
+
+    executed: list[_ExecutedJourney] = []
+    run_errors: list[_CommandError] = []
+    state_updates_enabled = not args.no_state and not args.no_state_update
+    try:
+        with _graceful_cli_interrupts(state_updates_enabled):
+            should_execute = bool(compiled) and not errors and develop_step is not None
+            if should_execute:
+                run_results, run_errors = _execute_target_pause(
+                    compiled,
+                    root=root,
+                    develop_step=develop_step,
+                    no_state=args.no_state,
+                    no_state_update=args.no_state_update,
+                    stream_live=True,
+                    interactive=args.interactive,
+                    no_memory=args.no_memory,
+                    no_memory_update=args.no_memory_update,
+                    no_browser_recording=args.no_browser_recording,
+                    no_logs=args.no_logs,
                 )
+                executed.extend(run_results)
+    except KeyboardInterrupt:
+        _emit_interrupt_output(resumable=state_updates_enabled)
+        return 130
+
+    all_errors = [*errors, *run_errors]
+    _emit_execute_output(
+        root,
+        executed,
+        run_errors,
+        result_errors=all_errors,
+        failure_count=len(all_errors),
+        develop_step_stopped=(
+            develop_step
+            if develop_step is not None and not executed and not all_errors
+            else None
+        ),
+        duration_seconds=time.perf_counter() - started_at,
+    )
+    return 0 if not all_errors else 1
 
 
 def _cmd_touchpoint_docs(args: argparse.Namespace) -> int:
     sys.stdout.write(render_touchpoint_docs(args.touchpoint_docs))
     return 0
-
-
-def _cmd_loop(args: argparse.Namespace) -> int:
-    args.develop_step = args.step_label
-    args.step = None
-    return _cmd_execute(args)
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
@@ -4257,7 +4339,7 @@ def build_logs_parser(*, prog: str = "journey evidence") -> argparse.ArgumentPar
             f"  - If a filter returns no matches, rerun `{prog} --list-scopes` and copy the printed run/case/branch/step values.\n"
             "  - Use --branch KEY=VALUE exactly as printed by --list-scopes.\n"
             "\n"
-            "Related CLI commands: `journey loop <step> --file <file>`, `journey verify --file <file>`, `journey agent <target>`."
+            "Related CLI commands: `journey dev <step> --file <file>`, `journey verify --file <file>`, `journey agent <target>`."
         ),
     )
     parser.add_argument(
@@ -4321,47 +4403,6 @@ def build_logs_parser(*, prog: str = "journey evidence") -> argparse.ArgumentPar
     return parser
 
 
-def build_loop_parser() -> argparse.ArgumentParser:
-    parser = _JourneyArgumentParser(
-        prog="journey loop",
-        description="rerun one replayable journey step while editing code",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Agent loop:\n"
-            "  1. Run the failing journey once, or use the `Retry failed step:` command Journey prints.\n"
-            "  2. Rerun the same `journey loop <step>` command after every edit.\n"
-            "  3. Finish with `journey verify --step <step> --file <file>` or `journey verify --file <file>`.\n"
-            "\n"
-            "Examples:\n"
-            "  journey loop receive_confirmation_email --file journeys/checkout_journey.py\n"
-            "  journey loop complete_checkout_and_verify_registration_effects --file journeys/agentic_loop_journey.py --output jsonl\n"
-            "\n"
-            "Related CLI commands: `journey verify --help`, `journey evidence --help`, `journey agent <target>`."
-        ),
-    )
-    parser.add_argument("step_label", help="Replayable step label to rerun")
-    _add_execution_scope_arguments(parser)
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Prompt to continue or retry after each loop pause",
-    )
-    parser.add_argument(
-        "--no-state",
-        action="store_true",
-        help="Use temporary state for this loop run",
-    )
-    parser.add_argument(
-        "--no-state-update",
-        action="store_true",
-        help="Read existing state but do not update the default loop checkpoint",
-    )
-    _add_runtime_control_arguments(parser)
-    _add_runtime_output_arguments(parser)
-    parser.set_defaults(step=None, develop_step=None, fail_fast=False)
-    return parser
-
-
 def build_verify_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey verify",
@@ -4372,11 +4413,11 @@ def build_verify_parser() -> argparse.ArgumentParser:
             "  journey verify --file journeys/<feature>_journey.py\n"
             "      Run the full journey from a fresh path.\n"
             "  journey verify --step <step_label> --file journeys/<feature>_journey.py\n"
-            "      Verify the selected case from a fresh path after the focused loop passes.\n"
+            "      Verify the selected case from a fresh path after focused dev passes.\n"
             "  journey verify --reuse-state --step <step_label> --file journeys/<feature>_journey.py\n"
             "      Opt into existing state when investigating replay behavior.\n"
             "\n"
-            "Related CLI commands: `journey loop <step> --file <file>`, `journey evidence --help`, `journey agent <target>`."
+            "Related CLI commands: `journey dev <step> --file <file>`, `journey evidence --help`, `journey agent <target>`."
         ),
     )
     _add_execution_scope_arguments(parser)
@@ -4441,19 +4482,19 @@ def build_touchpoints_parser() -> argparse.ArgumentParser:
 def build_dev_parser() -> argparse.ArgumentParser:
     parser = _JourneyArgumentParser(
         prog="journey dev",
-        description="pause at a Journey step and inspect the rendered browser page for new branches",
+        description="rerun one replayable journey step while editing code",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Developer inspection:\n"
+            "Developer flow:\n"
             "  journey dev open_main_page --file journeys/app_journey.py\n"
-            "      Execute through a browser step, inspect the live page, and print branch-extension guidance.\n"
+            "      Rerun one replayable step, then emit touchpoint dev guidance when available.\n"
             "  journey dev --file journeys/app_journey.py --url http://127.0.0.1:3000\n"
-            "      Initialize a missing or empty Journey file with a first browser step, then inspect it.\n"
-            "  journey dev open_main_page --file journeys/app_journey.py --agent --output jsonl\n"
-            "      Emit one structured dev_result event for coding agents and exit.\n"
+            "      Initialize a missing or empty Journey file with a first browser step, then run it.\n"
+            "  journey dev open_main_page --file journeys/app_journey.py --output jsonl\n"
+            "      Emit structured execution and dev_result events for coding agents.\n"
             "\n"
-            "Human pretty mode keeps the paused browser resources open until the prompt is answered.\n"
-            "Agent mode closes resources after printing rendered_page, actionable_elements, and extension_instructions."
+            "If the step opens a browser page, Journey writes rendered-page artifacts and candidate branch flows "
+            "before closing step resources."
         ),
     )
     parser.add_argument(
@@ -4473,13 +4514,27 @@ def build_dev_parser() -> argparse.ArgumentParser:
         "--url",
         help="Start URL used only when journey dev initializes a missing or empty Journey file",
     )
-    parser.add_argument("--agent", action="store_true", help="Close resources after emitting dev_result")
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Prompt to continue or retry after each dev pause",
+    )
+    parser.add_argument(
+        "--no-state",
+        action="store_true",
+        help="Use temporary state for this dev run",
+    )
+    parser.add_argument(
+        "--no-state-update",
+        action="store_true",
+        help="Read existing state but do not update the default dev checkpoint",
+    )
     _add_runtime_control_arguments(parser)
     parser.add_argument(
         "--output",
         choices=("pretty", "jsonl"),
         default="pretty",
-        help="Set dev output format; jsonl implies --agent (default: pretty)",
+        help="Set dev output format (default: pretty)",
     )
     parser.add_argument(
         "--log-level",
@@ -4489,6 +4544,7 @@ def build_dev_parser() -> argparse.ArgumentParser:
         default="info",
         help="Set Journey diagnostic logging level (default: info)",
     )
+    parser.set_defaults(step=None, develop_step=None, fail_fast=False)
     return parser
 
 def build_agent_parser() -> argparse.ArgumentParser:
@@ -4499,7 +4555,7 @@ def build_agent_parser() -> argparse.ArgumentParser:
         epilog=(
             "Agent verification packet:\n"
             "  1. Run `journey agent <target>` to print the complete agent guidance packet.\n"
-            "  2. Inside that loop, use `journey loop` while editing and `journey verify` before finishing.\n"
+            "  2. Inside that flow, use `journey dev` while editing and `journey verify` before finishing.\n"
             "  3. Use `journey evidence --help` for traces, videos, structured logs, and touchpoint payloads.\n"
             "  4. Use `journey agent <target> --install` only when persistent project instructions should be written.\n"
             "\n"
@@ -4508,7 +4564,7 @@ def build_agent_parser() -> argparse.ArgumentParser:
             "  - If --force is rejected, add it only together with --install.\n"
             "  - If install refuses to overwrite an existing file, rerun with --install --force only after deciding replacement is intended.\n"
             "\n"
-            "Related CLI commands: `journey loop --help`, `journey verify --help`, `journey evidence --help`, `journey touchpoints all`."
+            "Related CLI commands: `journey dev --help`, `journey verify --help`, `journey evidence --help`, `journey touchpoints all`."
         ),
     )
     parser.add_argument(
@@ -4551,11 +4607,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Core commands:\n"
             "  journey dev [step_label] --file journeys/<feature>_journey.py\n"
-            "      Pause at a browser step, inspect the rendered page, and print branch-extension guidance.\n"
-            "  journey loop <step_label> --file journeys/<feature>_journey.py\n"
-            "      Rerun one replayable journey step while an agent edits code.\n"
+            "      Rerun one replayable journey step and emit touchpoint dev guidance when available.\n"
             "  journey verify --step <step_label> --file journeys/<feature>_journey.py\n"
-            "      Freshly verify the selected case after the focused loop passes.\n"
+            "      Freshly verify the selected case after focused dev passes.\n"
             "  journey verify --file journeys/<feature>_journey.py\n"
             "      Freshly verify the whole journey before finishing.\n"
             "  journey evidence --step <step_label>\n"
@@ -4567,10 +4621,10 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "Self-healing agent loop:\n"
             "  - Read `What happened`, `Try this`, `Next commands`, and `Retry failed step:` lines.\n"
-            "  - Copy `Retry failed step:` when present; otherwise use `journey loop <failed_label>`.\n"
+            "  - Copy `Retry failed step:` when present; otherwise use `journey dev <failed_label>`.\n"
             "  - Inspect artifacts with `journey evidence --help`, `journey evidence --list-scopes`, and `journey evidence --paths` or `--show`.\n"
-            "  - Use `journey dev --agent --output jsonl` when adding new browser branches.\n"
-            "  - Rerun the focused loop command until it passes, then broaden to fresh `journey verify`."
+            "  - Use `journey dev --output jsonl` when adding new browser branches.\n"
+            "  - Rerun the focused dev command until it passes, then broaden to fresh `journey verify`."
         ),
     )
     parser.add_argument(
@@ -4671,11 +4725,6 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(raw_argv[1:])
         configure_logging(args.log_level, output_format=args.output)
         return _cmd_dev(args)
-    if raw_argv and raw_argv[0] == "loop":
-        parser = build_loop_parser()
-        args = parser.parse_args(raw_argv[1:])
-        configure_logging(args.log_level, output_format=args.output)
-        return _cmd_loop(args)
     if raw_argv and raw_argv[0] == "verify":
         parser = build_verify_parser()
         args = parser.parse_args(raw_argv[1:])
@@ -4688,19 +4737,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.force and not args.install:
             parser.error("--force requires --install")
         return _cmd_agent(args)
-    known_commands = {"evidence", "touchpoints", "dev", "loop", "verify", "agent"}
+    known_commands = {"evidence", "touchpoints", "dev", "verify", "agent"}
     if raw_argv and raw_argv[0] not in known_commands and not raw_argv[0].startswith("-"):
         parser = build_parser()
         parser.error(
-            f"unknown command: {raw_argv[0]}; use journey dev, loop, verify, "
+            f"unknown command: {raw_argv[0]}; use journey dev, verify, "
             "evidence, touchpoints, or agent"
         )
     parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.log_level, output_format=args.output)
     parser.error(
-        "missing command: use journey loop, journey verify, journey evidence, "
-        "journey dev, journey touchpoints, or journey agent"
+        "missing command: use journey dev, journey verify, journey evidence, "
+        "journey touchpoints, or journey agent"
     )
     return 2
 

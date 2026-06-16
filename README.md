@@ -5,7 +5,7 @@ Replay one meaningful user-journey step while your coding agent works, then broa
 Journey SDK is a Python verification layer for agentic coding loops. A Journey spec divides a real user flow into
 intentional replayable steps: checkout and email assertion, onboarding and webhook assertion, back-office state check,
 or another slice that should recover together. While an agent edits code, it can rerun only the step it is developing
-with `journey loop <step>`, inspect correlated evidence, and then finish with `journey verify --step` or
+with `journey dev <step>`, inspect correlated evidence, and then finish with `journey verify --step` or
 `journey verify`.
 
 The same spec also covers branching flows efficiently. Shared setup runs once as a replay anchor, later branches use
@@ -15,7 +15,7 @@ app-specific checks stay in ordinary Python.
 
 ## Why Journey
 
-- **Loop one step while coding**: run `journey loop receive_confirmation_email --file journeys/checkout_journey.py`
+- **Develop one step while coding**: run `journey dev receive_confirmation_email --file journeys/checkout_journey.py`
   after each edit. Journey keeps state around the replay boundary so the agent can verify the same late-flow slice
   repeatedly instead of restarting the whole journey.
 - **Verify branches through shared replay anchors**: author common setup once, then use `branch(replay_from=...)` for
@@ -50,10 +50,10 @@ The CLI help surfaces are the command manuals for humans and coding agents:
 
 ```bash
 journey --help
-journey loop --help
+journey dev --help
 journey verify --help
 journey evidence --help
-journey dev --help
+journey touchpoints all
 journey agent --help
 ```
 
@@ -61,7 +61,7 @@ See [Installation And CLI](docs/00-installation-and-cli.md) for the complete ins
 editable installs, browser setup, and local package smoke testing.
 
 Agent-authored journeys are not verified by code generation alone. After adding or changing a Journey, the agent should
-run an executable `journey loop ...` or `journey verify ...` command, iterate on the failing step until it passes, then
+run an executable `journey dev ...` or `journey verify ...` command, iterate on the failing step until it passes, then
 broaden to a branch target or the full journey with fresh evidence whenever infrastructure permits. If the app is not
 running, the agent should follow documented local startup commands before declaring the run environment-blocked.
 Agents should list secret configuration by key presence only and must not print credential values while discovering the
@@ -79,7 +79,7 @@ Give your coding assistant one line:
 
 Replace `codex` with `claude`, `cursor`, or `generic` for another assistant. The assistant should run that command,
 read the full SDK guidance, discover touchpoint docs as needed, add or extend the smallest useful journey spec, run the
-failing journey or focused step, rerun `journey loop <step>` until executable evidence passes, and report the
+failing journey or focused step, rerun `journey dev <step>` until executable evidence passes, and report the
 exact commands and evidence it used.
 
 To avoid adding that line to every prompt, install persistent guidance once from the project root:
@@ -102,14 +102,14 @@ It executes the Journey through that step, inspects the live page, captures rend
 artifacts, lists candidate flows and actionable controls, and prints instructions for adding the next branch. Omit
 `<step_label>` to pause after the first step. For a new empty spec, run
 `journey dev --file journeys/<feature>_journey.py --url http://127.0.0.1:3000` to initialize a minimal browser Journey
-and inspect its first page. Agents should use `--agent --output jsonl`, prefer `dev_result.candidate_flows`, inspect
+and inspect its first page. Agents should use `--output jsonl`, prefer `dev_result.candidate_flows`, inspect
 the rendered-page artifact paths when uncertain, edit the Journey source themselves, and then prove the added branch
-with `journey loop` or `journey verify`.
+with `journey dev` or `journey verify`.
 
 ## Authoring Guides
 
 - [Branching and Step Loops](docs/02-branching-and-targeted-runs.md): canonical guidance for adding journey specs,
-  choosing coarse durable step boundaries, using `branch(replay_from=...)`, and iterating with `journey loop` and
+  choosing coarse durable step boundaries, using `branch(replay_from=...)`, and iterating with `journey dev` and
   `journey verify --step`.
 - [Retries and Resume](docs/03-retries-and-resume.md): state management, retry boundaries, interrupted runs, and resume.
 - [Browser and Local Touchpoints](docs/04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
@@ -121,9 +121,8 @@ The docs index is [Journey Docs](docs/README.md).
 
 ## CLI Help
 
-Use `journey --help` as the short command index. Use `journey loop --help` for the focused edit loop,
-`journey verify --help` for branch/full verification, `journey evidence --help` for artifact inspection,
-`journey dev --help` before pausing at a browser step to inspect branch candidates, and
+Use `journey --help` as the short command index. Use `journey dev --help` for focused development and browser branch
+guidance, `journey verify --help` for branch/full verification, `journey evidence --help` for artifact inspection, and
 `journey agent --help` before printing or installing assistant guidance.
 
 ## Touchpoint References

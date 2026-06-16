@@ -19,7 +19,7 @@ integration.
 1. Find or create the Journey spec for the changed user flow.
 2. Run the failing command from the user, or run the narrowest verification target that reaches the changed behavior.
 3. Use the first failing Journey step as the source of truth.
-4. Rerun that step with `journey loop <step_label> --file journeys/<feature>_journey.py` after every edit.
+4. Rerun that step with `journey dev <step_label> --file journeys/<feature>_journey.py` after every edit.
 5. Inspect correlated artifacts with `journey evidence` when the step output is not enough.
 6. Broaden before finishing: run `journey verify --step <step_label> --file ... --fresh` for a fresh target-step check,
    then run `journey verify --file ... --fresh` when infrastructure permits.
@@ -37,10 +37,9 @@ Run help when usage is unclear:
 
 ```bash
 journey --help
-journey loop --help
+journey dev --help
 journey verify --help
 journey evidence --help
-journey dev --help
 journey touchpoints browser
 journey touchpoints docker
 journey touchpoints email
@@ -53,7 +52,7 @@ journey agent --help
 Use these commands while working:
 
 ```bash
-journey loop target_step --file journeys/<feature>_journey.py
+journey dev target_step --file journeys/<feature>_journey.py
 journey evidence --step target_step
 journey verify --step target_step --file journeys/<feature>_journey.py --fresh
 journey verify --file journeys/<feature>_journey.py --fresh
@@ -62,7 +61,7 @@ journey dev open_main_page --file journeys/<feature>_journey.py --output jsonl
 journey dev --file journeys/<feature>_journey.py --url http://127.0.0.1:3000 --output jsonl
 ```
 
-If the CLI prints `Retry failed step: ...`, copy that command as the focused loop. Read every `What happened`,
+If the CLI prints `Retry failed step: ...`, copy that command as the focused dev. Read every `What happened`,
 `Try this`, and `Next commands` block before editing.
 
 ## Step Boundaries
@@ -90,7 +89,7 @@ If the CLI prints `Retry failed step: ...`, copy that command as the focused loo
   assertion, webhook wait, and webhook assertion. Prefer one expensive setup step, then one branch-specific late-flow
   verification step that performs the browser action and all side-effect assertions that recover together.
 - Prefer explicit top-level step functions over lambdas or nested closures.
-- Step function names are stable CLI labels used by `journey loop`, `journey verify --step`, state files, retries, and
+- Step function names are stable CLI labels used by `journey dev`, `journey verify --step`, state files, retries, and
   branch replay. Rename them only when updating those references intentionally.
 - Keep planning side-effect free. Acquire browsers, cloud resources, services, and handles inside step execution.
 - If asked to bootstrap or extend browser coverage from a running app, use `journey dev`, then edit the Journey source
@@ -99,7 +98,7 @@ If the CLI prints `Retry failed step: ...`, copy that command as the focused loo
   minimal first browser step and emits a `dev_result`. For an existing browser step, run
   `journey dev <step_label> --file journeys/<feature>_journey.py --output jsonl`. Prefer `candidate_flows`, use
   `rendered_page` artifact paths when the page needs inspection, fall back to `actionable_elements` for exact controls,
-  then add the smallest useful next branch with coarse step boundaries and prove it with `journey loop <new_step> --file ...`
+  then add the smallest useful next branch with coarse step boundaries and prove it with `journey dev <new_step> --file ...`
   or `journey verify --step <new_step> --file ...`.
 
 ## Branches

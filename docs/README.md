@@ -10,7 +10,7 @@ otherwise.
 2. [Getting Started](01-getting-started.md): the first Journey spec, running one file, selecting one journey, and JSON
    Lines output.
 3. [Branching And Step Loops](02-branching-and-targeted-runs.md): adding journey specs, choosing coarse durable step
-   and branch boundaries, `branch(replay_from=...)`, `journey loop`, and `journey verify --step`.
+   and branch boundaries, `branch(replay_from=...)`, `journey dev`, and `journey verify --step`.
 4. [Retries And Resume](03-retries-and-resume.md): state management, retry loops, replay boundaries, and resumable runs.
 5. [Browser And Local Touchpoints](04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
    browser prompt tutorials.
@@ -25,7 +25,7 @@ before choosing or repairing CLI usage:
 
 ```bash
 journey --help
-journey loop --help
+journey dev --help
 journey verify --help
 journey evidence --help
 journey agent --help
@@ -62,7 +62,7 @@ journey agent generic --install
 Give the one-line prompt to the assistant and let it run `journey agent <target>` itself. Use the default print mode
 when an agent needs the complete verification loop plus touchpoint references in one response.
 Use `journey agent <target> --install` when the project should receive a persistent assistant instruction file or skill.
-Agents fixing a failure should run the failed journey or focused `journey loop <step>` retry until executable evidence
+Agents fixing a failure should run the failed journey or focused `journey dev <step>` retry until executable evidence
 passes. Agents adding new branching journeys should execute every requested branch target and finish with fresh
 `journey verify --fresh` evidence when infrastructure permits; generated code, import checks, lint, or test discovery alone are not
 Journey verification. If a local app is not running, agents should follow documented startup commands before declaring

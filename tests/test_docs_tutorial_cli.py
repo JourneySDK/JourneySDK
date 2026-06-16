@@ -145,7 +145,7 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
 
     exit_code = main(
         [
-            "loop",
+            "dev",
             "queue_manual_review_signup",
             "--file",
             "docs/branching_journey/branching_journey.py",
@@ -156,8 +156,8 @@ def test_branching_readme_develop_step_command_pauses_and_exits(
     logs = capture.out
 
     assert exit_code == 0
-    assert "Loop stopped after step queue_manual_review_signup attempt=1 executed." in logs
-    assert "Summary: loop queue_manual_review_signup stopped after target, 0 failed" in output
+    assert "Dev stopped after step queue_manual_review_signup attempt=1 executed." in logs
+    assert "Summary: dev queue_manual_review_signup stopped after target, 0 failed" in output
 
 
 def test_retry_readme_commands_show_retry_behavior(

@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from journeysdk.dev import DevInspectionContext, inspect_dev_page, render_dev_pretty
+from journeysdk.dev import (
+    DevInspectionContext,
+    JourneyDevContext,
+    browser_dev_contribution,
+    inspect_dev_page,
+    render_dev_pretty,
+)
 
 
 class _FakeBody:
@@ -86,7 +92,7 @@ def test_dev_page_inspection_writes_artifacts_and_actions(tmp_path: Path) -> Non
     assert result.actionable_elements[0].locator_hint == "page.get_by_role('button', name='Start chat')"
     assert result.candidate_flows[0].title == "Start a new chat"
     assert "branch(replay_from=open_chat_page)" in result.extension_instructions.journey_insertion_template
-    assert "journey loop" in result.extension_instructions.verification_commands[0]
+    assert "journey dev" in result.extension_instructions.verification_commands[0]
 
     pretty = "\n".join(line.text for line in render_dev_pretty(result))
     assert "Rendered page artifacts" in pretty
@@ -95,6 +101,28 @@ def test_dev_page_inspection_writes_artifacts_and_actions(tmp_path: Path) -> Non
     assert "Actionable controls" in pretty
     assert "Start chat" in pretty
     assert "Extend this journey" in pretty
+
+
+def test_browser_dev_contribution_wraps_page_guidance(tmp_path: Path) -> None:
+    contribution = browser_dev_contribution(
+        _FakePage(),
+        context=JourneyDevContext(
+            file="journeys/app.py",
+            journey="app_journey",
+            case_id="case_1",
+            step_label="open_chat",
+            step_result_name="open_chat_page",
+            artifact_dir=tmp_path / ".journey" / "dev" / "browser",
+        ),
+    )
+
+    assert contribution.kind == "browser"
+    assert contribution.summary == "Browser page guidance"
+    assert contribution.artifact_dir is not None
+    assert contribution.payload["paused_step"] == "open_chat"
+    assert contribution.payload["rendered_page"]["url"] == "http://example.test/chat"
+    assert contribution.payload["candidate_flows"][0]["title"] == "Start a new chat"
+    assert contribution.pretty
 
 
 class _PayloadPage(_FakePage):

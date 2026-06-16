@@ -89,7 +89,7 @@ uv run journey verify --file docs/docker_compose_journey/docker_compose_journey.
 Target the restore branch while iterating:
 
 ```bash
-uv run journey loop read_restored_counter_and_assert_branch --file docs/docker_compose_journey/docker_compose_journey.py
+uv run journey dev read_restored_counter_and_assert_branch --file docs/docker_compose_journey/docker_compose_journey.py
 ```
 
 Use `journey touchpoints docker` for `run_docker`, `DockerLogMatcher`, `DockerHttpCheck`,
@@ -143,12 +143,12 @@ state:
 
 ```bash
 uv run journey dev open_main_page --file journeys/app_journey.py
-uv run journey loop new_branch_step --file journeys/app_journey.py
+uv run journey dev new_branch_step --file journeys/app_journey.py
 ```
 
-The dev command executes the selected Journey through a browser step, pauses on the live page, captures rendered-page
+The dev command executes the selected Journey through a browser step, stops after that target, captures rendered-page
 artifacts under `.journey/dev/...`, extracts candidate flows plus actionable controls, and prints instructions for
-extending the current Journey with the next step or branch. Omit the step label to pause after the first step in the
+extending the current Journey with the next step or branch. Omit the step label to target the first step in the
 selected Journey.
 
 For coding agents, JSON Lines output is the most useful form:
@@ -157,11 +157,11 @@ For coding agents, JSON Lines output is the most useful form:
 uv run journey dev open_main_page --file journeys/app_journey.py --output jsonl
 ```
 
-`--output jsonl` implies `--agent`, closes resources after inspection, and emits one `dev_result` event containing
-`candidate_flows`, `rendered_page`, `actionable_elements`, and `extension_instructions`. The `rendered_page` object
-points to the screenshot, HTML, visible text, and structured result artifacts. The agent should prefer
-`candidate_flows`, edit the Journey source using that structured result, then run `journey loop` or `journey verify`
-for executable evidence.
+When the browser touchpoint contributes dev guidance, JSONL emits one `dev_result` event containing `contributions`
+plus browser convenience fields: `candidate_flows`, `rendered_page`, `actionable_elements`, and
+`extension_instructions`. The `rendered_page` object points to the screenshot, HTML, visible text, and structured
+result artifacts. The agent should prefer `candidate_flows`, edit the Journey source using that structured result,
+then run `journey dev` or `journey verify` for executable evidence.
 
 When starting a new browser Journey file, let dev initialize a minimal first step from a start URL:
 
@@ -207,8 +207,8 @@ output details.
 - Browser, webhook, file, and Docker details belong inside coarse user-flow steps, not as one Journey step per click,
   poll, or assertion.
 - `journey dev` is a fast way to inspect rendered browser state and branch candidates; edited specs still need
-  executable `journey loop` or `journey verify` evidence before they count as complete.
-- `journey loop` and `journey verify --step` are the fastest way to iterate on one branch or late user-flow step.
+  executable `journey dev` or `journey verify` evidence before they count as complete.
+- `journey dev` and `journey verify --step` are the fastest way to iterate on one branch or late user-flow step.
 - Touchpoints remain ordinary Python helpers used from step functions.
 
 Continue with [05 Journey Cloud Integrations](05-journey-cloud-integrations.md) for focused webhook and email examples

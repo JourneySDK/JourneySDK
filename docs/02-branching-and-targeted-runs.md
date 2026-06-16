@@ -2,7 +2,7 @@
 
 Journey's core payoff is that one Python user journey can become a replayable agent loop:
 
-- develop a single meaningful step with `journey loop`
+- develop a single meaningful step with `journey dev`
 - verify one branch target with `journey verify --step`
 - verify the whole journey and its branches with `journey verify`
 
@@ -16,7 +16,7 @@ A step is a boundary Journey can target, retry, store, log, invalidate, and repl
 not wrap every click, form fill, poll, wait, touchpoint call, or assertion as its own step. Keep actions together when
 they recover together, and put helper calls inside the step that owns the user-facing outcome.
 
-Step function names become CLI labels used by `journey loop`, `journey verify --step`, state files, retries, evidence
+Step function names become CLI labels used by `journey dev`, `journey verify --step`, state files, retries, evidence
 filters, and branch replay. Prefer explicit top-level functions and stable user-flow names.
 
 ## Branch Once, Reuse Shared Setup
@@ -64,12 +64,12 @@ if branch(replay_from=session):
 Touchpoint-specific rehydration behavior is documented in the packaged references printed by
 `journey touchpoints <name>`.
 
-## Loop One Step While Coding
+## Develop One Step While Coding
 
-Use `journey loop` when you are actively editing one step and want Journey to stop after that target step:
+Use `journey dev` when you are actively editing one step and want Journey to stop after that target step:
 
 ```bash
-uv run journey loop queue_manual_review_signup --file docs/branching_journey/branching_journey.py
+uv run journey dev queue_manual_review_signup --file docs/branching_journey/branching_journey.py
 ```
 
 ```console
@@ -80,14 +80,14 @@ Plan
   Summary: 1 journey planned, 2 cases planned, 0 failed
 
 Execution
-Loop stopped after step queue_manual_review_signup attempt=1 executed.
-  Summary: loop queue_manual_review_signup stopped after target, 0 failed
+Dev stopped after step queue_manual_review_signup attempt=1 executed.
+  Summary: dev queue_manual_review_signup stopped after target, 0 failed
 ```
 
 Rerun the same command after each edit. Journey keeps its state by default, reloads the selected journey file, and
 retries from the nearest explicit replay boundary or from the case beginning when no boundary exists.
 
-When a command fails, copy the CLI's `Retry failed step: ...` command as the focused loop. Inspect `What happened`,
+When a command fails, copy the CLI's `Retry failed step: ...` command as the focused dev. Inspect `What happened`,
 `Try this`, and `Next commands` before editing.
 
 ## Verify One Branch Target
@@ -123,7 +123,7 @@ case's required beginning unless existing state or retry behavior causes replay.
 For coding agents, the verification ladder is:
 
 ```bash
-journey loop <target_step> --file journeys/<feature>_journey.py
+journey dev <target_step> --file journeys/<feature>_journey.py
 journey evidence --step <target_step>
 journey verify --step <target_step> --file journeys/<feature>_journey.py --fresh
 journey verify --file journeys/<feature>_journey.py --fresh
@@ -179,6 +179,6 @@ uv run journey verify --step complete_branch_b_from_anchor --file docs/rehydrati
   agents a better replay point.
 - External replay behavior lives on values themselves through `__store__` / `__restore__`, and those hooks run only
   when an explicit replay boundary needs that value.
-- `journey loop` is for rapid edit loops. `journey verify --step` and `journey verify` are for broader evidence.
+- `journey dev` is for rapid edit loops. `journey verify --step` and `journey verify` are for broader evidence.
 
 Continue with [03 Retries and Resume](03-retries-and-resume.md) when the path is linear but the world around it is not ready yet.

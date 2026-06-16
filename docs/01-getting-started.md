@@ -22,7 +22,7 @@ one journey when you need script-friendly JSONL output.
 - Use touchpoints when a step needs to interact with another system, such as a browser, inbox, webhook endpoint, CRM,
   payment provider, or back-office process.
 - Use `journey` to compile and run the authored flow as linear executable cases.
-- Use `journey loop` when you want one replayable step, and `journey verify --step` when you want one target case.
+- Use `journey dev` when you want one replayable step, and `journey verify --step` when you want one target case.
 
 If you remember only one thing, remember this: Journey does not ask you to stop writing Python. It compiles ordinary
 Python step calls into a runnable plan, and long-running work stays manageable because explicit replay boundaries can
@@ -51,11 +51,11 @@ journey agent codex
 The command is print-only by default. It gives the agent the installed Journey instructions, the step replay
 loop, and the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or
 polling helpers. To make the guidance persistent for future prompts, run `journey agent codex --install` once from the
-project root. When debugging a journey, the agent should run the failing journey or focused `journey loop <step>` retry
+project root. When debugging a journey, the agent should run the failing journey or focused `journey dev <step>` retry
 until executable evidence passes. If the agent is unsure which flags to use or how to recover, it should run
 `journey --help`, `journey evidence --help`, or `journey agent --help` and follow the CLI's `Next commands` block.
 When adding a new journey, import checks, lint, and type checks are only setup hygiene. The agent should still run
-`journey loop ...` or `journey verify ...`, execute each requested branch target with `journey verify --step`, and
+`journey dev ...` or `journey verify ...`, execute each requested branch target with `journey verify --step`, and
 finish with fresh `journey verify --fresh` evidence whenever the app infrastructure is available.
 If the app is not running, the agent should follow the repository's documented local startup path before declaring the
 run environment-blocked. When inspecting `.env` or credential files, it should report key presence only, never print

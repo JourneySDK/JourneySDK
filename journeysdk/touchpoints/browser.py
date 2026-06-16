@@ -986,6 +986,13 @@ class JourneyBrowserPage(PlaywrightPage):
 
         return self._snapshot_for_storage().to_payload()
 
+    def __dev__(self, context: object) -> object:
+        """Contribute browser page guidance when ``journey dev`` pauses."""
+
+        from journeysdk.dev import browser_dev_contribution
+
+        return browser_dev_contribution(self, context=context)
+
     @classmethod
     def __restore__(
         cls,

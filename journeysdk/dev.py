@@ -1,4 +1,4 @@
-"""Developer-page inspection helpers for ``journey dev``."""
+"""Developer lifecycle helpers for ``journey dev``."""
 
 from __future__ import annotations
 
@@ -312,6 +312,33 @@ class CandidateFlow:
 
 
 @dataclass(frozen=True)
+class JourneyDevContext:
+    file: str
+    journey: str
+    case_id: str
+    step_label: str
+    step_result_name: str
+    artifact_dir: Path
+
+
+@dataclass(frozen=True)
+class JourneyDevContribution:
+    kind: str
+    summary: str
+    artifact_dir: str | None
+    payload: dict[str, object]
+    pretty: tuple[PrettyLine, ...] = ()
+
+    def to_log_fields(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "summary": self.summary,
+            "artifact_dir": self.artifact_dir,
+            **self.payload,
+        }
+
+
+@dataclass(frozen=True)
 class DevInspectionContext:
     file: str
     journey: str
@@ -404,9 +431,13 @@ def inspect_dev_page(
     page: object,
     *,
     context: DevInspectionContext,
-    artifact_root: Path,
+    artifact_root: Path | None = None,
+    artifact_dir: Path | None = None,
 ) -> DevInspectionResult:
-    artifact_dir = artifact_root / f"{int(time.time() * 1000)}-{_safe_segment(context.paused_step)}"
+    if artifact_dir is None:
+        if artifact_root is None:
+            raise ValueError("inspect_dev_page(...) needs artifact_root or artifact_dir.")
+        artifact_dir = artifact_root / f"{int(time.time() * 1000)}-{_safe_segment(context.paused_step)}"
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     url = _safe_attr(page, "url")
@@ -451,18 +482,30 @@ def inspect_dev_page(
     return result
 
 
-def page_from_execution_result(
-    result: object,
-    side_outputs: dict[str, Sequence[object]],
-) -> object | None:
-    from .touchpoints.browser import JourneyBrowserPage
-
-    if isinstance(result, JourneyBrowserPage):
-        return result
-    pages: list[object] = []
-    for values in side_outputs.values():
-        pages.extend(value for value in values if isinstance(value, JourneyBrowserPage))
-    return pages[-1] if pages else None
+def browser_dev_contribution(
+    page: object,
+    *,
+    context: JourneyDevContext,
+) -> JourneyDevContribution:
+    inspection_context = DevInspectionContext(
+        file=context.file,
+        journey=context.journey,
+        case_id=context.case_id,
+        paused_step=context.step_label,
+        paused_step_result_name=context.step_result_name,
+    )
+    result = inspect_dev_page(
+        page,
+        context=inspection_context,
+        artifact_dir=context.artifact_dir,
+    )
+    return JourneyDevContribution(
+        kind="browser",
+        summary="Browser page guidance",
+        artifact_dir=result.artifact_dir,
+        payload=result.to_log_fields(),
+        pretty=tuple(render_dev_pretty(result)),
+    )
 
 
 def render_dev_pretty(result: DevInspectionResult) -> list[PrettyLine]:
@@ -1020,7 +1063,7 @@ def _extension_instruction(
         step_function_template=step_template,
         journey_insertion_template=insertion,
         verification_commands=(
-            f"journey loop {function_name} --file {context.file}"
+            f"journey dev {function_name} --file {context.file}"
             + (f" --journey {context.journey}" if context.journey else ""),
             f"journey verify --step {function_name} --file {context.file}"
             + (f" --journey {context.journey}" if context.journey else ""),

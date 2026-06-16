@@ -58,7 +58,7 @@ Use the modes this way:
 
 | Command shape | Use it for | State behavior |
 | --- | --- | --- |
-| `journey loop <label>` | Fast edit loop for one target step. | Reads and writes state. |
+| `journey dev <label>` | Fast edit loop for one target step. | Reads and writes state. |
 | `journey verify --step <label>` | Fresh verification of the case that reaches one step. | Fresh by default; add `--reuse-state` for stateful diagnostics. |
 | `journey verify --fresh` | Fresh-path confidence before review, merge, or release. | Does not read or write reusable state. |
 | `journey verify --reuse-state --no-state-update` | Inspect or replay existing state without changing it. | Reads state but leaves the file unchanged. |

@@ -12,7 +12,7 @@ _SUPPORTED_TARGETS = ("codex", "claude", "cursor", "generic")
 
 _CLAUDE_ENVELOPE = """---
 name: journey-developer
-description: Use Journey SDK to replay one meaningful user-journey step while coding, then broaden to branch/full verification with journey loop, journey verify, touchpoints, and executable evidence. Use whenever code changes should be proven through a user flow or a Journey SDK spec/touchpoint changes.
+description: Use Journey SDK to replay one meaningful user-journey step while coding, then broaden to branch/full verification with journey dev, journey verify, touchpoints, and executable evidence. Use whenever code changes should be proven through a user flow or a Journey SDK spec/touchpoint changes.
 ---
 
 """

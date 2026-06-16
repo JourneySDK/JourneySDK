@@ -1960,8 +1960,8 @@ class _StateController:
             hint = None
             if state.develop_step is not None and self.develop_step is None:
                 hint = (
-                    "Rerun the same `journey loop <step>` target to keep iterating, or use "
-                    "`journey verify --fresh --step <step>` or a full fresh journey verification after a loop pause."
+                    "Rerun the same `journey dev <step>` target to keep iterating, or use "
+                    "`journey verify --fresh --step <step>` or a full fresh journey verification after a dev pause."
                 )
             raise ExecutionStateMismatchError(
                 f"The journey state file '{self.path}' was created for develop_step "

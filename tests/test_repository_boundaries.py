@@ -180,8 +180,8 @@ def test_agent_instruction_template_requires_executable_fix_loop() -> None:
     required_phrases = (
         "Do not stop after code generation, import checks, lint, type checks, or test discovery.",
         "Use the first failing Journey step as the source of truth.",
-        "If the CLI prints `Retry failed step: ...`, copy that command as the focused loop.",
-        "journey loop target_step --file journeys/<feature>_journey.py",
+        "If the CLI prints `Retry failed step: ...`, copy that command as the focused dev.",
+        "journey dev target_step --file journeys/<feature>_journey.py",
         "journey evidence --step target_step",
         "journey verify --step target_step --file journeys/<feature>_journey.py --fresh",
         "inspect `journey evidence` traces or videos when browser behavior is unclear.",
