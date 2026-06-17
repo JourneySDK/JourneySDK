@@ -10,32 +10,46 @@ _BODY_TEMPLATE = "instructions.md"
 
 _SUPPORTED_TARGETS = ("codex", "claude", "cursor", "generic")
 
+_SKILL_DESCRIPTION = (
+    "Use Journey SDK to replay one meaningful user-journey step while coding, "
+    "then broaden to branch/full verification with journey dev, journey verify, "
+    "touchpoints, and executable evidence. Use whenever code changes should be "
+    "proven through a user flow or a Journey SDK spec/touchpoint changes."
+)
+
+_CODEX_ENVELOPE = f"""---
+name: journey
+description: {_SKILL_DESCRIPTION}
+---
+
+"""
+
 _CLAUDE_ENVELOPE = """---
-name: journey-developer
+name: journey
 description: Use Journey SDK to replay one meaningful user-journey step while coding, then broaden to branch/full verification with journey dev, journey verify, touchpoints, and executable evidence. Use whenever code changes should be proven through a user flow or a Journey SDK spec/touchpoint changes.
 ---
 
 """
 
 _CURSOR_ENVELOPE = """---
+name: journey
 description: Use Journey SDK to replay one meaningful user-journey step while coding, then verify branch/full flows with executable evidence.
-globs: "**/*.py"
-alwaysApply: false
+disable-model-invocation: true
 ---
 
 """
 
 _ENVELOPES = {
-    "codex": "",
+    "codex": _CODEX_ENVELOPE,
     "claude": _CLAUDE_ENVELOPE,
     "cursor": _CURSOR_ENVELOPE,
     "generic": "",
 }
 
 _DEFAULT_TARGETS = {
-    "codex": Path("AGENTS.md"),
-    "claude": Path(".claude") / "skills" / "journey-developer" / "SKILL.md",
-    "cursor": Path(".cursor") / "rules" / "journey-developer.mdc",
+    "codex": Path(".agents") / "skills" / "journey" / "SKILL.md",
+    "claude": Path(".claude") / "skills" / "journey" / "SKILL.md",
+    "cursor": Path(".cursor") / "skills" / "journey" / "SKILL.md",
     "generic": Path("JOURNEY_AGENT.md"),
 }
 

@@ -37,8 +37,12 @@ mkdir -p "$INSTALL_PROJECT"
 (
   cd "$INSTALL_PROJECT"
   "$VENV_DIR/bin/journey" agent codex --install >/dev/null
+  "$VENV_DIR/bin/journey" agent claude --install >/dev/null
+  "$VENV_DIR/bin/journey" agent cursor --install >/dev/null
 )
-test -f "$INSTALL_PROJECT/AGENTS.md"
+test -f "$INSTALL_PROJECT/.agents/skills/journey/SKILL.md"
+test -f "$INSTALL_PROJECT/.claude/skills/journey/SKILL.md"
+test -f "$INSTALL_PROJECT/.cursor/skills/journey/SKILL.md"
 "$VENV_DIR/bin/journey" touchpoints docker >/dev/null
 "$VENV_DIR/bin/journey" touchpoints all >/dev/null
 

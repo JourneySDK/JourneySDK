@@ -94,6 +94,15 @@ journey agent generic --install
 Install mode writes the selected assistant's default project file or skill and refuses to replace an existing file
 unless `--force` is passed.
 
+Default install destinations:
+
+| Target | Path | Invocation |
+| --- | --- | --- |
+| `codex` | `.agents/skills/journey/SKILL.md` | `$journey` or `/skills` |
+| `claude` | `.claude/skills/journey/SKILL.md` | `/journey <task>` |
+| `cursor` | `.cursor/skills/journey/SKILL.md` | `/journey <task>` |
+| `generic` | `JOURNEY_AGENT.md` | read or reference the file directly |
+
 If you are authoring a journey by hand, use [Getting Started](docs/01-getting-started.md). It covers imports,
 top-level `@journey` functions, running one file, selecting one journey, and JSON Lines output for tools.
 If you want to extend browser coverage from a rendered app state, use
@@ -171,7 +180,12 @@ journey agent generic --install
 ```
 
 Printing is the default. Install mode writes the selected assistant's default project file and refuses to replace an
-existing file unless `--force` is passed. The shared source for these instructions is
+existing file unless `--force` is passed. The Claude and Cursor installs are `journey` skills invoked as
+`/journey <task>`. The Codex install is a repo-shared skill invoked with `$journey` or through `/skills`, because Codex
+custom slash prompts are user-local and deprecated. These destinations follow the current public guidance for
+[Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills),
+[Cursor skills](https://cursor.com/docs/skills), and
+[Codex skills](https://developers.openai.com/codex/codex-manual.md). The shared source for these instructions is
 `journeysdk/agent_templates/instructions.md`.
 
 When SDK behavior, CLI flags, touchpoints, journey authoring guidance, or assistant workflows change, review and align

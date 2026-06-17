@@ -229,6 +229,22 @@ journey agent generic --install
 Install mode writes the selected guidance to its default project path and refuses to replace an existing file unless
 `--force` is passed.
 
+Default install destinations:
+
+| Target | Path | Invocation |
+| --- | --- | --- |
+| `codex` | `.agents/skills/journey/SKILL.md` | `$journey` or `/skills` |
+| `claude` | `.claude/skills/journey/SKILL.md` | `/journey <task>` |
+| `cursor` | `.cursor/skills/journey/SKILL.md` | `/journey <task>` |
+| `generic` | `JOURNEY_AGENT.md` | read or reference the file directly |
+
+The Claude and Cursor destinations are `journey` skills so users can type `/journey <task>`. The Codex destination is
+a repo-shared skill because Codex project skills are the supported shared workflow surface; Codex custom slash prompts
+are user-local and deprecated. These paths follow the current public guidance for
+[Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills),
+[Cursor skills](https://cursor.com/docs/skills), and
+[Codex skills](https://developers.openai.com/codex/codex-manual.md).
+
 Agents can also print detailed packaged touchpoint references before using official helpers:
 
 ```bash

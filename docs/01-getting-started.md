@@ -50,8 +50,12 @@ journey agent codex
 
 The command is print-only by default. It gives the agent the installed Journey instructions, the step replay
 loop, and the packaged touchpoint references it should use before inventing browser, Docker, email, webhook, HTTP, or
-polling helpers. To make the guidance persistent for future prompts, run `journey agent codex --install` once from the
-project root. When debugging a journey, the agent should run the failing journey or focused `journey dev <step>` retry
+polling helpers. To make the guidance persistent for future prompts, run `journey agent <target> --install` once from
+the project root. Codex installs `.agents/skills/journey/SKILL.md` for `$journey` or `/skills`; Claude Code and Cursor
+install `/journey <task>` skills at `.claude/skills/journey/SKILL.md` and `.cursor/skills/journey/SKILL.md`. These
+paths follow the current public guidance for [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills),
+[Cursor skills](https://cursor.com/docs/skills), and [Codex skills](https://developers.openai.com/codex/codex-manual.md).
+When debugging a journey, the agent should run the failing journey or focused `journey dev <step>` retry
 until executable evidence passes. If the agent is unsure which flags to use or how to recover, it should run
 `journey --help`, `journey evidence --help`, or `journey agent --help` and follow the CLI's `Next commands` block.
 When adding a new journey, import checks, lint, and type checks are only setup hygiene. The agent should still run

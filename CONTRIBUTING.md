@@ -52,14 +52,18 @@ That script:
 - installs the built wheel into a clean virtual environment and verifies `import journeysdk`
 - installs the built wheel as a temporary `uv` tool and verifies `journey --help` plus
   `journey agent codex`
+- verifies installed agent artifacts for Codex (`.agents/skills/journey/SKILL.md`), Claude Code
+  (`.claude/skills/journey/SKILL.md`), and Cursor (`.cursor/skills/journey/SKILL.md`)
 - runs a one-off `uv tool run --from <wheel> journey --help` plus `journey agent codex`
 
 ## Documentation Alignment
 
 Every SDK change should include a docs and instruction review for the surfaces that describe the touched behavior:
 `docs/`, `README.md`, `AGENTS.md`, this `CONTRIBUTING.md`, `journeysdk/touchpoint_docs/*.md`, and
-`journeysdk/agent_templates/instructions.md`. Keep the packaged agent template aligned with generated Codex, Claude
-skill, Cursor, and generic assistant output. If no doc update is needed, note that the relevant surfaces were reviewed.
+`journeysdk/agent_templates/instructions.md`. Keep the packaged agent template aligned with generated Codex repo skill,
+Claude `/journey` skill, Cursor `/journey` skill, and generic assistant output. The install paths follow the public
+Claude Code skills, Cursor skills, and Codex skills documentation. If no doc update is needed, note that the relevant
+surfaces were reviewed.
 
 ## Public Typing
 

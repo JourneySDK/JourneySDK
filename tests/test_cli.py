@@ -812,6 +812,7 @@ def test_help_outputs_include_agentic_command_manual():
     assert "journey dev [step_label]" in root_help
     assert "journey verify --step <step_label>" in root_help
     assert "journey agent codex|claude|cursor|generic [--install]" in root_help
+    assert "project-level Journey skill/instruction file" in root_help
     assert "journey evidence --help" in root_help
     removed_plan_inspection_flag = "--" + "debug" + "-plan"
     assert removed_plan_inspection_flag not in root_help
@@ -819,6 +820,10 @@ def test_help_outputs_include_agentic_command_manual():
     assert "journey evidence --list-scopes" in logs_help
     assert "Recovery:" in logs_help
     assert "Agent verification packet" in agent_help
+    assert ".agents/skills/journey/SKILL.md" in agent_help
+    assert ".claude/skills/journey/SKILL.md" in agent_help
+    assert ".cursor/skills/journey/SKILL.md" in agent_help
+    assert "/journey <task>" in agent_help
     assert "rerun one replayable journey step" in dev_help
     assert "--interactive" in dev_help
     assert "--agent" not in dev_help
@@ -932,10 +937,43 @@ def test_agent_install_writes_default_project_path(
     exit_code = main(["agent", "cursor", "--install"])
 
     captured = capsys.readouterr()
-    target = tmp_path / ".cursor" / "rules" / "journey-developer.mdc"
+    target = tmp_path / ".cursor" / "skills" / "journey" / "SKILL.md"
     assert exit_code == 0
     assert target.read_text(encoding="utf-8") == rendered
     assert "Installed agent instructions:" in captured.out
+
+
+@pytest.mark.parametrize(
+    ("target_name", "relative_path"),
+    (
+        ("codex", Path(".agents") / "skills" / "journey" / "SKILL.md"),
+        ("claude", Path(".claude") / "skills" / "journey" / "SKILL.md"),
+        ("cursor", Path(".cursor") / "skills" / "journey" / "SKILL.md"),
+        ("generic", Path("JOURNEY_AGENT.md")),
+    ),
+)
+def test_agent_install_writes_target_default_paths(
+    target_name: str,
+    relative_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    rendered = f"installed {target_name} instructions\n"
+
+    def fake_render_agent_instructions(target: str) -> str:
+        assert target == target_name
+        return rendered
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "journeysdk.agent_instructions.render_agent_instructions",
+        fake_render_agent_instructions,
+    )
+
+    exit_code = main(["agent", target_name, "--install"])
+
+    assert exit_code == 0
+    assert (tmp_path / relative_path).read_text(encoding="utf-8") == rendered
 
 
 def test_agent_install_refuses_existing_file_without_force(

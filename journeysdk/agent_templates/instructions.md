@@ -13,6 +13,8 @@ integration.
   beginning.
 - If this installed guidance is not enough, run `journey agent <target>` where `<target>` is `codex`, `claude`,
   `cursor`, or `generic`.
+- In projects with installed guidance, users may invoke this workflow as `/journey <task>` in Claude Code or Cursor, or
+  as `$journey` or `/skills` in Codex.
 
 ## Core Loop
 

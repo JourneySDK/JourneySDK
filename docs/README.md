@@ -62,6 +62,12 @@ journey agent generic --install
 Give the one-line prompt to the assistant and let it run `journey agent <target>` itself. Use the default print mode
 when an agent needs the complete verification loop plus touchpoint references in one response.
 Use `journey agent <target> --install` when the project should receive a persistent assistant instruction file or skill.
+Install mode writes `.agents/skills/journey/SKILL.md` for Codex (`$journey` or `/skills`), `.claude/skills/journey/SKILL.md`
+for Claude Code (`/journey <task>`), `.cursor/skills/journey/SKILL.md` for Cursor (`/journey <task>`), or
+`JOURNEY_AGENT.md` for generic assistants. These paths follow the current public guidance for
+[Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills),
+[Cursor skills](https://cursor.com/docs/skills), and
+[Codex skills](https://developers.openai.com/codex/codex-manual.md).
 Agents fixing a failure should run the failed journey or focused `journey dev <step>` retry until executable evidence
 passes. Agents adding new branching journeys should execute every requested branch target and finish with fresh
 `journey verify --fresh` evidence when infrastructure permits; generated code, import checks, lint, or test discovery alone are not

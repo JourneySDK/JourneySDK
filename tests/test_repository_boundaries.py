@@ -6,7 +6,11 @@ from pathlib import Path
 import re
 import tomllib
 
-from journeysdk.agent_instructions import render_agent_bootstrap, render_agent_instructions
+from journeysdk.agent_instructions import (
+    default_agent_instruction_path,
+    render_agent_bootstrap,
+    render_agent_instructions,
+)
 
 
 def _public_root() -> Path:
@@ -101,22 +105,44 @@ def test_agent_instruction_rendering_wraps_shared_body() -> None:
     )
 
     assert render_agent_instructions("generic") == body
-    assert render_agent_instructions("codex") == body
+
+    codex = render_agent_instructions("codex")
+    codex_envelope, codex_body = codex.split("\n---\n\n", maxsplit=1)
+    assert codex_envelope.startswith("---\n")
+    assert "name: journey" in codex_envelope
+    assert "description:" in codex_envelope
+    assert codex_body == body
 
     claude = render_agent_instructions("claude")
     claude_envelope, claude_body = claude.split("\n---\n\n", maxsplit=1)
     assert claude_envelope.startswith("---\n")
-    assert "name:" in claude_envelope
+    assert "name: journey" in claude_envelope
     assert "description:" in claude_envelope
     assert claude_body == body
 
     cursor = render_agent_instructions("cursor")
     cursor_envelope, cursor_body = cursor.split("\n---\n\n", maxsplit=1)
     assert cursor_envelope.startswith("---\n")
+    assert "name: journey" in cursor_envelope
     assert "description:" in cursor_envelope
-    assert "globs:" in cursor_envelope
-    assert "alwaysApply:" in cursor_envelope
+    assert "disable-model-invocation: true" in cursor_envelope
     assert cursor_body == body
+
+
+def test_agent_instruction_default_paths_install_command_named_workflows() -> None:
+    assert (
+        default_agent_instruction_path("codex")
+        == Path(".agents") / "skills" / "journey" / "SKILL.md"
+    )
+    assert (
+        default_agent_instruction_path("claude")
+        == Path(".claude") / "skills" / "journey" / "SKILL.md"
+    )
+    assert (
+        default_agent_instruction_path("cursor")
+        == Path(".cursor") / "skills" / "journey" / "SKILL.md"
+    )
+    assert default_agent_instruction_path("generic") == Path("JOURNEY_AGENT.md")
 
 
 def test_agent_bootstrap_appends_touchpoint_docs_to_shared_body() -> None:
