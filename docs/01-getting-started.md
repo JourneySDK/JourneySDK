@@ -55,6 +55,9 @@ the project root. Codex installs `.agents/skills/journey/SKILL.md` for `$journey
 install `/journey <task>` skills at `.claude/skills/journey/SKILL.md` and `.cursor/skills/journey/SKILL.md`. These
 paths follow the current public guidance for [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills),
 [Cursor skills](https://cursor.com/docs/skills), and [Codex skills](https://developers.openai.com/codex/codex-manual.md).
+Before adding or extending application coverage, the agent should establish whether the app runs externally or locally,
+use the Docker touchpoint for local app/services, and identify meaningful step or branch boundaries. If repo inspection
+cannot answer those questions, it should ask the developer before writing the Journey spec.
 When debugging a journey, the agent should run the failing journey or focused `journey dev <step>` retry
 until executable evidence passes. If the agent is unsure which flags to use or how to recover, it should run
 `journey --help`, `journey evidence --help`, or `journey agent --help` and follow the CLI's `Next commands` block.

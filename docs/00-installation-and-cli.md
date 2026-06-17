@@ -213,6 +213,10 @@ appends packaged touchpoint references. The step replay loop, touchpoint discove
 live in that shared instruction body so the user prompt can stay short. The default command is print-only and does not
 write files.
 
+Before an agent adds or extends application coverage, it should establish whether the app runs externally or locally,
+use the Docker touchpoint for local app/services, and identify meaningful step or branch boundaries. If repo inspection
+cannot answer those questions, it should ask the developer before writing the Journey spec.
+
 When an agent is asked to fix a failing Journey file, it should run the failing command or full journey once, use the
 first failed step and any `Retry failed step:` command as the focused `journey dev` command, inspect correlated
 `.journey/logs` evidence, and rerun until executable Journey evidence passes.

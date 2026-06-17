@@ -16,6 +16,20 @@ integration.
 - In projects with installed guidance, users may invoke this workflow as `/journey <task>` in Claude Code or Cursor, or
   as `$journey` or `/skills` in Codex.
 
+## Coverage Preflight
+
+Before adding, extending, or reviewing Journey coverage for an application, establish these facts by repo inspection or
+by asking the developer:
+
+- Is the tested application deployed to an external environment, or will Journey run it locally?
+- If it runs locally, use the Docker touchpoint for the app and services so Journey can start everything locally, keep
+  durable state in Docker-managed volumes, and restore state quickly.
+- Can the journey be split into meaningful steps that agents can target, retry, or branch from with
+  `branch(replay_from=...)`?
+- Do not start writing or extending Journey coverage until both the deployment target and the replayable step/branch
+  shape are known. If local Docker setup is missing or unclear, ask the developer for the intended stack instead of
+  using ad hoc startup.
+
 ## Core Loop
 
 1. Find or create the Journey spec for the changed user flow.

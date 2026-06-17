@@ -64,6 +64,9 @@ Agent-authored journeys are not verified by code generation alone. After adding 
 run an executable `journey dev ...` or `journey verify ...` command, iterate on the failing step until it passes, then
 broaden to a branch target or the full journey with fresh evidence whenever infrastructure permits. If the app is not
 running, the agent should follow documented local startup commands before declaring the run environment-blocked.
+Before authoring application coverage, agents should first establish whether the app is external or local, use the
+Docker touchpoint for local app/services, and identify meaningful step or branch boundaries before writing the spec. If
+repo inspection cannot answer those questions, the agent should ask the developer.
 Agents should list secret configuration by key presence only and must not print credential values while discovering the
 environment; they should not dump `.env*` or credential files wholesale. For auth, seed data, payments, or other test
 setup, agents should inspect existing E2E helpers before guessing credentials or magic codes, and request approval
@@ -201,4 +204,3 @@ uv run pytest
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflows, local package smoke testing, and publishing notes.
-

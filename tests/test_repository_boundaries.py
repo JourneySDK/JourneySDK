@@ -267,6 +267,35 @@ def test_agent_instruction_template_requires_execution_for_new_journeys() -> Non
         assert phrase in claude
 
 
+def test_agent_instruction_template_requires_coverage_preflight() -> None:
+    body = (
+        resources.files("journeysdk.agent_templates")
+        .joinpath("instructions.md")
+        .read_text(encoding="utf-8")
+    )
+
+    required_phrases = (
+        "## Coverage Preflight",
+        "Before adding, extending, or reviewing Journey coverage for an application",
+        "Is the tested application deployed to an external environment, or will Journey run it locally?",
+        "use the Docker touchpoint for the app and services",
+        "durable state in Docker-managed volumes",
+        "Can the journey be split into meaningful steps",
+        "`branch(replay_from=...)`",
+        "Do not start writing or extending Journey coverage until both the deployment target",
+        "If local Docker setup is missing or unclear",
+        "ask the developer for the intended stack",
+    )
+
+    for phrase in required_phrases:
+        assert phrase in body
+
+    for target in ("codex", "claude", "cursor", "generic"):
+        rendered = render_agent_instructions(target)
+        for phrase in required_phrases:
+            assert phrase in rendered
+
+
 def test_agent_instruction_template_defines_step_scope_by_boundary_value() -> None:
     body = (
         resources.files("journeysdk.agent_templates")

@@ -69,13 +69,16 @@ for Claude Code (`/journey <task>`), `.cursor/skills/journey/SKILL.md` for Curso
 [Cursor skills](https://cursor.com/docs/skills), and
 [Codex skills](https://developers.openai.com/codex/codex-manual.md).
 Agents fixing a failure should run the failed journey or focused `journey dev <step>` retry until executable evidence
-passes. Agents adding new branching journeys should execute every requested branch target and finish with fresh
-`journey verify --fresh` evidence when infrastructure permits; generated code, import checks, lint, or test discovery alone are not
-Journey verification. If a local app is not running, agents should follow documented startup commands before declaring
-the run environment-blocked, and should inspect configuration without printing secret values or dumping secret-bearing
-files. For auth, seed data, payments, and similar setup, agents should inspect existing E2E helpers before guessing
-credentials or magic codes, and request approval before mutating external services. Ambiguous shared setup labels in a
-branching journey should be handled with branch-specific targets instead of disabling branches.
+passes. Before agents add application coverage, they should establish whether the app runs externally or locally, use
+the Docker touchpoint for local app/services, and identify meaningful step or branch boundaries. If repo inspection
+cannot answer those questions, they should ask the developer before writing the spec. Agents adding new branching
+journeys should execute every requested branch target and finish with fresh `journey verify --fresh` evidence when
+infrastructure permits; generated code, import checks, lint, or test discovery alone are not Journey verification. If a
+local app is not running, agents should follow documented startup commands before declaring the run environment-blocked,
+and should inspect configuration without printing secret values or dumping secret-bearing files. For auth, seed data,
+payments, and similar setup, agents should inspect existing E2E helpers before guessing credentials or magic codes, and
+request approval before mutating external services. Ambiguous shared setup labels in a branching journey should be
+handled with branch-specific targets instead of disabling branches.
 
 The canonical source files are `journeysdk/touchpoint_docs/*.md` and
 `journeysdk/agent_templates/instructions.md`.
