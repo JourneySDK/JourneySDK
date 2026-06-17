@@ -201,3 +201,4 @@ uv run pytest
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor workflows, local package smoke testing, and publishing notes.
+
