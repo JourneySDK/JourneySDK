@@ -122,10 +122,9 @@ A good local debugging sequence usually looks like this:
 2. Use the first failed step as the source of truth. If the CLI prints `Retry failed step: ...`, use that command as
    the focused `journey dev` command from [02 Branching And Step Loops](02-branching-and-targeted-runs.md).
 3. Inspect correlated artifacts with `journey evidence --list-scopes`, `journey evidence --list-log-sources --case <case_id> --step <step_label>`, `journey evidence --paths --step <step_label> --touchpoint browser`, or `journey evidence --show --case <case_id> --step <step_label> --touchpoint docker`.
-4. For browser prompt failures, inspect the current URL/title, prompt memory replay errors, the last accepted or
-   rejected action, screenshots, trace/video paths, and the app route or selector code before editing. A
-   `page.prompt(...)` max-step failure usually means the step or prompt is underspecified for the actual page state.
-   Use `--no-memory` as a diagnostic bypass when stale prompt memory appears to be steering replay.
+4. For browser failures, inspect the current URL/title, rendered-page artifacts from `journey dev --output jsonl`,
+   screenshots, trace/video paths, and the app route or selector code before editing. The coding agent should use that
+   context to update the Journey Python file directly, then rerun the focused step.
 5. Rerun the same `journey dev` command after each edit until it passes, then broaden to
    `journey verify --step ... --fresh` or the full journey when feasible.
 6. If the failure is timing-related, use the retry patterns from [03 Retries and Resume](03-retries-and-resume.md).

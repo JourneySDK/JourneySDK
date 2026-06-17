@@ -173,6 +173,8 @@ def changedetection_core_journey() -> None:
 - Before using an official touchpoint, run `journey touchpoints <name>` or `journey touchpoints all`.
 - Prefer official helpers from `journeysdk.touchpoints` for browser, Docker Compose, hosted email, hosted webhooks, and
   HTTP checks before writing raw polling or plumbing.
+- Journey SDK does not call an LLM from touchpoints. Use `journey dev --output jsonl`, rendered-page artifacts, traces,
+  videos, and evidence logs as context, then edit the Journey Python file directly.
 - Acquire live resources inside step execution, not at module import or between steps.
 - Return serializable or rehydratable handles only when later steps need touchpoint state.
 - Browser: call `open_page(...)` inside step functions, keep logs enabled unless sensitive data requires `--no-logs`,

@@ -33,3 +33,5 @@ relevant surfaces were reviewed.
 When authoring or reviewing journeys, treat each `step(...)` as an intentional replay boundary with cost: labels, state,
 logs, invalidation/replay decisions, and possible rehydration. Keep clicks, fills, polls, waits, and assertions together
 when they recover together; split only for durable replay, retry, target, or state-passing boundaries.
+Do not add SDK-side LLM browser helpers; the coding agent should use `journey dev --output jsonl`, evidence artifacts,
+and ordinary Python edits to close the loop with the human.

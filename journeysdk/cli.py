@@ -39,7 +39,6 @@ from .executor import (
     _ExecutionObserver,
     _PausedExecution,
     _execute_plan,
-    _prompt_memory_root_for_state_path,
     _resolve_browser_recording_root,
     _use_step_interrupt_controller,
 )
@@ -1563,7 +1562,7 @@ def _read_pause_choice(prompt: str) -> str:
     return choice.strip().lower()
 
 
-def _prompt_for_pause_action(paused: _PausedExecution) -> str:
+def _pause_action_message(paused: _PausedExecution) -> str:
     while True:
         choice = _read_pause_choice(_paused_prompt(paused))
         if choice in {"c", "r"}:
@@ -1609,12 +1608,6 @@ def _default_state_path_for_target(
     selected: _CompiledJourney,
 ) -> Path:
     return default_execution_state_path(selected.file_path)
-
-
-def _prompt_memory_root_for_target(
-    selected: _CompiledJourney,
-) -> Path:
-    return _prompt_memory_root_for_state_path(_default_state_path_for_target(selected))
 
 
 def _selected_develop_match(
@@ -1688,8 +1681,6 @@ def _execute_all_targets(
     no_state: bool = False,
     no_state_update: bool = False,
     stream_live: bool = False,
-    no_memory: bool = False,
-    no_memory_update: bool = False,
     no_browser_recording: bool = False,
     no_logs: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
@@ -1726,13 +1717,10 @@ def _execute_all_targets(
                 observer=observer,
                 no_state=no_state,
                 no_state_update=no_state_update,
-                no_memory=no_memory,
-                no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
                 clean_browser_recordings=clean_browser_recordings,
                 no_logs=no_logs,
                 clean_logs=clean_browser_recordings,
-                prompt_memory_root=_prompt_memory_root_for_target(item),
             )
         except Exception as exc:
             _CLI_LOGGER.error(
@@ -1786,8 +1774,6 @@ def _execute_target_step(
     no_state: bool = False,
     no_state_update: bool = False,
     stream_live: bool = False,
-    no_memory: bool = False,
-    no_memory_update: bool = False,
     no_browser_recording: bool = False,
     no_logs: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
@@ -1822,11 +1808,8 @@ def _execute_target_step(
             observer=observer,
             no_state=no_state,
             no_state_update=no_state_update,
-            no_memory=no_memory,
-            no_memory_update=no_memory_update,
             no_browser_recording=no_browser_recording,
             no_logs=no_logs,
-            prompt_memory_root=_prompt_memory_root_for_target(selected),
         )
     except Exception as exc:
         _CLI_LOGGER.error(
@@ -2153,8 +2136,6 @@ def _execute_target_pause(
     no_state_update: bool = False,
     stream_live: bool = False,
     interactive: bool = False,
-    no_memory: bool = False,
-    no_memory_update: bool = False,
     no_browser_recording: bool = False,
     no_logs: bool = False,
 ) -> tuple[list[_ExecutedJourney], list[_CommandError]]:
@@ -2217,13 +2198,10 @@ def _execute_target_pause(
                 observer=observer,
                 no_state=False,
                 no_state_update=False,
-                no_memory=no_memory,
-                no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
                 clean_browser_recordings=clean_browser_recordings,
                 no_logs=no_logs,
                 clean_logs=clean_browser_recordings,
-                prompt_memory_root=_prompt_memory_root_for_target(selected),
             )
             if isinstance(outcome, _PausedExecution):
                 _emit_dev_lifecycle_contributions(
@@ -2275,13 +2253,10 @@ def _execute_target_pause(
                 observer=observer,
                 no_state=False,
                 no_state_update=False,
-                no_memory=no_memory,
-                no_memory_update=no_memory_update,
                 no_browser_recording=no_browser_recording,
                 clean_browser_recordings=clean_browser_recordings,
                 no_logs=no_logs,
                 clean_logs=clean_browser_recordings,
-                prompt_memory_root=_prompt_memory_root_for_target(selected),
             )
             clean_browser_recordings = False
             if isinstance(outcome, _PausedExecution):
@@ -2291,7 +2266,7 @@ def _execute_target_pause(
                     paused=outcome,
                 )
                 try:
-                    choice = _prompt_for_pause_action(outcome)
+                    choice = _pause_action_message(outcome)
                 except KeyboardInterrupt as exc:
                     try:
                         outcome.close_pending_exits()
@@ -2637,8 +2612,6 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                     no_state=args.no_state,
                     no_state_update=args.no_state_update,
                     stream_live=True,
-                    no_memory=args.no_memory,
-                    no_memory_update=args.no_memory_update,
                     no_browser_recording=args.no_browser_recording,
                     no_logs=args.no_logs,
                 )
@@ -2653,8 +2626,6 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         no_state_update=args.no_state_update,
                         stream_live=True,
                         interactive=args.interactive,
-                        no_memory=args.no_memory,
-                        no_memory_update=args.no_memory_update,
                         no_browser_recording=args.no_browser_recording,
                         no_logs=args.no_logs,
                     )
@@ -2666,8 +2637,6 @@ def _cmd_execute(args: argparse.Namespace) -> int:
                         no_state=args.no_state,
                         no_state_update=args.no_state_update,
                         stream_live=True,
-                        no_memory=args.no_memory,
-                        no_memory_update=args.no_memory_update,
                         no_browser_recording=args.no_browser_recording,
                         no_logs=args.no_logs,
                     )
@@ -2891,8 +2860,6 @@ def _cmd_dev(args: argparse.Namespace) -> int:
                     no_state_update=args.no_state_update,
                     stream_live=True,
                     interactive=args.interactive,
-                    no_memory=args.no_memory,
-                    no_memory_update=args.no_memory_update,
                     no_browser_recording=args.no_browser_recording,
                     no_logs=args.no_logs,
                 )
@@ -4297,16 +4264,6 @@ def _add_runtime_output_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_runtime_control_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--no-memory",
-        action="store_true",
-        help="Disable prompt-memory reads and writes for this run",
-    )
-    parser.add_argument(
-        "--no-memory-update",
-        action="store_true",
-        help="Disable prompt-memory writes while still allowing reads for this run",
-    )
     parser.add_argument(
         "--no-browser-recording",
         action="store_true",

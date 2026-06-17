@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import datetime, timezone
-import inspect
 import json
 import os
 import signal
@@ -20,7 +19,6 @@ from types import TracebackType
 from typing import Any, Literal, TypedDict, cast
 
 from journeysdk.logger import PrettyLine, PrettyStyle, get_logger, pretty_row
-from journeysdk._prompt_memory import PROMPT_MEMORY_AUTO, PromptMemorySpec
 from journeysdk.rehydration import JourneyRestoreContext, JourneyStoreContext
 from journeysdk.session import (
     _allocate_log_artifact,
@@ -37,10 +35,6 @@ from journeysdk.executor import (
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page as PlaywrightPage
 from playwright.sync_api import sync_playwright
-
-from ._browser_prompt import (
-    prompt_page,
-)
 
 
 class BrowserCookie(TypedDict, total=False):
@@ -1005,53 +999,6 @@ class JourneyBrowserPage(PlaywrightPage):
 
     def __reduce__(self) -> tuple[object, tuple[object]]:
         return (type(self)._restore_pickle, (self._snapshot_for_storage().to_payload(),))
-
-    def prompt(
-        self,
-        instruction: str,
-        *,
-        model: str | None = None,
-        max_steps: int = 15,
-        action_timeout_seconds: float = 5.0,
-        memory: PromptMemorySpec = PROMPT_MEMORY_AUTO,
-        output: Mapping[str, str | Mapping[str, object]] | None = None,
-    ) -> str | dict[str, object]:
-        """Use an LLM to inspect and interact with the live page.
-
-        Args:
-            instruction: Natural-language task for the prompt loop.
-            model: Optional LangChain model identifier. Defaults to
-                `anthropic:claude-haiku-4-5`, or the value of
-                `JOURNEY_BROWSER_PROMPT_MODEL` when set.
-            max_steps: Maximum generated Python snippets before failing.
-            action_timeout_seconds: Timeout passed to generated Playwright actions.
-            memory: Optional named prompt memory stored as `[memory].memory.md`
-                in the journey root.
-                When omitted inside a journey step, Journey generates a stable
-                callsite memory name. Pass `None` to disable memory for this prompt.
-            output: Optional structured-output fields. String values are field
-                descriptions for string output fields; mapping values are
-                JSON-schema property fragments. When omitted, the return value is
-                plain text.
-        """
-
-        if not self._is_live:
-            raise RuntimeError(
-                "JourneyBrowserPage.prompt(...) requires a live browser page. "
-                "Call open_page(saved_page) first."
-            )
-        frame = inspect.currentframe()
-        caller_frame = frame.f_back if frame is not None else None
-        return prompt_page(
-            self,
-            instruction=instruction,
-            model=model,
-            max_steps=max_steps,
-            action_timeout_seconds=action_timeout_seconds,
-            memory=memory,
-            caller_frame=caller_frame,
-            output=output,
-        )
 
 
 def open_page(

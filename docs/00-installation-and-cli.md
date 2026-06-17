@@ -144,8 +144,8 @@ a verification run should read existing state instead of starting fresh.
 
 ## Browser Setup
 
-Playwright and LangChain are included in the default package install. The first Journey browser step automatically
-downloads Chromium in the active environment. That first launch needs network access and can take a moment.
+Playwright is included in the default package install. The first Journey browser step automatically downloads Chromium
+in the active environment. That first launch needs network access and can take a moment.
 Journey stores run evidence under `.journey/logs/`: structured Journey events, touchpoint logs, browser traces,
 browser videos, and browser console/network events. Use `--no-logs` only when a run should not write any local
 debugging artifacts. Use `--no-browser-recording` when browser console/network logs should still be kept but

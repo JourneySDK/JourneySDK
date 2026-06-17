@@ -2218,9 +2218,6 @@ class _RunSession:
         branch_anchor_seed: RuntimeSnapshotState | None = None,
         branch_anchor_key: str | None = None,
         observer: _ExecutionObserver | None = None,
-        prompt_memory_root: Path | None = None,
-        prompt_memory_disabled: bool = False,
-        prompt_memory_update_disabled: bool = False,
         browser_recording_controller: _BrowserRecordingController | None = None,
         log_artifact_controller: _RunArtifactController | None = None,
     ) -> None:
@@ -2248,9 +2245,6 @@ class _RunSession:
         self._paused_step: PausedStepState | None = None
         self._state_controller = state_controller
         self._observer = observer or _ExecutionObserver()
-        self._prompt_memory_root = prompt_memory_root
-        self._prompt_memory_disabled = prompt_memory_disabled
-        self._prompt_memory_update_disabled = prompt_memory_update_disabled
         self._browser_recording_controller = browser_recording_controller
         self._log_artifact_controller = log_artifact_controller
         self._browser_recording_context_counts: dict[tuple[str, int], int] = {}
@@ -3425,15 +3419,6 @@ class _RunSession:
             content_type=content_type,
             recording_key=recording_key,
         )
-
-    def prompt_memory_root(self) -> Path | None:
-        return self._prompt_memory_root
-
-    def prompt_memory_disabled(self) -> bool:
-        return self._prompt_memory_disabled
-
-    def prompt_memory_update_disabled(self) -> bool:
-        return self._prompt_memory_update_disabled
 
     def _ensure_no_active_step_lifecycle(self) -> None:
         if self._active_step_lifecycle is not None:
@@ -4822,27 +4807,6 @@ def _refresh_develop_state_for_plan(
     return _DevelopStateRefresh()
 
 
-def _resolve_prompt_memory_root(
-    _journey_fn: JourneyEntrypoint,
-    *,
-    prompt_memory_root: str | Path | None,
-    state_path: Path | None,
-) -> Path:
-    if prompt_memory_root is not None:
-        return Path(prompt_memory_root).resolve()
-    if state_path is not None:
-        return _prompt_memory_root_for_state_path(state_path)
-    return Path.cwd().resolve()
-
-
-def _prompt_memory_root_for_state_path(state_path: str | Path) -> Path:
-    path = Path(state_path).resolve()
-    state_dir = path.parent
-    if state_dir.name == DEFAULT_STATE_DIR:
-        return state_dir.parent
-    return state_dir
-
-
 def _resolve_browser_recording_root(
     journey_fn: JourneyEntrypoint,
 ) -> Path:
@@ -4877,13 +4841,10 @@ def _execute_plan(
     observer: _ExecutionObserver | None = None,
     no_state: bool = False,
     no_state_update: bool = False,
-    no_memory: bool = False,
-    no_memory_update: bool = False,
     no_browser_recording: bool = False,
     clean_browser_recordings: bool = True,
     no_logs: bool = False,
     clean_logs: bool = True,
-    prompt_memory_root: str | Path | None = None,
 ) -> ExecutionReport | _PausedExecution:
     if no_state and state is not None:
         raise ValueError("execute(...) cannot combine a custom state path with disabled state.")
@@ -4978,11 +4939,6 @@ def _execute_plan(
             observer=execution_observer,
             reset_completed_state=using_default_state,
         )
-        resolved_prompt_memory_root = _resolve_prompt_memory_root(
-            journey_fn,
-            prompt_memory_root=prompt_memory_root,
-            state_path=state_path if state_path is not None else default_state_path,
-        )
         browser_recording_controller = _BrowserRecordingController(
             enabled=not no_browser_recording and not no_logs,
             root=log_root,
@@ -5039,9 +4995,6 @@ def _execute_plan(
                         start_anchor_key if branch_anchor_seed is not None else None
                     ),
                     observer=execution_observer,
-                    prompt_memory_root=resolved_prompt_memory_root,
-                    prompt_memory_disabled=no_memory,
-                    prompt_memory_update_disabled=no_memory or no_memory_update,
                     browser_recording_controller=browser_recording_controller,
                     log_artifact_controller=log_artifact_controller,
                 )
@@ -5176,8 +5129,6 @@ def execute(
     state: str | Path | None = None,
     no_state: bool = False,
     no_state_update: bool = False,
-    no_memory: bool = False,
-    no_memory_update: bool = False,
     no_browser_recording: bool = False,
     clean_browser_recordings: bool = True,
     no_logs: bool = False,
@@ -5193,8 +5144,6 @@ def execute(
         state: Optional custom state file for replay and resume.
         no_state: Disable persistent state reads and writes for this run.
         no_state_update: Disable persistent state writes while still allowing reads.
-        no_memory: Disable prompt-memory reads and writes for this run.
-        no_memory_update: Disable prompt-memory writes while still allowing reads.
         no_browser_recording: Disable browser trace/video artifacts for this run.
         clean_browser_recordings: Deprecated alias for clean_logs.
         no_logs: Disable persistent logs and trace/video artifacts for this run.
@@ -5214,8 +5163,6 @@ def execute(
         state=state,
         no_state=selected_no_state,
         no_state_update=no_state_update,
-        no_memory=no_memory,
-        no_memory_update=no_memory_update,
         no_browser_recording=no_browser_recording,
         clean_browser_recordings=clean_browser_recordings,
         no_logs=no_logs,

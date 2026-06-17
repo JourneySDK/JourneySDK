@@ -70,46 +70,6 @@ def _event_lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
-def _capture_prompt_memory_roots(
-    monkeypatch: pytest.MonkeyPatch,
-) -> list[Path | None]:
-    captured_roots: list[Path | None] = []
-
-    def fake_execute_plan(
-        journey_fn: object,
-        *,
-        plan: Any,
-        step: str | None = None,
-        develop_step: str | None = None,
-        pause_action: str | None = None,
-        state: str | None = None,
-        observer: object | None = None,
-        no_state: bool = False,
-        no_state_update: bool = False,
-        no_memory: bool = False,
-        no_memory_update: bool = False,
-        no_browser_recording: bool = False,
-        clean_browser_recordings: bool = True,
-        no_logs: bool = False,
-        clean_logs: bool = True,
-        prompt_memory_root: str | Path | None = None,
-    ) -> ExecutionReport:
-        del journey_fn, step, develop_step, pause_action, state, observer
-        del no_state, no_state_update, no_memory, no_memory_update
-        del no_browser_recording, clean_browser_recordings, no_logs, clean_logs
-        captured_roots.append(
-            Path(prompt_memory_root) if prompt_memory_root is not None else None
-        )
-        return ExecutionReport(
-            journey_id=plan.journey_id,
-            function_ref=plan.function_ref,
-            case_reports=[],
-        )
-
-    monkeypatch.setattr("journeysdk.cli._execute_plan", fake_execute_plan)
-    return captured_roots
-
-
 def _state_path(
     flow_file: Path,
 ) -> Path:
@@ -241,8 +201,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
             "debug",
             "--fail-fast",
             "--reuse-state",
-            "--no-memory",
-            "--no-memory-update",
             "--no-browser-recording",
         ]
     )
@@ -253,8 +211,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert verify_args.log_level == "debug"
     assert verify_args.fail_fast is True
     assert verify_args.reuse_state is True
-    assert verify_args.no_memory is True
-    assert verify_args.no_memory_update is True
     assert verify_args.no_browser_recording is True
 
     with pytest.raises(SystemExit) as exc_info:
@@ -287,8 +243,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
             "app_journey",
             "--url",
             "http://127.0.0.1:18081",
-            "--no-memory",
-            "--no-memory-update",
             "--no-browser-recording",
             "--output",
             "jsonl",
@@ -298,8 +252,6 @@ def test_parser_accepts_new_flags_and_rejects_removed_forms(
     assert dev_args.file == "journeys/app_journey.py"
     assert dev_args.journey == "app_journey"
     assert dev_args.url == "http://127.0.0.1:18081"
-    assert dev_args.no_memory is True
-    assert dev_args.no_memory_update is True
     assert dev_args.no_browser_recording is True
     assert dev_args.output == "jsonl"
 
@@ -1089,111 +1041,26 @@ def test_execute_develop_step_rejects_json_mode(
     assert captured.err == ""
 
 
-def test_execute_forwards_no_memory_update_flag(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    _write(
-        tmp_path / "flow.py",
-        """
-        import journeysdk as journey
-
-        def finish():
-            return True
-
-        @journey.journey
-        def flow():
-            journey.step(finish)
-        """,
-    )
-    captured_flags: list[bool] = []
-
-    def fake_execute_all_targets(
-        compiled: object,
-        *,
-        root: Path,
-        fail_fast: bool,
-        no_state: bool = False,
-        no_state_update: bool = False,
-        stream_live: bool = False,
-        no_memory: bool = False,
-        no_memory_update: bool = False,
-        no_browser_recording: bool = False,
-        no_logs: bool = False,
-    ) -> tuple[list[object], list[object]]:
-        assert no_memory is False
-        assert no_browser_recording is False
-        assert no_logs is False
-        captured_flags.append(no_memory_update)
-        return [], []
-
-    monkeypatch.setattr("journeysdk.cli._execute_all_targets", fake_execute_all_targets)
-    monkeypatch.chdir(tmp_path)
-
-    exit_code = main(["verify", "--reuse-state", "--file", "flow.py", "--no-memory-update", "--log-level", "off"])
-
-    assert exit_code == 0
-    assert captured_flags == [True]
-
-
-def test_execute_uses_journey_state_parent_for_nested_prompt_memory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    _write(
-        tmp_path / "pkg" / "flow.py",
-        """
-        import journeysdk as journey
-
-        def target():
-            return True
-
-        @journey.journey
-        def flow():
-            journey.step(target)
-        """,
-    )
-    captured_roots = _capture_prompt_memory_roots(monkeypatch)
-    monkeypatch.chdir(tmp_path)
-
-    exit_code = main(["verify", "--reuse-state", "--file", "pkg/flow.py", "--log-level", "off"])
-
-    assert exit_code == 0
-    assert captured_roots == [tmp_path.resolve() / "pkg"]
-
-
 @pytest.mark.parametrize(
     "argv",
-    [
-        ["verify", "--reuse-state", "--file", "pkg/flow.py", "--step", "target", "--log-level", "off"],
-        ["dev", "target", "--file", "pkg/flow.py", "--log-level", "off"],
-    ],
+    (
+        ["verify", "--no-memory"],
+        ["verify", "--no-memory-update"],
+        ["dev", "target", "--no-memory"],
+        ["dev", "target", "--no-memory-update"],
+    ),
 )
-def test_targeted_execute_uses_journey_state_parent_for_nested_prompt_memory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_removed_memory_flags_are_rejected(
     argv: list[str],
+    capsys: pytest.CaptureFixture[str],
 ):
-    _write(
-        tmp_path / "pkg" / "flow.py",
-        """
-        import journeysdk as journey
+    with pytest.raises(SystemExit) as exc_info:
+        main(argv)
 
-        def target():
-            return True
-
-        @journey.journey
-        def flow():
-            journey.step(target)
-        """,
-    )
-    captured_roots = _capture_prompt_memory_roots(monkeypatch)
-    monkeypatch.chdir(tmp_path)
-
-    exit_code = main(argv)
-
-    assert exit_code == 0
-    assert captured_roots == [tmp_path.resolve() / "pkg"]
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "unrecognized arguments:" in captured.out
+    assert captured.err == ""
 
 
 def test_execute_forwards_no_browser_recording_flag(
@@ -1223,8 +1090,6 @@ def test_execute_forwards_no_browser_recording_flag(
         no_state: bool = False,
         no_state_update: bool = False,
         stream_live: bool = False,
-        no_memory: bool = False,
-        no_memory_update: bool = False,
         no_browser_recording: bool = False,
         no_logs: bool = False,
     ) -> tuple[list[object], list[object]]:
@@ -2533,7 +2398,7 @@ def test_execute_develop_step_closes_returned_handles_after_retry_prompt(
     assert lines.index("prompt_continue") < exit_indices[1]
 
 
-def test_execute_develop_step_closes_returned_handles_when_prompt_is_interrupted(
+def test_execute_develop_step_closes_returned_handles_when_pause_is_interrupted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2567,7 +2432,7 @@ def test_execute_develop_step_closes_returned_handles_when_prompt_is_interrupted
     assert lines.index("prompt_interrupt") < lines.index("exit_publish")
 
 
-def test_execute_develop_step_cleanup_failure_after_prompt_stops_before_continue(
+def test_execute_develop_step_cleanup_failure_after_pause_stops_before_continue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2599,7 +2464,7 @@ def test_execute_develop_step_cleanup_failure_after_prompt_stops_before_continue
     assert "cleanup" not in lines
 
 
-def test_execute_develop_step_resume_reopens_prompt_after_interrupt(
+def test_execute_develop_step_resume_reopens_pause_after_interrupt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

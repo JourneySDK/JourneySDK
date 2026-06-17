@@ -125,7 +125,7 @@ with `journey dev` or `journey verify`.
   `journey verify --step`.
 - [Retries and Resume](docs/03-retries-and-resume.md): state management, retry boundaries, interrupted runs, and resume.
 - [Browser and Local Touchpoints](docs/04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
-  browser prompt tutorials.
+  browser dev workflows.
 - [Journey Cloud Touchpoints](docs/05-journey-cloud-integrations.md): hosted webhook and email examples.
 - [Debugging and Failure Modes](docs/06-debugging-and-failure-modes.md): failure reports, logs, and `--fail-fast`.
 

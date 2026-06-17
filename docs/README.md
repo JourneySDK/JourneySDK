@@ -13,7 +13,7 @@ otherwise.
    and branch boundaries, `branch(replay_from=...)`, `journey dev`, and `journey verify --step`.
 4. [Retries And Resume](03-retries-and-resume.md): state management, retry loops, replay boundaries, and resumable runs.
 5. [Browser And Local Touchpoints](04-browser-and-local-integrations.md): browser, local file, Docker Compose, and
-   browser prompt tutorials.
+   browser dev workflows.
 6. [Journey Cloud Touchpoints](05-journey-cloud-integrations.md): hosted webhook and email examples.
 7. [Debugging And Failure Modes](06-debugging-and-failure-modes.md): failure reports, evidence, fail-fast runs, and
    troubleshooting.
@@ -99,7 +99,6 @@ assistant instructions and skills match the written docs.
 - `docs/simple_journey/simple_journey.py`
 - `docs/docker_compose_journey/docker_compose_journey.py`
 - `docs/browser_resume_journey/browser_resume_journey.py`
-- `docs/browser_prompt_journey/browser_prompt_journey.py`
 - `docs/cloud_webhook_journey/cloud_webhook_journey.py`
 - `docs/cloud_email_journey/cloud_email_journey.py`
 - `docs/fail_fast_journeys/fail_fast_journeys.py`

@@ -172,34 +172,6 @@ uv run journey dev --file journeys/app_journey.py --url http://127.0.0.1:3000
 `--url` is only used when the target file is missing or empty. Existing Journey files continue to use `--file`,
 `--journey`, and an optional step label to select the page state to inspect.
 
-## Browser Prompt Tutorial
-
-Read `docs/browser_prompt_journey/browser_prompt_journey.py`.
-
-Use `page.prompt(...)` when a bounded browser action is clearer in natural language than selector code:
-
-```python
-def capture_popup_title() -> dict[str, object]:
-    page = open_page(f"{ensure_demo_server()}/login")
-    return page.prompt(
-        'click on a "Sign in" button and get the title of the opened popup',
-        memory="sign-in-popup",
-        output={
-            "popup_title": "The title of the opened popup.",
-        },
-    )
-```
-
-Run the prompt journey:
-
-```bash
-uv run journey verify --file docs/browser_prompt_journey/browser_prompt_journey.py
-```
-
-Prompt memories are stored as `<memory>.memory.md` files next to the journey's `.journey` directory. Use
-`journey touchpoints browser` for prompt memory, model configuration, selector-vs-prompt guidance, and structured
-output details.
-
 ## What To Notice
 
 - Tutorial journey files show user-flow structure; touchpoint references hold the complete API details.
@@ -208,6 +180,8 @@ output details.
   poll, or assertion.
 - `journey dev` is a fast way to inspect rendered browser state and branch candidates; edited specs still need
   executable `journey dev` or `journey verify` evidence before they count as complete.
+- Browser exploration stays in the coding-agent loop: inspect `dev_result`, rendered-page artifacts, traces, and videos,
+  then edit ordinary Python selectors and assertions in the Journey source.
 - `journey dev` and `journey verify --step` are the fastest way to iterate on one branch or late user-flow step.
 - Touchpoints remain ordinary Python helpers used from step functions.
 

@@ -72,12 +72,15 @@ def test_public_tree_does_not_reference_private_modules_or_paths():
         assert "import journey_cloud" not in text, f"Found private import in {path}"
 
 
-def test_base_package_includes_playwright_and_langchain_runtime_dependencies() -> None:
+def test_base_package_includes_playwright_without_direct_llm_runtime_dependencies() -> None:
     pyproject = tomllib.loads((_public_root() / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = pyproject["project"]["dependencies"]
 
     assert any(dependency.startswith("playwright") for dependency in dependencies)
-    assert any(dependency.startswith("langchain") for dependency in dependencies)
+    removed_llm_prefix = "lang" + "chain"
+    assert not any(dependency.startswith(removed_llm_prefix) for dependency in dependencies)
+    assert not any(dependency.startswith("anthropic") for dependency in dependencies)
+    assert not any(dependency.startswith("openai") for dependency in dependencies)
     assert not any(dependency.startswith("litellm") for dependency in dependencies)
 
 
@@ -369,13 +372,7 @@ def test_core_orchestration_modules_do_not_import_feature_helpers() -> None:
         "cli.py",
     )
     forbidden_imports = {
-        "._prompt_memory",
-        "._prompt_engine",
-        "._prompt_output",
         ".touchpoints",
-        "journeysdk._prompt_memory",
-        "journeysdk._prompt_engine",
-        "journeysdk._prompt_output",
         "journeysdk.touchpoints",
     }
 
@@ -400,18 +397,8 @@ def test_public_tree_does_not_reference_legacy_namespace() -> None:
 
 def test_root_agents_stays_workspace_level() -> None:
     text = (_workspace_root() / "AGENTS.md").read_text(encoding="utf-8")
-    for token in ("planner.py", "executor.py", "_prompt_memory.py", "touchpoint modules"):
+    for token in ("planner.py", "executor.py", "touchpoint modules"):
         assert token not in text
-
-
-def test_prompt_memory_owns_its_planning_hook() -> None:
-    root = _public_root()
-    assert not (root / "journeysdk" / "_prompt_memory_planning.py").exists()
-
-    prompt_memory_text = (root / "journeysdk" / "_prompt_memory.py").read_text(
-        encoding="utf-8"
-    )
-    assert "_register_planning_step_hook" in prompt_memory_text
 
 
 def test_planner_hook_api_stays_minimal() -> None:
@@ -424,21 +411,8 @@ def test_planner_hook_api_stays_minimal() -> None:
         "_PlanningHookFactory",
         "_register_planning_hook_factory",
         "_make_compile_planning_hooks",
+        "_register_planning_step_hook",
+        "_PLANNING_STEP_HOOKS",
+        "planning_state",
     ):
         assert name not in planner_text
-
-
-def test_prompt_memory_planning_state_stays_cohesive() -> None:
-    prompt_memory_text = (
-        _public_root() / "journeysdk" / "_prompt_memory.py"
-    ).read_text(encoding="utf-8")
-    assert "_PromptMemoryPlanningState" in prompt_memory_text
-    for name in (
-        "_prompt_memory_refs_by_name",
-        "_prompt_memory_refs_seen_in_session",
-        "planning_session_state",
-        'getattr(session, "planning_state")',
-        'getattr(session, "planning_session_state")',
-        "cast(",
-    ):
-        assert name not in prompt_memory_text

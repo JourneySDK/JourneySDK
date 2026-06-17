@@ -362,8 +362,6 @@ def test_logger_has_no_component_or_event_specific_pretty_knowledge() -> None:
         "plan_journey",
         "step_success",
         "open_page_start",
-        "prompt_code",
-        "browser-prompt",
         "docker",
         "webhook",
         "email-cloud",

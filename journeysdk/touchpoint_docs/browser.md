@@ -6,7 +6,6 @@ Use the browser touchpoint when a step needs to act through the UI or preserve a
 
 - `open_page(page_or_url, browser="chromium", headless=True) -> JourneyBrowserPage`
 - `JourneyBrowserPage`: Playwright `Page` wrapper that can be stored and reopened by Journey.
-- `JourneyBrowserPage.prompt(instruction, *, memory=..., output=None, model=None, max_steps=None, action_timeout_seconds=None)`: bounded AI browser task helper.
 - `BrowserCookie`: serializable browser cookie shape.
 - `ensure_browser_installed()`: installs the browser runtime used by `open_page`.
 
@@ -19,33 +18,25 @@ split one browser outcome into one Journey step per click, form fill, wait, and 
 ```python
 def sign_in():
     page = open_page("https://app.example/login")
-    page.prompt("Sign in as the journey test user and stop on the dashboard.", memory="sign-in")
+    page.get_by_label("Email").fill("journey@example.com")
+    page.get_by_label("Password").fill("test-password")
+    page.get_by_role("button", name="Sign in").click()
+    page.get_by_role("heading", name="Dashboard").wait_for()
     return page
 
 
 def create_watch(session):
     page = open_page(session)
-    return page.prompt(
-        "Create a watch for the demo URL and return the watch id.",
-        memory="create-watch",
-        output={"watch_id": "The id or UUID of the created watch."},
-    )
+    page.get_by_role("button", name="Create watch").click()
+    page.get_by_label("URL").fill("https://example.test/demo")
+    page.get_by_role("button", name="Save").click()
+    watch_id = page.get_by_test_id("watch-id").inner_text()
+    return {"watch_id": watch_id}
 ```
 
-Use selectors when they are stable and concise. Use `page.prompt(..., memory=...)` for bounded UI tasks when it keeps
-the helper smaller and easier to maintain. Keep prompts specific and include the success condition.
-
-Prompt-generated Python snippets run with the active Playwright `page`, known `pages`, `timeout_ms`, `switch_page(...)`,
-and a conservative set of safe builtins such as `print`, `len`, `str`, `sorted`, `isinstance`, and common exception
-classes. `print(...)` output is captured for the next prompt turn instead of written directly to stdout. Imports, file
-I/O, dynamic execution, and broad introspection helpers such as `__import__`, `open`, `eval`, `exec`, `compile`,
-`globals`, `locals`, `dir`, `getattr`, and `setattr` are intentionally unavailable. Snippets must use sync Playwright
-APIs, pass `timeout=timeout_ms` to timeout-aware actions and waits, and avoid long hard sleeps. Invalid prompt memory is
-skipped before replay when possible; if replay code runs and then fails, fallback prompting continues from the current
-live page state.
-
-Prompt memory files are named `<memory>.memory.md` and stored next to the journey's `.journey` directory. For example,
-`journeys/sign_in.py` uses `journeys/.journey/state.json` and stores `journeys/sign-in.memory.md`.
+Use stable Playwright selectors and keep the full browser action plus its assertions inside the same coarse Journey
+step when they recover together. Coding agents should use `journey dev <step> --output jsonl`, rendered-page artifacts,
+trace/video evidence, and `journey evidence` to inspect unclear page state, then edit this Python code directly.
 
 ## Browser Logs
 

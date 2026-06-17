@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from types import FrameType
 from typing import ParamSpec, TypeVar, cast
@@ -38,7 +37,6 @@ from .validator import (
 BranchEnv = dict[str, str]
 P = ParamSpec("P")
 R = TypeVar("R")
-S = TypeVar("S")
 
 
 @dataclass
@@ -53,15 +51,6 @@ class _ActiveBranchChain:
     cases: list[BranchCase]
 
 
-_PLANNING_STEP_HOOKS: list[Callable[["_PlanSession", object], None]] = []
-
-
-def _register_planning_step_hook(
-    hook: Callable[["_PlanSession", object], None],
-) -> None:
-    _PLANNING_STEP_HOOKS.append(hook)
-
-
 class _PlanSession:
     mode = "plan"
 
@@ -70,25 +59,18 @@ class _PlanSession:
         branch_env: BranchEnv,
         *,
         validation: JourneyValidation,
-        planning_state: dict[str, object],
         planning_session_id: int,
     ) -> None:
         self.branch_env = dict(branch_env)
         self.validation = validation
         self.planning_session_id = planning_session_id
         self.nodes: list[PlanNode] = []
-        self._planning_state = planning_state
         self._node_counter = 0
         self._group_counter = 0
         self._active_branch_chains: dict[tuple[int, int], _ActiveBranchChain] = {}
         self._branch_handle_group_ids: dict[tuple[tuple[int, int], ...], str] = {}
         self._steps_seen: set[str] = set()
         self._journey_webhook_epoch = 0
-
-    def planning_state(self, key: str, factory: Callable[[], S]) -> S:
-        if key not in self._planning_state:
-            self._planning_state[key] = factory()
-        return cast(S, self._planning_state[key])
 
     def _next_node_id(self) -> str:
         self._node_counter += 1
@@ -111,8 +93,6 @@ class _PlanSession:
             raise TypeError(
                 "step(...) needs a callable as its first argument."
             )
-        for hook in _PLANNING_STEP_HOOKS:
-            hook(self, fn)
         node_id = self._next_node_id()
         resolved_retry = _resolve_step_retry(
             retry=retry,
@@ -323,7 +303,6 @@ def compile_journey(journey_fn: JourneyEntrypoint) -> JourneyPlan:
 
     queue: deque[BranchEnv] = deque([{}])
     case_plans: list[CasePlan] = []
-    planning_state: dict[str, object] = {}
     planning_session_count = 0
 
     while queue:
@@ -332,7 +311,6 @@ def compile_journey(journey_fn: JourneyEntrypoint) -> JourneyPlan:
         session = _PlanSession(
             env,
             validation=validation,
-            planning_state=planning_state,
             planning_session_id=planning_session_count,
         )
 

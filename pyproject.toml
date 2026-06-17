@@ -10,15 +10,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "imageio-ffmpeg",
-    "langchain",
-    "langchain-anthropic",
-    "langchain-openai",
     "playwright",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-browser-prompt = []
 
 [project.scripts]
 journey = "journeysdk.cli:main"

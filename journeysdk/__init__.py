@@ -31,7 +31,6 @@ from .models import (
     StepRetry,
 )
 from .planner import compile_journey
-from . import _prompt_memory as _prompt_memory
 from .executor import execute
 from .rehydration import (
     JourneyRestoreContext,
